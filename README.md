@@ -97,7 +97,7 @@ a [Clerk](https://clerk.com/) application, a [Supabase](https://supabase.com/)
 project, and an [OpenAI](https://platform.openai.com/) API key.
 
 ```bash
-git clone https://github.com/<your-username>/anatomy.git
+git clone https://github.com/ravirraj/anatomy.git
 cd anatomy
 pnpm install
 ```
