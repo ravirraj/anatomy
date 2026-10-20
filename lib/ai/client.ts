@@ -7,9 +7,14 @@ import { wrapOpenAI } from "langsmith/wrappers/openai";
 // Exact snapshots, never a moving alias: an alias changes the model under a
 // cached answer without changing its key. Each model is part of its own
 // tasks' cache keys, so re-pinning one invalidates only its own answers.
+//
+// The defaults are OpenAI's. Any OpenAI-compatible endpoint works - Google's
+// compatibility layer for Gemini, or OpenRouter - by setting AI_BASE_URL and
+// these two names. The model is still pinned, and still part of the key, so
+// switching provider invalidates only the answers that provider wrote.
 export const MODELS = {
-  explain: "gpt-5.5-2026-04-23",
-  classify: "gpt-5.4-mini-2026-03-17",
+  explain: process.env.AI_MODEL_EXPLAIN?.trim() || "gpt-5.5-2026-04-23",
+  classify: process.env.AI_MODEL_CLASSIFY?.trim() || "gpt-5.4-mini-2026-03-17",
 } as const;
 
 export type TracingStatus = { on: true; project: string } | { on: false; reason: string };
@@ -22,15 +27,27 @@ export function tracingStatus(): TracingStatus {
   return { on: true, project: process.env.LANGSMITH_PROJECT?.trim() || "default" };
 }
 
+// Unset means OpenAI's own API. Set, it's any OpenAI-compatible endpoint:
+// Google's compatibility layer for Gemini, or OpenRouter.
+const BASE_URL = process.env.AI_BASE_URL?.trim() || undefined;
+
+// Only OpenAI's own API takes this one. The others either ignore it or
+// refuse the request, and a refusal is a failed explanation.
+export function openAIOnly(): { verbosity?: "low" } {
+  return BASE_URL ? {} : { verbosity: "low" };
+}
+
 let client: OpenAI | null = null;
 
 // Built on first use rather than at import, so a missing key fails the call
 // that needed it with a message saying so, not the server's boot.
 export function ai(): OpenAI {
   if (client) return client;
-  const apiKey = process.env.OPENAI_API_KEY?.trim();
-  if (!apiKey) throw new Error("OPENAI_API_KEY isn't set in .env.local, so nothing can be explained");
-  client = wrapOpenAI(new OpenAI({ apiKey }), { tracingEnabled: tracingStatus().on });
+  const apiKey = process.env.AI_API_KEY?.trim() || process.env.OPENAI_API_KEY?.trim();
+  if (!apiKey) {
+    throw new Error("Neither AI_API_KEY nor OPENAI_API_KEY is set in .env.local, so nothing can be explained");
+  }
+  client = wrapOpenAI(new OpenAI({ apiKey, baseURL: BASE_URL }), { tracingEnabled: tracingStatus().on });
   return client;
 }
 

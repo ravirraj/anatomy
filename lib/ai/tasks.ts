@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { isModelRole, MODEL_ROLES, type ModelRole } from "../roles.ts";
 import { traceable } from "langsmith/traceable";
-import { ai, MODELS, traceConfig } from "./client.ts";
+import { ai, MODELS, openAIOnly, traceConfig } from "./client.ts";
 import {
   CLASSIFY_SYSTEM,
   classifyMessage,
@@ -70,6 +70,15 @@ export async function explainFolder(input: FolderInput, deps: { cache: Cache }):
 // to pick something when nothing fits, and the file stays unclassified.
 const NONE = "none";
 
+// The role the model may give, as a schema. The answer is checked against it
+// afterwards, so a model that answers outside it is refused rather than stored.
+const ROLE_SCHEMA = {
+  type: "object",
+  properties: { role: { type: "string", enum: [...MODEL_ROLES, NONE] } },
+  required: ["role"],
+  additionalProperties: false,
+} as const;
+
 export async function classifyFile(input: ClassifyInput, deps: { cache: Cache; source: SourceOf }): Promise<{ role: ModelRole | null; cached: boolean }> {
   const model = MODELS.classify;
   const run = traceable(async (question: ClassifyInput): Promise<{ role: ModelRole | null; cached: boolean }> => {
@@ -77,28 +86,7 @@ export async function classifyFile(input: ClassifyInput, deps: { cache: Cache; s
     const hit = await deps.cache.read(key);
     if (hit !== null) return { role: parseRole(hit), cached: true };
     const excerpt = (await deps.source()).split("\n").slice(0, EXCERPT_LINES).join("\n");
-    const response = await ai().chat.completions.create({
-      model,
-      messages: [
-        { role: "system", content: CLASSIFY_SYSTEM },
-        { role: "user", content: classifyMessage(question, excerpt) },
-      ],
-      reasoning_effort: "low",
-      response_format: {
-        type: "json_schema",
-        json_schema: {
-          name: "file_role",
-          strict: true,
-          schema: {
-            type: "object",
-            properties: { role: { type: "string", enum: [...MODEL_ROLES, NONE] } },
-            required: ["role"],
-            additionalProperties: false,
-          },
-        },
-      },
-    });
-    const answer = readRole(response.choices[0]?.message.content ?? null);
+    const answer = readRole(await askForRole(model, CLASSIFY_SYSTEM, classifyMessage(question, excerpt)));
     // Parsed before caching, so a refused answer is never stored and served.
     const role = parseRole(answer);
     await deps.cache.write({ key, task: "classify-file", model, body: answer });
@@ -131,11 +119,52 @@ async function complete(model: string, system: string, user: string): Promise<st
       { role: "user", content: user },
     ],
     reasoning_effort: "low",
-    verbosity: "low",
+    ...openAIOnly(),
   });
   const body = response.choices[0]?.message.content?.trim();
   if (!body) throw new Error(`${model} returned an empty answer (finish reason: ${response.choices[0]?.finish_reason ?? "none"})`);
   return body;
+}
+
+// The role is asked for as a strict JSON schema. Not every endpoint
+// implements that, so a refusal falls back to plain JSON mode, which every
+// one of them does. Either way the answer is checked before it is stored.
+async function askForRole(model: string, system: string, user: string): Promise<string | null> {
+  const base = {
+    model,
+    messages: [
+      { role: "system" as const, content: system },
+      { role: "user" as const, content: user },
+    ],
+    reasoning_effort: "low" as const,
+    ...openAIOnly(),
+  };
+  try {
+    const response = await ai().chat.completions.create({
+      ...base,
+      response_format: {
+        type: "json_schema",
+        json_schema: { name: "file_role", strict: true, schema: ROLE_SCHEMA },
+      },
+    });
+    return response.choices[0]?.message.content ?? null;
+  } catch (error) {
+    if (!schemaRefused(error)) throw error;
+    const response = await ai().chat.completions.create({
+      ...base,
+      response_format: { type: "json_object" },
+    });
+    return response.choices[0]?.message.content ?? null;
+  }
+}
+
+// An endpoint that doesn't implement the schema says so, usually with a 400.
+// Anything else is a real failure and is not retried.
+function schemaRefused(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const status = (error as { status?: number }).status;
+  if (status !== 400 && status !== 404 && status !== 422) return false;
+  return /json_schema|response_format|structured output|schema/i.test(error.message);
 }
 
 function capped(source: string): string {

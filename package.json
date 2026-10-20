@@ -10,7 +10,8 @@
     "parse": "node scripts/parse.ts",
     "map-counts": "node scripts/map-counts.ts",
     "insights": "node scripts/insights.ts",
-    "analyze": "node --env-file=.env.local scripts/analyze.ts"
+    "analyze": "node --env-file=.env.local scripts/analyze.ts",
+    "test": "node scripts/test-provider.ts"
   },
   "dependencies": {
     "@clerk/nextjs": "^7.9.7",
