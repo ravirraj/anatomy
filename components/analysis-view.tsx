@@ -16,7 +16,8 @@ import type { Coverage, Edge, ParsedFile, Route } from "@/lib/parser/types";
 import type { ModelRole } from "@/lib/roles";
 import { CategoryRail } from "./category-rail";
 import { DetailPane, type RepositoryFacts, type Tab } from "./detail-pane";
-import { targetKey, type ExplainTarget, type ExplanationState, type Freshness } from "./explanation-panel";
+import { setExplanation, useExplanations } from "./explanation-store";
+import { targetKey, type ExplainTarget, type Freshness } from "./explanation-panel";
 import { DependencyMap } from "./map/dependency-map";
 import { RouteTable } from "./route-table";
 import { Shell } from "./shell";
@@ -63,22 +64,30 @@ export function AnalysisView({
   const [centre, setCentre] = useState<"map" | "routes">("map");
   // Explanations fetched on this page, by file or folder, so moving the
   // selection away and back finds the answer still there without asking again.
-  const [explanations, setExplanations] = useState<ReadonlyMap<string, ExplanationState>>(() => new Map());
+  // They live in a store of their own, so a re-render of the page doesn't lose
+  // an answer that took a minute to fetch.
+  const explanations = useExplanations(analysisId);
   const [freshness, setFreshness] = useState<ReadonlyMap<string, Freshness>>(() => new Map());
   const [modelRoles, setModelRoles] = useState<ReadonlyMap<string, ModelRole>>(() => new Map(Object.entries(storedModelRoles)));
   // The repository's latest commit, asked for once per page load: GitHub's
   // unauthenticated API allows few requests, and one answer serves every file.
   const head = useRef<Promise<HeadResult> | null>(null);
+  // A request already on its way, so the same file isn't asked for twice. A
+  // free model can take a minute to answer, and two of them help nobody.
+  const inFlight = useRef<Set<string>>(new Set());
 
   const explain = useCallback(
     (target: ExplainTarget) => {
       const key = targetKey(target);
-      setExplanations((prev) => new Map(prev).set(key, { status: "loading" }));
+      if (inFlight.current.has(key)) return;
+      inFlight.current.add(key);
+      setExplanation(analysisId, key, { status: "loading" });
       setFreshness((prev) => new Map(prev).set(key, { status: "checking" }));
 
       void (async () => {
         const result = await (target.kind === "file" ? explainFileAction(analysisId, target.path) : explainFolderAction(analysisId, target.dir));
-        setExplanations((prev) => new Map(prev).set(key, result.ok ? { status: "done", result } : { status: "error", error: result.error }));
+        inFlight.current.delete(key);
+        setExplanation(analysisId, key, result.ok ? { status: "done", result } : { status: "error", error: result.error });
         if (result.ok && target.kind === "file" && result.labelled?.role) {
           const role = result.labelled.role;
           setModelRoles((prev) => new Map(prev).set(target.path, role));
