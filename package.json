@@ -11,7 +11,8 @@
     "map-counts": "node scripts/map-counts.ts",
     "insights": "node scripts/insights.ts",
     "analyze": "node --env-file=.env.local scripts/analyze.ts",
-    "test": "node scripts/test-provider.ts && node scripts/test-explanation-store.ts"
+    "test": "node scripts/test-provider.ts && node scripts/test-explanation-store.ts",
+    "check-links": "node scripts/check-links.mjs"
   },
   "dependencies": {
     "@clerk/nextjs": "^7.9.7",
