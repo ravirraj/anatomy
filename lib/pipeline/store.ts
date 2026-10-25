@@ -11,6 +11,7 @@ const FILE_CHUNK = 1000;
 const EDGE_CHUNK = 2000;
 const ROLE_CHUNK = 2000;
 const ROUTE_CHUNK = 2000;
+const SYMBOL_CHUNK = 2000;
 
 // The skipped-file list lives in the files table; storing it twice would let
 // the two disagree.
@@ -72,6 +73,10 @@ export async function storeResult(db: Db, analysis: { id: string; organizationId
   for (let i = 0; i < result.routes.length; i += ROUTE_CHUNK) {
     const { error } = await db.rpc("insert_routes", { p_analysis_id: analysis.id, p_routes: result.routes.slice(i, i + ROUTE_CHUNK) });
     if (error) throw new Error(`Storing routes failed: ${error.message}`);
+  }
+  for (let i = 0; i < result.symbols.length; i += SYMBOL_CHUNK) {
+    const { error } = await db.rpc("insert_symbols", { p_analysis_id: analysis.id, p_symbols: result.symbols.slice(i, i + SYMBOL_CHUNK) });
+    if (error) throw new Error(`Storing symbols failed: ${error.message}`);
   }
 }
 

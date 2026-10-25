@@ -44,6 +44,10 @@ export async function loadStoredAnalysis(
     db.from("routes").select("file_id, method, path, line").eq("analysis_id", analysis.id).order("id").range(from, to),
   );
 
+  const symbols = await readAll((from, to) =>
+    db.from("symbols").select("file_id, name, kind, line, exported").eq("analysis_id", analysis.id).order("id").range(from, to),
+  );
+
   const pathOf = new Map(files.map((f) => [f.id, f.path]));
   const parsed = files.filter((f) => f.skip_reason === null);
   const skipped = files.filter((f) => f.skip_reason !== null);
@@ -88,6 +92,9 @@ export async function loadStoredAnalysis(
     routes: routes
       .map((r) => ({ file: pathOf.get(r.file_id), method: r.method, pattern: r.path, line: r.line }))
       .sort((a, b) => a.pattern.localeCompare(b.pattern) || a.method.localeCompare(b.method) || (a.file ?? "").localeCompare(b.file ?? "")),
+    symbols: symbols
+      .map((s) => ({ file: pathOf.get(s.file_id), name: s.name, kind: s.kind, line: s.line, exported: s.exported }))
+      .sort((a, b) => (a.file ?? "").localeCompare(b.file ?? "") || a.line - b.line),
     coverage: {
       ...coverage,
       files: {

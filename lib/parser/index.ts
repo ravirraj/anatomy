@@ -1,7 +1,7 @@
 import { statSync } from "node:fs";
 import path from "node:path";
 import { Project, ts } from "ts-morph";
-import { extractExports, extractImports } from "./extract.ts";
+import { extractExports, extractImports, extractSymbols } from "./extract.ts";
 import { dedupeEdges, fanCounts } from "./graph.ts";
 import { createResolver } from "./resolve.ts";
 import {
@@ -11,6 +11,7 @@ import {
   type ImportStatus,
   type ParseResult,
   type ParsedFile,
+  type ParsedSymbol,
   type Route,
   type SkippedFile,
   type StatusCounts,
@@ -86,9 +87,11 @@ export function parseSelection({ root, walk }: Selection): ParseResult {
   };
   const rawEdges: Edge[] = [];
   const exportsOf = new Map<string, string[]>();
+  const symbolsOf = new Map<string, Omit<ParsedSymbol, "file">[]>();
 
   for (const { candidate, sourceFile } of parsed) {
     exportsOf.set(candidate.path, extractExports(sourceFile));
+    symbolsOf.set(candidate.path, extractSymbols(sourceFile));
     for (const found of extractImports(sourceFile)) {
       const specifier = found.literal ? found.specifier : found.expression;
       const outcome: ImportStatus = found.literal
@@ -140,6 +143,9 @@ export function parseSelection({ root, walk }: Selection): ParseResult {
   const paths = parsed.map((entry) => entry.candidate.path);
   const fan = fanCounts(paths, edges);
   const conventions = applyAdapters(walk, parsed, skipped);
+  const symbols = paths
+    .flatMap((file) => (symbolsOf.get(file) ?? []).map((s) => ({ ...s, file })))
+    .sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
   const files: ParsedFile[] = parsed
     .map(({ candidate }) => ({
       path: candidate.path,
@@ -166,6 +172,7 @@ export function parseSelection({ root, walk }: Selection): ParseResult {
     files,
     edges,
     routes: conventions.routes,
+    symbols,
     coverage: {
       files: {
         found: walk.found,

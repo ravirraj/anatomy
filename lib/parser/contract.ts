@@ -2,6 +2,7 @@ import { ROLE_IDS } from "../roles.ts";
 import {
   EDGE_KINDS,
   SCHEMA_VERSION,
+  SYMBOL_KINDS,
   type ConfigReport,
   type Coverage,
   type Edge,
@@ -11,6 +12,7 @@ import {
   type OmittedRoute,
   type ParseResult,
   type ParsedFile,
+  type ParsedSymbol,
   type Project,
   type Route,
   type SkippedFile,
@@ -58,6 +60,7 @@ export function validateParseResult(value: unknown): ParseResult {
     files: array(o.files, "$.files", parsedFile),
     edges: array(o.edges, "$.edges", edge),
     routes: array(o.routes, "$.routes", route),
+    symbols: array(o.symbols, "$.symbols", symbol),
     coverage: coverage(o.coverage, "$.coverage"),
     configs: array(o.configs, "$.configs", configReport),
   };
@@ -70,6 +73,9 @@ export function validateParseResult(value: unknown): ParseResult {
   });
   result.routes.forEach((r, i) => {
     if (!paths.has(r.file)) throw new ContractError(`$.routes[${i}].file`, `${r.file} is not a file in the output`);
+  });
+  result.symbols.forEach((s, i) => {
+    if (!paths.has(s.file)) throw new ContractError(`$.symbols[${i}].file`, `${s.file} is not a file in the output`);
   });
   if (result.projects[0]?.path !== ".") throw new ContractError("$.projects[0].path", "the root must be the first project");
   const { found, parsed, skipped } = result.coverage.files;
@@ -113,6 +119,17 @@ function route(value: unknown, at: string): Route {
 function omittedRoute(value: unknown, at: string): OmittedRoute {
   const o = object(value, at);
   return { file: string(o.file, `${at}.file`), line: count(o.line, `${at}.line`), reason: string(o.reason, `${at}.reason`) };
+}
+
+function symbol(value: unknown, at: string): ParsedSymbol {
+  const o = object(value, at);
+  return {
+    file: string(o.file, `${at}.file`),
+    name: string(o.name, `${at}.name`),
+    kind: oneOf(o.kind, `${at}.kind`, SYMBOL_KINDS),
+    line: count(o.line, `${at}.line`),
+    exported: boolean(o.exported, `${at}.exported`),
+  };
 }
 
 function withheldRoutes(value: unknown, at: string): WithheldRoutes {
