@@ -20,6 +20,7 @@ import { setExplanation, useExplanations } from "./explanation-store";
 import { targetKey, type ExplainTarget, type Freshness } from "./explanation-panel";
 import { DependencyMap } from "./map/dependency-map";
 import { RouteTable } from "./route-table";
+import { SearchBox } from "./search-box";
 import { Shell } from "./shell";
 
 // Owns what the map, the rail and the pane share: which folders are open,
@@ -187,9 +188,14 @@ export function AnalysisView({
       }
       map={
         <div className="absolute inset-0 flex flex-col">
-          <div role="tablist" className="flex h-7 shrink-0 items-end gap-3 border-b border-line bg-surface px-3 text-[11px]">
-            <CentreTab label="Map" on={centre === "map"} onClick={() => setCentre("map")} />
-            <CentreTab label="Routes" count={routes.length} on={centre === "routes"} onClick={() => setCentre("routes")} />
+          <div className="flex h-7 shrink-0 items-end gap-3 border-b border-line bg-surface px-3 text-[11px]">
+            <div role="tablist" className="flex items-end gap-3">
+              <CentreTab label="Map" on={centre === "map"} onClick={() => setCentre("map")} />
+              <CentreTab label="Routes" count={routes.length} on={centre === "routes"} onClick={() => setCentre("routes")} />
+            </div>
+            <div className="ml-auto pb-0.5">
+              <SearchBox files={files} symbols={symbols} onReveal={reveal} />
+            </div>
           </div>
           <div className="relative min-h-0 flex-1">
             {/* The map stays mounted under the table, so switching back keeps its viewport. */}
