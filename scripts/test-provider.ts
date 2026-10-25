@@ -106,29 +106,32 @@ if (asOpenAI) {
   report();
 }
 
-const { explainFile, classifyFile, cacheKey } = await import("../lib/ai/tasks.ts");
-const { MODELS } = await import("../lib/ai/client.ts");
+	const { explainFile, classifyFile, cacheKey } = await import("../lib/ai/tasks.ts");
+	const { MODELS } = await import("../lib/ai/client.ts");
+	type EdgeKind = "import" | "re-export" | "dynamic-import" | "require";
 
 // A cache that keeps answers in memory, so a second call can be seen to hit it.
 const store = new Map<string, string>();
-const cache = {
-  async read(key: string) {
-    return store.get(key) ?? null;
-  },
-  async write(entry: { key: string; body: string }) {
-    store.set(entry.key, entry.body);
-  },
-};
+	const cache = {
+	  async read(key: string) {
+	    return store.get(key) ?? null;
+	  },
+	  async write(entry: { key: string; body: string }) {
+	    store.set(entry.key, entry.body);
+	  },
+	};
 
-const question = {
-  path: "lib/thing.ts",
-  hash: "abc123",
-  role: null,
-  reachedBy: null,
-  exports: ["thing"],
-  imports: [],
-  importedBy: [],
-};
+	const edgeKinds: EdgeKind[] = ["import"];
+
+	const question = {
+	  path: "lib/thing.ts",
+	  hash: "abc123",
+	  role: null,
+	  reachedBy: null,
+	  exports: ["thing"],
+	  imports: [{ path: "index.ts", role: null, exports: [], kinds: edgeKinds, typeOnly: false }],
+	  importedBy: [],
+	};
 
 console.log("=== the configured models ===");
 console.log(MODELS);

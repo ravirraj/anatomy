@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { isModelRole, MODEL_ROLES, type ModelRole } from "../roles.ts";
 import { traceable } from "langsmith/traceable";
 import { ai, MODELS, openAIOnly, traceConfig } from "./client.ts";
+import { verifyCitations, CitationError } from "./citations.ts";
 import {
   CLASSIFY_SYSTEM,
   classifyMessage,
@@ -42,11 +43,17 @@ export function cacheKey(task: Task, model: string, input: unknown): string {
 
 export async function explainFile(input: FileInput, deps: { cache: Cache; source: SourceOf }): Promise<Explanation> {
   const model = MODELS.explain;
+  const allowed = fileCitationsAllowed(input);
   const run = traceable(async (question: FileInput): Promise<Explanation> => {
     const key = cacheKey("explain-file", model, question);
     const hit = await deps.cache.read(key);
-    if (hit !== null) return { body: hit, model, cached: true };
+    if (hit !== null) {
+      // A cached answer is still an answer: verify it before serving it.
+      verifyCitationsBody(hit, allowed);
+      return { body: hit, model, cached: true };
+    }
     const body = await complete(model, EXPLAIN_FILE_SYSTEM, explainFileMessage(question, capped(await deps.source())));
+    verifyCitationsBody(body, allowed);
     await deps.cache.write({ key, task: "explain-file", model, body });
     return { body, model, cached: false };
   }, traceConfig("explain-file"));
@@ -55,15 +62,51 @@ export async function explainFile(input: FileInput, deps: { cache: Cache; source
 
 export async function explainFolder(input: FolderInput, deps: { cache: Cache }): Promise<Explanation> {
   const model = MODELS.explain;
+  const allowed = folderCitationsAllowed(input);
   const run = traceable(async (question: FolderInput): Promise<Explanation> => {
     const key = cacheKey("explain-folder", model, question);
     const hit = await deps.cache.read(key);
-    if (hit !== null) return { body: hit, model, cached: true };
+    if (hit !== null) {
+      verifyCitationsBody(hit, allowed);
+      return { body: hit, model, cached: true };
+    }
     const body = await complete(model, EXPLAIN_FOLDER_SYSTEM, explainFolderMessage(question));
+    verifyCitationsBody(body, allowed);
     await deps.cache.write({ key, task: "explain-folder", model, body });
     return { body, model, cached: false };
   }, traceConfig("explain-folder"));
   return run(input);
+}
+
+// Every path the model was allowed to name: the file itself, what reaches it,
+// and everything it imports or is imported by.
+function fileCitationsAllowed(input: FileInput): Set<string> {
+  const allowed = new Set<string>([input.path]);
+  if (input.reachedBy) allowed.add(input.reachedBy);
+  for (const n of input.imports) allowed.add(n.path);
+  for (const n of input.importedBy) allowed.add(n.path);
+  return allowed;
+}
+
+// Every path the model was allowed to name for a folder: the folder, its
+// files, and both ends of every edge crossing the folder boundary.
+function folderCitationsAllowed(input: FolderInput): Set<string> {
+  const allowed = new Set<string>([input.dir]);
+  for (const f of input.files) allowed.add(f.path);
+  for (const e of input.incoming) {
+    allowed.add(e.from);
+    allowed.add(e.to);
+  }
+  for (const e of input.outgoing) {
+    allowed.add(e.from);
+    allowed.add(e.to);
+  }
+  return allowed;
+}
+
+function verifyCitationsBody(body: string, allowed: Set<string>): void {
+  const failing = verifyCitations(body, allowed);
+  if (failing.paths.length) throw new CitationError(failing.paths);
 }
 
 // "none" is a real answer, and cached like any other: the model wasn't made
