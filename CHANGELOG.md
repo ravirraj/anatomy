@@ -111,6 +111,14 @@ can be labelled by the model, from a fixed list of seven roles, none of them
 routable. The answer is checked, not trusted, and a refused answer is never
 cached.
 
+**Citation verification.** Every path-shaped mention in an AI answer — code
+spans, bold text, bare words in prose, the same tokens the renderer links — is
+tested against the set of paths the model was shown. An answer that names a
+file that is not in the analysis is refused, and it is refused **before it is
+cached**, on a cache hit as much as on a miss, so a bad answer can never be
+stored and served. `scripts/test-citations.ts` covers the checker, including a
+made-up filename spliced into an honest answer.
+
 **Freshness checking.** The repository's current HEAD is compared against the
 analysed commit, and a file's bytes against the hash the parser stored, so an
 explanation always describes the code that is on the map.
@@ -129,9 +137,10 @@ polls.
 live run cannot be claimed twice and an abandoned one can be taken over. Every
 later write by a run is scoped by its own claim timestamp.
 
-**Two test suites.** `scripts/test-provider.ts` (the AI layer against a fake
-OpenAI-compatible endpoint) and `scripts/test-explanation-store.ts` (the
-explanation store). 24 checks, no test framework, non-zero exit on failure.
+**Three test suites.** `scripts/test-provider.ts` (the AI layer against a fake
+OpenAI-compatible endpoint), `scripts/test-explanation-store.ts` (the
+explanation store) and `scripts/test-citations.ts` (citation verification).
+36 checks, no test framework, non-zero exit on failure.
 
 **A configurable model provider.** The base URL, the key and both model names
 are environment variables. Unset, it is OpenAI's own API with its own pinned

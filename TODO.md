@@ -524,22 +524,22 @@ map cannot substitute for.
   - **Effort:** XL.
   - **Design:** [docs/ai-system.md](docs/ai-system.md#9-proposed-repository-wide-question-answering).
 
-- [ ] **[P0] Verify every citation against the stored analysis**
-  - **Status:** Planned
+- [x] **[P0] Verify every citation against the stored analysis**
+  - **Status:** Done
   - **Problem:** Nothing checks that an answer does not name a file that does
     not exist. The prompt forbids it; the renderer degrades gracefully; nothing
     verifies it. This is the failure the whole product exists to prevent.
   - **Outcome:** An answer that names a file that is not in the analysis is
     treated as a failure, not shown.
   - **Acceptance criteria:**
-    - [ ] Every path-shaped token in an answer is tested against the set of
+    - [x] Every path-shaped token in an answer is tested against the set of
           paths the model was shown.
-    - [ ] A failure is caught by a test with a made-up filename spliced in.
-    - [ ] The check runs as a live evaluator, not only against a saved
+    - [x] A failure is caught by a test with a made-up filename spliced in.
+    - [x] The check runs as a live evaluator, not only against a saved
           dataset.
   - **Dependencies:** None. This can be built before the Q&A feature and will
     protect the explanations that already exist.
-  - **Effort:** M.
+  - **Effort:** Done.
 
 - [ ] **[P0] Ask the model to classify files only when convention has not**
   - **Status:** Done
@@ -920,15 +920,15 @@ as such deliberately: none of it exists.
   - **Dependencies:** Symbol search, text retrieval, citations.
   - **Effort:** XL.
 
-- [ ] **[P0] Verify source citations**
-  - **Status:** Planned
+- [x] **[P0] Verify source citations**
+  - **Status:** Done
   - **Problem:** Nothing checks that an answer names only files that exist.
     Detailed in 3.1.
   - **Outcome:** An invented path is caught and the answer is refused.
   - **Acceptance criteria:**
-    - [ ] As in 3.1.
+    - [x] As in 3.1.
   - **Dependencies:** None.
-  - **Effort:** M.
+  - **Effort:** Done.
 
 - [ ] **[P1] Measure retrieval quality**
   - **Status:** Planned
