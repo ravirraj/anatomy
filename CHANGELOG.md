@@ -91,6 +91,16 @@ exactly, the routes are **withheld with a stated reason** rather than
 approximated — Express routes always, and Next.js routes when `basePath` is
 computed or `pageExtensions` is set.
 
+**Symbols.** The parser reads every top-level declaration — function, class,
+interface, type, enum, namespace, const, let, var — with its line, its kind,
+and whether it is exported. Definitions, not only the export names: a helper
+nothing imports is a symbol too. They ride the same round-trip as routes:
+checked by the parser's contract, stored through their own RPC into a
+`symbols` table under the same organization policy, read back the same way,
+and shown in the detail pane as the file's declarations. Stored under schema
+version 5; an analysis stored by an older parser shows as outdated and asks to
+be re-run, as with every capability the parser gains.
+
 **AI explanations.** For a file or a folder, written from that thing's real
 neighbours, with every path in the prose becoming a link that moves the map.
 The prompt permits exactly three kinds of formatting and the renderer renders
@@ -129,9 +139,11 @@ polls.
 live run cannot be claimed twice and an abandoned one can be taken over. Every
 later write by a run is scoped by its own claim timestamp.
 
-**Two test suites.** `scripts/test-provider.ts` (the AI layer against a fake
-OpenAI-compatible endpoint) and `scripts/test-explanation-store.ts` (the
-explanation store). 24 checks, no test framework, non-zero exit on failure.
+**Three test suites.** `scripts/test-provider.ts` (the AI layer against a fake
+OpenAI-compatible endpoint), `scripts/test-explanation-store.ts` (the
+explanation store) and `scripts/test-symbols.ts` (symbol extraction, the
+end-to-end parse of a fixture repository, and the contract round-trip).
+44 checks, no test framework, non-zero exit on failure.
 
 **A configurable model provider.** The base URL, the key and both model names
 are environment variables. Unset, it is OpenAI's own API with its own pinned

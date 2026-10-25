@@ -90,18 +90,17 @@ language field in the data model.
 
 1. **No repository-wide question answering.** Explanations are per file or per
    folder.
-2. **No symbol-level information.** Export *names* are extracted; function and
-   class *definitions* are not, so "where is `useAuth` defined" cannot be
-   answered.
-3. **TypeScript and JavaScript only.**
-4. **No call graph.** Only import and re-export relationships.
-5. **The route table covers a minority of frameworks.** Express never,
+2. **TypeScript and JavaScript only.**
+3. **No call graph.** Only import and re-export relationships. Top-level
+   declarations are extracted with their kind, line and exported flag, but
+   which function calls which is not.
+4. **The route table covers a minority of frameworks.** Express never,
    Next.js Pages Router pages never, and Docusaurus never.
-6. **The blast radius stops at two steps.** Files further out are counted, not
+5. **The blast radius stops at two steps.** Files further out are counted, not
    listed.
-7. **A panel shows 14 rows at a time.**
-8. **The answer cache never evicts.**
-9. **No public deployment and no recorded demonstration.**
+6. **A panel shows 14 rows at a time.**
+7. **The answer cache never evicts.**
+8. **No public deployment and no recorded demonstration.**
 
 ### 1.4 Important technical debt
 
@@ -630,7 +629,7 @@ Each language needs the same six things. None of them is done.
 
 | Language | Parser | Import resolution | Symbol extraction | Graph integration | Fixtures | Documentation | Known limitations |
 |---|---|---|---|---|---|---|---|
-| **TypeScript / JavaScript** | Done (ts-morph) | Done | Partial: export names only | Done | **Planned** | Done | No symbol definitions; no call graph |
+| **TypeScript / JavaScript** | Done (ts-morph) | Done | Done: definitions with kind, line and exported | Done | **Planned** | Done | No call graph |
 | **Python** | Not started | Not started | Not started | Not started | Not started | Not started | Module vs package resolution, `__init__` semantics, dynamic imports |
 | **Go** | Not started | Not started | Not started | Not started | Not started | Not started | Module paths, build tags, vendored code |
 | **Java** | Not started | Not started | Not started | Not started | Not started | Not started | Package structure, `package-info`, annotation processors |
