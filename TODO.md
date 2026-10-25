@@ -725,17 +725,20 @@ A framework adapter is six methods. Existing adapters are the best guide.
 ## 5. Developer experience
 
 - [ ] **[P1] Symbol and full-text code search**
-  - **Status:** Planned
+  - **Status:** In progress — path and symbol search are done; full text is
+    not possible until file contents are stored, which they are not: the
+    database holds a file's hash only.
   - **Problem:** There is no way to search. Finding a file means finding it on
     the map, which means knowing where it is.
   - **Outcome:** A search over the analysis that finds files, symbols and
     lines.
   - **Acceptance criteria:**
-    - [ ] Search by file path.
-    - [ ] Search by symbol name, once symbol extraction exists.
+    - [x] Search by file path.
+    - [x] Search by symbol name, once symbol extraction exists.
     - [ ] Search by full text within a file.
-    - [ ] A result opens the file on the map and selects it.
-  - **Dependencies:** Symbol extraction (4.1), text search over stored files.
+    - [x] A result opens the file on the map and selects it.
+  - **Dependencies:** Symbol extraction (4.1) — met; text search over stored
+    files — unmet, the contents are not stored.
   - **Effort:** L.
 
 - [ ] **[P1] Group the category rail by role, not by extension**

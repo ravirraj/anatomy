@@ -101,6 +101,14 @@ and shown in the detail pane as the file's declarations. Stored under schema
 version 5; an analysis stored by an older parser shows as outdated and asks to
 be re-run, as with every capability the parser gains.
 
+**Search.** A query finds files by path and symbols by name, from the data
+the map already holds — no request. Case-insensitive, ranked exact over
+prefix over substring, a symbol on a tie before a file, capped at twenty. A
+picked hit reveals its file on the map the way a path in the pane does, with
+a symbol hit showing its kind, whether it is exported, and its line. Full
+text is not searched: the database stores a file's hash, never its contents,
+so there is nothing over which to search.
+
 **AI explanations.** For a file or a folder, written from that thing's real
 neighbours, with every path in the prose becoming a link that moves the map.
 The prompt permits exactly three kinds of formatting and the renderer renders
@@ -147,12 +155,13 @@ polls.
 live run cannot be claimed twice and an abandoned one can be taken over. Every
 later write by a run is scoped by its own claim timestamp.
 
-**Four test suites.** `scripts/test-provider.ts` (the AI layer against a fake
+**Five test suites.** `scripts/test-provider.ts` (the AI layer against a fake
 OpenAI-compatible endpoint), `scripts/test-explanation-store.ts` (the
-explanation store), `scripts/test-citations.ts` (citation verification) and
+explanation store), `scripts/test-citations.ts` (citation verification),
 `scripts/test-symbols.ts` (symbol extraction, the end-to-end parse of a
-fixture repository, and the contract round-trip). 56 checks, no test
-framework, non-zero exit on failure.
+fixture repository, and the contract round-trip) and `scripts/test-search.ts`
+(search over an analysis). 66 checks, no test framework, non-zero exit on
+failure.
 
 **A configurable model provider.** The base URL, the key and both model names
 are environment variables. Unset, it is OpenAI's own API with its own pinned
