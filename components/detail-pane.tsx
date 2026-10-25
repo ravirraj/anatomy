@@ -8,7 +8,7 @@ import type { Selection } from "@/lib/graph/highlight";
 import { findInsights, INSIGHT_SENTENCES, type Cycle } from "@/lib/graph/insights";
 import { adjacency, DEFAULT_DEPTH, reach, type Adjacency, type Direction } from "@/lib/graph/reach";
 import { groupFan, groupId } from "@/lib/graph/view";
-import type { Edge, ParsedFile, Project } from "@/lib/parser/types";
+import type { Edge, ParsedFile, ParsedSymbol, Project } from "@/lib/parser/types";
 import { railLabel, UNCLASSIFIED, type ModelRole } from "@/lib/roles";
 import { ExplanationPanel, targetKey, type ExplainTarget, type ExplanationState, type Freshness } from "./explanation-panel";
 import { CategorySwatch } from "./map/swatch";
@@ -30,6 +30,7 @@ type Props = {
   files: ParsedFile[];
   byPath: ReadonlyMap<string, ParsedFile>;
   edges: Edge[];
+  symbols: ParsedSymbol[];
   folding: Folding;
   repository: RepositoryFacts;
   selection: Selection;
@@ -96,6 +97,7 @@ export function DetailPane(props: Props) {
           file={file}
           modelRole={props.modelRoles.get(file.path) ?? null}
           edges={props.edges}
+          symbols={props.symbols.filter((s) => s.file === file.path)}
           graph={graph}
           walk={props.walk}
           onWalk={props.onWalk}
@@ -426,12 +428,13 @@ function FileStructure(props: {
   /** The model's label, only ever for a file convention left unclassified. */
   modelRole: ModelRole | null;
   edges: Edge[];
+  symbols: ParsedSymbol[];
   graph: Adjacency;
   walk: Direction | null;
   onWalk: (walk: Direction | null) => void;
   paths: PathActions;
 }) {
-  const { file, modelRole, edges, graph, walk, onWalk, paths } = props;
+  const { file, modelRole, edges, symbols, graph, walk, onWalk, paths } = props;
   const { imports, importedBy } = useMemo(() => neighboursOf(edges, file.path), [edges, file.path]);
   const category = categoryOf(file.path);
   // Counts are the lengths of the lists below them, so they can't disagree.
@@ -490,7 +493,34 @@ function FileStructure(props: {
         rows={importedBy}
         paths={paths}
       />
+      <SymbolList symbols={symbols} />
     </>
+  );
+}
+
+// The file's top-level declarations, in the order the parser read them: line,
+// name, kind, and whether anything outside can even import it.
+function SymbolList({ symbols }: { symbols: ParsedSymbol[] }) {
+  if (symbols.length === 0) return null;
+  return (
+    <section className="mt-3">
+      <h3 className="flex items-baseline justify-between px-3 pb-0.5 text-[11px]">
+        <span>Declarations</span>
+        <span className="tabular-nums">{symbols.length}</span>
+      </h3>
+      <ul>
+        {symbols.map((s, i) => (
+          <li key={i} className="flex items-baseline gap-2 px-3 py-0.5 text-[11px] tabular-nums">
+            <span className="w-8 shrink-0 text-right text-fg-muted">{s.line}</span>
+            <span className="font-mono break-all">{s.name}</span>
+            <span className="ml-auto shrink-0 text-fg-muted">
+              {s.kind}
+              {!s.exported && <span className="text-fg-muted"> · internal</span>}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

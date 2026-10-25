@@ -1,5 +1,5 @@
-import { Node, SyntaxKind, type ImportClause, type SourceFile } from "ts-morph";
-import type { EdgeKind } from "./types.ts";
+import { Node, SyntaxKind, ts, type ImportClause, type SourceFile } from "ts-morph";
+import type { EdgeKind, ParsedSymbol, SymbolKind } from "./types.ts";
 
 export type RawImport = {
   kind: EdgeKind;
@@ -162,7 +162,65 @@ export function extractExports(sourceFile: SourceFile): string[] {
   return [...new Set(found.map((f) => f.name))];
 }
 
-// `module.exports = { a, b }` exports a and b. Anything else, including an
+/**
+ * The top-level declarations a file makes, definitions rather than only the
+ * exports: a helper no one imports is a symbol too, and `exported` says which
+ * it is. Source order, each declaration once. CommonJS assignment isn't a
+ * declaration, so it makes no symbol here; the names it exports are already
+ * in extractExports.
+ */
+export function extractSymbols(sourceFile: SourceFile): Omit<ParsedSymbol, "file">[] {
+  const found: Omit<ParsedSymbol, "file">[] = [];
+
+  const add = (name: string, kind: SymbolKind, at: Node, exported: boolean) =>
+    found.push({ name, kind, line: at.getStartLineNumber(), exported });
+
+  for (const statement of sourceFile.getStatements()) {
+    if (Node.isFunctionDeclaration(statement) || Node.isClassDeclaration(statement) || Node.isInterfaceDeclaration(statement) || Node.isTypeAliasDeclaration(statement) || Node.isEnumDeclaration(statement)) {
+      const exported = statement.hasExportKeyword();
+      const kind: SymbolKind = Node.isFunctionDeclaration(statement)
+        ? "function"
+        : Node.isClassDeclaration(statement)
+          ? "class"
+          : Node.isInterfaceDeclaration(statement)
+            ? "interface"
+            : Node.isTypeAliasDeclaration(statement)
+              ? "type"
+              : "enum";
+      if (statement.hasDefaultKeyword()) {
+        add("default", kind, statement, true);
+        continue;
+      }
+      const name = statement.getNameNode();
+      if (name) add(name.getText(), kind, statement, exported);
+    } else if (Node.isModuleDeclaration(statement) && Node.isIdentifier(statement.getNameNode())) {
+      // `namespace x {}` and its older spelling `module x {}`; the string-named
+      // `declare module "x"` form exports nothing from this file.
+      add(statement.getName(), "namespace", statement, statement.hasExportKeyword());
+    } else if (Node.isVariableStatement(statement)) {
+      const exported = statement.hasExportKeyword();
+      const kind: SymbolKind = statement.getDeclarationList().getFlags() & ts.NodeFlags.Const
+        ? "const"
+        : statement.getDeclarationList().getFlags() & ts.NodeFlags.Let
+          ? "let"
+          : "var";
+      for (const declaration of statement.getDeclarations()) {
+        const name = declaration.getNameNode();
+        if (Node.isIdentifier(name)) add(name.getText(), kind, declaration, exported);
+        // `export const { a, b: c } = x` declares a and c.
+        else
+          for (const element of name.getDescendantsOfKind(SyntaxKind.BindingElement)) {
+            const bound = element.getNameNode();
+            if (Node.isIdentifier(bound)) add(bound.getText(), kind, declaration, exported);
+          }
+      }
+    }
+  }
+
+  return found;
+}
+
+// `module.exports = <value>` exports a and b. Anything else, including an
 // object with a spread or a computed key, is one value whose names aren't all
 // written here, so it's recorded as that value rather than as a partial list.
 function addWholeModule(value: Node, add: (name: string, at: Node) => void): void {

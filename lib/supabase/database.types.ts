@@ -429,6 +429,61 @@ export type Database = {
           },
         ]
       }
+      symbols: {
+        Row: {
+          analysis_id: string
+          exported: boolean
+          file_id: string
+          id: string
+          kind: string
+          line: number
+          name: string
+          organization_id: string
+        }
+        Insert: {
+          analysis_id: string
+          exported: boolean
+          file_id: string
+          id?: string
+          kind: string
+          line: number
+          name: string
+          organization_id: string
+        }
+        Update: {
+          analysis_id?: string
+          exported?: boolean
+          file_id?: string
+          id?: string
+          kind?: string
+          line?: number
+          name?: string
+          organization_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "symbols_analysis_id_organization_id_fkey"
+            columns: ["analysis_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "analyses"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "symbols_file_id_organization_id_fkey"
+            columns: ["file_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "files"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "symbols_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
@@ -444,6 +499,10 @@ export type Database = {
       }
       insert_routes: {
         Args: { p_analysis_id: string; p_routes: Json }
+        Returns: number
+      }
+      insert_symbols: {
+        Args: { p_analysis_id: string; p_symbols: Json }
         Returns: number
       }
     }

@@ -12,7 +12,7 @@ import { foldDirectories } from "@/lib/graph/fold";
 import type { Selection } from "@/lib/graph/highlight";
 import type { Direction } from "@/lib/graph/reach";
 import { clampOffset, groupId, MAX_ROWS, rankGroupFiles } from "@/lib/graph/view";
-import type { Coverage, Edge, ParsedFile, Route } from "@/lib/parser/types";
+import type { Coverage, Edge, ParsedFile, ParsedSymbol, Route } from "@/lib/parser/types";
 import type { ModelRole } from "@/lib/roles";
 import { CategoryRail } from "./category-rail";
 import { DetailPane, type RepositoryFacts, type Tab } from "./detail-pane";
@@ -31,6 +31,7 @@ export function AnalysisView({
   files,
   edges,
   routes,
+  symbols,
   routeCoverage,
   modelRoles: storedModelRoles,
   analysisId,
@@ -40,6 +41,7 @@ export function AnalysisView({
   files: ParsedFile[];
   edges: Edge[];
   routes: Route[];
+  symbols: ParsedSymbol[];
   routeCoverage: Coverage["routes"];
   /** Roles the model gave files no convention identified, by path. */
   modelRoles: Record<string, ModelRole>;
@@ -228,6 +230,7 @@ export function AnalysisView({
           files={files}
           byPath={byPath}
           edges={edges}
+          symbols={symbols}
           folding={folding}
           repository={{ ...repository, routes: routes.length }}
           selection={selection}

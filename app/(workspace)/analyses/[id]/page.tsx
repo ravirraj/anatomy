@@ -30,6 +30,7 @@ export default async function AnalysisPage({ params }: PageProps<"/analyses/[id]
           files={result.files}
           edges={result.edges}
           routes={result.routes}
+          symbols={result.symbols}
           routeCoverage={result.coverage.routes}
           modelRoles={modelRoles}
           analysisId={header.analysisId}

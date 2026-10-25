@@ -3,7 +3,7 @@
 
 import type { Role } from "../roles.ts";
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export type EdgeKind = "import" | "re-export" | "dynamic-import" | "require";
 
@@ -66,6 +66,44 @@ export type Route = {
   pattern: string;
   /** Where it's declared: the export or the decorator. */
   line: number;
+};
+
+export type SymbolKind =
+  | "function"
+  | "class"
+  | "interface"
+  | "type"
+  | "enum"
+  | "namespace"
+  | "const"
+  | "let"
+  | "var";
+
+export const SYMBOL_KINDS: readonly SymbolKind[] = [
+  "function",
+  "class",
+  "interface",
+  "type",
+  "enum",
+  "namespace",
+  "const",
+  "let",
+  "var",
+];
+
+/**
+ * One top-level declaration, read from the file's own syntax. Definitions,
+ * not only the exports: an unexported helper is a symbol too, with exported
+ * saying which it is.
+ */
+export type ParsedSymbol = {
+  /** The file that declares it. */
+  file: string;
+  name: string;
+  kind: SymbolKind;
+  /** Where it's declared. */
+  line: number;
+  exported: boolean;
 };
 
 export type OmittedRoute = { file: string; line: number; reason: string };
@@ -174,6 +212,8 @@ export type ParseResult = {
   edges: Edge[];
   /** Sorted by pattern, then method. */
   routes: Route[];
+  /** Sorted by file, then line. */
+  symbols: ParsedSymbol[];
   coverage: Coverage;
   configs: ConfigReport[];
 };
