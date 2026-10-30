@@ -372,8 +372,8 @@ designed in [docs/architecture/file-content-storage.md](docs/architecture/file-c
     on every boot.
   - **Outcome:** No warning, and the same protection.
   - **Acceptance criteria:**
-    - [ ] The public routes are matched by the native Next.js matcher.
-    - [ ] A signed-out request to a protected route is still redirected.
+    - [x] The public routes are matched by the native Next.js matcher.
+    - [x] A signed-out request to a protected route is still redirected.
   - **Dependencies:** None.
   - **Effort:** S.
 
