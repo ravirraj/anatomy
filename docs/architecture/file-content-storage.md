@@ -1,10 +1,9 @@
 # Source-file content storage — feasibility and architecture
 
-Status: **Designed; the storage foundations are implemented — see §14 — and
-the pipeline now writes content during indexing; see
-[content-pipeline-integration.md](content-pipeline-integration.md) and §15.**
-This document was written before any storage code existed. It records what
-was verified in the code as of `SCHEMA_VERSION = 5`, defines the
+Status: **Designed; the storage foundations are implemented (§14), the pipeline
+writes content during indexing (§15), and the read side with lazy backfill is
+implemented (§16).** This document was written before any storage code existed.
+It records what was verified in the code as of `SCHEMA_VERSION = 5`, defines the
 requirements, compares the alternatives, and settles the design that
 [ADR-0001](decisions/0001-source-content-storage.md) records as the decision.
 [TODO.md](../../TODO.md) §3.4 carries the implementation tasks.
@@ -224,9 +223,9 @@ flowchart LR
   end
   FILES -->|"hash = content reference"| FC
   subgraph Answer time
-    SVC[lib/content/read.ts<br/>getFileContent(fileId)<br/>getFileLines(fileId, start, end)] --> CACHE["bounded LRU<br/>key: file_id + hash<br/>budget 32 MB, entry ≤ 1 MB"]
-    CACHE --> FC
-    SVC --> CIT["citation / Q&A paths"]
+    SVC[lib/content/read.ts<br/>getFileContent(fileId)<br/>getFileLines(fileId, start, end)] --> FC[("file_contents<br/>org_id · hash PK<br/>payload bytea (compressed by TOAST)<br/>size · created_at, RLS by org")]
+    SVC -.->|"on a 'absent' file: fetchFileAt<br/>at the analysed commit, hash-verified,<br/>then stored and flagged (§16)"| GH[("raw.githubusercontent.com<br/>at the analysed commit only")]
+    SVC --> CIT["citation / Q&A paths (later)"]
   end
 ```
 
@@ -493,10 +492,37 @@ export interface ContentStore {
 
 ```ts
 // lib/content/read.ts — read-side, called from server actions and future API routes
-export interface FileContentService {
-  getFileContent(fileId: string): Promise<string | null>;               // whole file, utf8-decoded
-  getFileLines(fileId: string, startLine: number, endLine: number): Promise<string | null>;  // 1-based, inclusive, indexing matches ParseResult line numbers
-}
+// Implemented as of Phase 3 (see §16).
+export type BackfillDeps = {
+  /** The writer client for content and metadata; defaults to the admin client
+   *  (createAdminSupabase) — members have no write grant on files/file_contents. */
+  writer?: Db;
+  /** One file's bytes at one commit; injectable for tests, defaults to the
+   *  pipeline's commit-pinned fetchFileAt. */
+  fetchFile?: typeof fetchFileAt;
+};
+
+export async function getFileContent(
+  db: Db,
+  fileId: string,
+  deps?: BackfillDeps,
+): Promise<string | null>;  // whole file, utf8-decoded exactly as the parser read it
+
+export async function getFileLines(
+  db: Db,
+  fileId: string,
+  startLine: number,
+  endLine: number,
+  deps?: BackfillDeps,
+): Promise<string | null>;  // 1-based, inclusive, parser-coincident line numbers
+
+export type FileSource = {
+  fileId: string;
+  path: string;
+  contentHash: string;
+  text: string;
+  lineCount: number;   // the parser's countLines, shared with lib/parser/walk.ts
+};
 ```
 
 Rationale for the shape:
@@ -508,10 +534,12 @@ Rationale for the shape:
   wants windows), and surfacing `getFileLines` at this layer keeps the
   *line-numbering contract* (1-based, parser-coincident) in one place for the
   next consumer to inherit rather than re-derive.
-- The spec's `getFileLines(fileId, startLine, endLine)` and the exact
-  `ContentStore` calls above are deliberately minimal; **no** `Stream` API is
-  proposed — payloads celestially ≤ 1 MB, so streaming to the web response is
-  a later trade-off, not a need.
+- **No answer-path cache this phase.** `lib/content/read.ts` reads the
+  database every time; §7's bounded LRU stays proposed, not implemented. The
+  `getFileLines(fileId, startLine, endLine)` and `ContentStore` calls above
+  are deliberately minimal; **no** `Stream` API is proposed — payloads are
+  celestially ≤ 1 MB, so streaming to the web response is a later trade-off,
+  not a need.
 
 ---
 
@@ -721,6 +749,175 @@ guarantee, and isolation is a row-policy guarantee.
 - **Immutability is a trigger** — `UPDATE` is refused in the schema
   (`preserve_file_contents`), not just by the application's upsert
   discipline, as §5.2 argues it must be.
+
+## 16. Phase 3 — the read side and lazy backfill, as implemented (October 2026)
+
+`lib/content/read.ts` exists and TODO §3.4's read-side tasks are done:
+`getFileContent(db, fileId)` and `getFileLines(db, fileId, startLine, endLine)`,
+both hash-verified, organization-scoped through the file row's own
+`organization_id` (never accepted from a caller), with lazy backfill through
+the existing `fetchFileAt` path — no new GitHub fetching, no new PR.
+
+### 16.1 API
+
+```ts
+export type BackfillDeps = {
+  writer?: Db;          // defaults to createAdminSupabase lazily
+  fetchFile?: ...;      // defaults to lib/pipeline/github.ts's fetchFileAt
+};
+
+export async function getFileContent(db: Db, fileId: string, deps?: BackfillDeps): Promise<string | null>;
+export async function getFileLines(db: Db, fileId: string, startLine: number, endLine: number, deps?: BackfillDeps): Promise<string | null>;
+export type FileSource = { fileId, path, contentHash, text, lineCount };
+export { ConsistencyError, IntegrityError };  // from lib/content/types.ts
+```
+
+`db` is the caller's client — server actions pass the member client, so RLS
+holds; scripts pass fakes or the admin client. Both functions share one
+internal load (`loadSource` → `FileSource`), so content is fetched at most
+once per call and never fetched twice after a successful backfill.
+
+### 16.2 Read rules
+
+1. **Resolve the file row under the caller's policies** — nested select
+   `files → analysis:analyses(commit_sha, project:projects(repo_owner,
+   repo_name))`, `.eq("id", fileId).maybeSingle()`. Missing row ⇒ `null`;
+   `hash === null` (a file the parser skipped) ⇒ `null`. Another
+   organization's file is not there at all — the row itself was filtered by
+   RLS before its `organization_id` was ever trusted.
+2. **`content_status === 'stored'`** ⇒ `getContent(organization_id, hash)`
+   verifies hash and size. Missing row ⇒ `ConsistencyError` (a database that
+   contradicts itself is not smoothed into a null). Corrupted payload or bad
+   size ⇒ `IntegrityError` from the store.
+3. **Unknown `content_status`** ⇒ `ConsistencyError` — the schema permits
+   only `absent`/`stored`; anything else is a contract failure, loud.
+4. **`content_status === 'absent'`** ⇒ first check the content table anyway:
+   a backfill that wrote content but died before flipping status leaves this
+   exact state, and a concurrent backfill may have landed. Verified bytes are
+   served, the flip is retried, and a failed flip warns (`console.warn`) and
+   serves — bookkeeping failure never rejects a verified read.
+5. **Absent and nothing stored** ⇒ lazy backfill:
+   - the repository and `commit_sha` come from the row's own analysis +
+     project embed; missing either ⇒ `null` — truthfully unavailable, **never
+     a default-branch or HEAD fetch** (commit pinning).
+   - GitHub's bytes are sha256-compared to `files.hash` *before* anything is
+     written; mismatch ⇒ `ConsistencyError`, nothing stored, nothing served
+     (a stale substitute is the failure this phase exists to prevent).
+   - `putContents(writer, organization_id, bytes)` — idempotent,
+     `ON CONFLICT DO NOTHING`, the same call the pipeline uses — then
+     `existsContent` confirms the write landed.
+   - the metadata update is conditional:
+     `.update({ content_status: "stored" }).eq("id").eq("organization_id")
+     .eq("hash").eq("content_status", "absent")`. Zero rows touched ⇒ re-read
+     the row: gone ⇒ `null` (the identity moved — re-index replaced it); hash
+     changed ⇒ `null` (stale identity; its verified bytes stay stored,
+     addressed harmlessly, GC later); otherwise ⇒ already stored, serve.
+6. **Decode:** `Buffer.from(bytes).toString("utf8")` — the parser's own
+   decode (same as `walk.ts`'s `readCandidate`), so line N here is line N
+   there. Exact bytes: CRLF kept, trailing whitespace kept, no truncation,
+   empty file returns `""`, never `null`.
+
+### 16.3 Line numbering (`getFileLines`)
+
+- 1-based, inclusive, matching `files.lines` exactly — `countLines` is
+  exported from `lib/parser/walk.ts` and reused; no second convention exists.
+- `sliceLines(content, startLine, endLine)` is exported for tests: split on
+  `\n`, the trailing `""` a final newline leaves is not a line (the
+  `countLines` adjustment), a per-line trailing `\r` is stripped (the
+  ts-morph line-text view for CRLF files), lines join with `\n`.
+- **Strict bounds:** `startLine` or `endLine` past the last line ⇒ `null`,
+  never a clamped prefix and never silent truncation. Empty file ⇒ `null`
+  for any range (it has no lines).
+- **Rejected loudly** (`RangeError`): non-integers, zero or negative
+  numbers, `startLine > endLine` — caller bugs, validated before any
+  database work.
+- Caveat, documented: a lone `\r` (old Mac line endings) is not a break in
+  this convention, same as the parser's `countLines`; exotic files' line
+  numbers can disagree with ts-morph's scanner — the read side follows
+  `files.lines`, the parser's own.
+
+### 16.4 Concurrency and idempotency
+
+- Content writes are `ON CONFLICT DO NOTHING`; concurrent backfills both
+  fetch (documented race — no distributed lock this phase), both write the
+  same hash once, and the conditional metadata update is idempotent: one flip
+  lands, the other matches nothing, and both serve their verified bytes.
+- A row whose identity moved mid-backfill is never stamped `stored` by a
+  stale backfill, and never serves stale bytes.
+- Two simultaneous reads of the same absent file fetch twice and converge on
+  one stored row; after a successful backfill, reads never fetch again.
+
+### 16.5 What Phase 3 deliberately does not do (spec)
+
+- No LRU cache (§7 stays proposed), no garbage collection
+  (`deleteOrphaned` remains a contract, not a function), no full-text search,
+  no retrieval/Q&A, no citation hash-binding, no object-storage backend, no
+  background backfill jobs, no prefetching.
+- `app/(workspace)/analyses/[id]/actions.ts` is **not** rewired: it keeps its
+  own `sourceAtAnalysedCommit` (fetch at analysed commit, hash-verified,
+  throws on mismatch, stores nothing) — deliberate, because storage belongs
+  to the read path now and citation hash-binding is a later task.
+
+### 16.6 Tests
+
+- **`node scripts/test-content-read.ts`** (in `pnpm test`) — 66 checks
+  against a fake of exactly the calls the read path makes: stored read with
+  exact bytes and CRLF kept; missing file and skipped (hash-less) file ⇒
+  `null`; empty file ⇒ `""`; org isolation through the row; corrupted
+  payload ⇒ `IntegrityError`; stored-without-row ⇒ `ConsistencyError`;
+  unknown status ⇒ `ConsistencyError`; absent-but-content heals and re-flips;
+  line tests for first/last/single/multi/empty/CRLF/LF/trailing-newline/
+  no-trailing-newline/invalid numbers/beyond-EOF; backfill happy path
+  (analysed commit + exact repository + path, hash-verified, conflict-safe
+  write, conditional metadata guard, second read refetches nothing); remote
+  deleted ⇒ `null`; rate limit / network ⇒ transport error propagated;
+  storage write failure ⇒ error, nothing flipped; unconfirmed write ⇒ error,
+  retry heals; hash mismatch ⇒ `ConsistencyError`, nothing stored; two
+  simultaneous backfills (documented race, one row, both served); row
+  identity moved mid-backfill ⇒ `null`, new identity unstamped; row vanished
+  mid-backfill ⇒ `null`; concurrent winner's flip stands; parser-agreement
+  round-trip: a real fixture parsed by the real parser, its routes/symbols/
+  edges read back at their recorded line numbers, and `files.lines` proven as
+  the exact EOF boundary. Fakes prove nothing about RLS — that is the live
+  suites' business.
+- **`node --env-file=.env.local scripts/test-content-read-db.ts`** — the live
+  linked project: happy backfill flagged `stored`, exact bytes back, second
+  read refetches nothing, an outdated `'absent'` heals on read, a re-index
+  racing the backfill yields `null` with nothing stamped, hash mismatch is
+  refused as `ConsistencyError`, a path missing at the analysed commit is
+  `null`. Seeds one throwaway organization plus its project, analysis, and
+  file row; deletes the organization at the end and verifies zero content,
+  files, and analyses rows with the test prefix remain. Deliberately not part
+  of `pnpm test` (it touches the linked database).
+- **`scripts/test-content-rls.ts`** and **`scripts/test-content-pipeline-db.ts`**
+  — unchanged, both still green (member isolation and the batched bytea wire
+  behavior respectively).
+- Existing suites unchanged: `test-fixtures`, `test-provider`,
+  `test-explanation-store`, `test-citations`, `test-symbols`, `test-search`,
+  `test-content-store`, `test-content-pipeline`, plus `accuracy` — all pass.
+
+### 16.7 Failure handling summary
+
+| Situation | Behaviour |
+|---|---|
+| Missing file row / skipped file | `null` |
+| `stored` row, nothing behind it | `ConsistencyError`, never `null` |
+| Corrupted payload / wrong size | `IntegrityError` |
+| `content_status` the schema does not define | `ConsistencyError` |
+| Content present but status `'absent'` | verified bytes served, flip retried |
+| Flip's metadata update fails | warned, bytes served, next read retries |
+| GitHub has nothing at the analysed commit | `null` |
+| GitHub's bytes hash elsewhere | `ConsistencyError`, nothing stored |
+| Rate limit / network down | transport error propagated |
+| Content write refused | error, nothing flipped |
+| Write confirmed-missing afterwards | error, retry heals to `stored` |
+| Row identity moves mid-backfill | `null`, stale identity unstamped, old content stays |
+| Backfill race (two readers, two writers) | one stored row, both served, no lock |
+
+Now, per [content-pipeline-integration.md](content-pipeline-integration.md)
+Phase 2's record, §16 is this phase's record; together they are the
+source-content storage feature's documentation, one PR (#2), one branch
+(`ravi`), no merge until approved.
 
 ### 14.3 The module
 

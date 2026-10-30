@@ -608,7 +608,7 @@ designed in [docs/architecture/file-content-storage.md](docs/architecture/file-c
 
 ### 3.4 [P0] Source-content storage
 
-Everything is designed in [docs/architecture/file-content-storage.md](docs/architecture/file-content-storage.md) and decided in [docs/architecture/decisions/0001-source-content-storage.md](docs/architecture/decisions/0001-source-content-storage.md). [TODO.md](TODO.md) The database foundations, the storage module and the pipeline write are implemented (migrations `20261030040722` + `20261030041425`, `lib/content`, and `storeResult` verifying and storing content during indexing — module logic by a fake-client suite, tenant isolation against the live project by `scripts/test-content-rls.ts`, pipeline logic by `scripts/test-content-pipeline.ts` with the wire behavior by `scripts/test-content-pipeline-db.ts`); the read side, cache, GC, benchmarks and hash-bound citations are still to come.
+Everything is designed in [docs/architecture/file-content-storage.md](docs/architecture/file-content-storage.md) and decided in [docs/architecture/decisions/0001-source-content-storage.md](docs/architecture/decisions/0001-source-content-storage.md). [TODO.md](TODO.md) The database foundations, the storage module and the pipeline write are implemented (migrations `20261030040722` + `20261030041425`, `lib/content`, and `storeResult` verifying and storing content during indexing — module logic by a fake-client suite, tenant isolation against the live project by `scripts/test-content-rls.ts`, pipeline logic by `scripts/test-content-pipeline.ts` with the wire behavior by `scripts/test-content-pipeline-db.ts`); **the read side and its lazy backfill are implemented** (`lib/content/read.ts`, `scripts/test-content-read.ts` in `pnpm test`, `scripts/test-content-read-db.ts` against the live project); the cache, GC, benchmarks and hash-bound citations are still to come.
 
 - [x] **[P0] The `file_contents` table and the content store**
   - **Status:** Done — the migration and the store are in; verified by the fake-client suite and the live RLS suite.
@@ -633,14 +633,14 @@ Everything is designed in [docs/architecture/file-content-storage.md](docs/archi
   - **Dependencies:** The table and store.
   - **Effort:** S.
 
-- [ ] **[P0] The read side: `getFileContent` / `getFileLines`**
-  - **Status:** Planned
+- [x] **[P0] The read side: `getFileContent` / `getFileLines`**
+  - **Status:** Implemented — `lib/content/read.ts` (Phase 3, on `ravi`, part of PR #2); `docs/architecture/file-content-storage.md` §16 records it.
   - **Problem:** Citations promise line precision; nothing can show a line without the network.
   - **Outcome:** A read API that answers by file id, with 1-based line ranges that match the parser's recorded line numbers exactly.
   - **Acceptance criteria:**
-    - [ ] `lib/content/read.ts` exposes `getFileContent(fileId)` and `getFileLines(fileId, start, end)`, both returning a typed `null` for `content_status = 'absent'`.
-    - [ ] A read of a file's lines agrees with the `line` the parser recorded for its routes, edges and symbols (proved by a test reading a fixture back).
-    - [ ] Lazy backfill: a read that finds an absent payload for a hash-known file goes through the hash-verified `fetchFileAt` path and stores it, per the migration section — no separate backfill needed.
+    - [x] `lib/content/read.ts` exposes `getFileContent(db, fileId)` and `getFileLines(db, fileId, start, end)`, both returning a typed `null` for `content_status = 'absent'`, hash-verified before anything is served.
+    - [x] A read of a file's lines agrees with the `line` the parser recorded for its routes, edges and symbols (proved by `scripts/test-content-read.ts` reading a real fixture back through the real parser).
+    - [x] Lazy backfill: a read that finds an absent payload for a hash-known file goes through the hash-verified `fetchFileAt` path at the analysed commit and stores it through `putContents`, per the migration section — no separate backfill needed.
   - **Dependencies:** The store; the pipeline write for any new analysis.
   - **Effort:** M.
 

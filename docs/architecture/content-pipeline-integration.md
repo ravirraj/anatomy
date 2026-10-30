@@ -178,7 +178,10 @@ source text, credentials or payloads.
 
 ### 7. Deferred (still true after this phase)
 
-Lazy backfill, the content read service, the LRU, GC, full-text search,
+The content read service and its lazy backfill are implemented
+(`lib/content/read.ts`, recorded in
+[file-content-storage.md §16](file-content-storage.md#16-phase-3-the-read-side-and-lazy-backfill-as-implemented-october-2026));
+still deferred: the LRU cache, garbage collection, full-text search,
 retrieval/Q&A, citation hash-binding, object storage, background jobs.
 `files` rows created before this phase belong to past analyses whose re-run
 will backfill their content naturally; no migration of old rows is

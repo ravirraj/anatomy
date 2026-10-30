@@ -316,6 +316,48 @@ organization — the content follows by the foreign key's cascade — and
 verifies the database holds no row with a test organization id. Like the
 RLS suite, this is deliberately not part of `pnpm test`.
 
+**`scripts/test-content-read.ts`** — the read service's logic, against a fake
+of exactly the calls it makes (in `pnpm test`):
+
+```bash
+node scripts/test-content-read.ts
+```
+
+It checks that stored files serve their exact bytes (CRLF kept, empty file
+served as `""`, never `null`), that missing files and parser-skipped files
+read as typed `null`, that a `stored` claim with no content row, a corrupted
+payload, or an unknown `content_status` throws instead of serving anything,
+that an outdated `'absent'` heals on read and a failed metadata flip warns
+but serves, that lines are 1-based inclusive with strict EOF bounds and
+reject invalid ranges loudly, and that lazy backfill fetches at the analysed
+commit only, hash-verifies against `files.hash`, stores through
+`putContents`, flips `content_status` conditionally, refuses hash mismatch
+as `ConsistencyError`, treats a 404 at the analysed commit as `null`, and
+stays safe under concurrent backfills (documented race, no distributed
+lock). It closes with a parser-agreement round trip: a real fixture parsed
+by the real parser, with every recorded route, symbol and edge line read
+back at its own line number. Like every fake-client suite it proves the
+module's contract — the database's row policies are the live suites'
+business.
+
+**`scripts/test-content-read-db.ts`** — the read service against the **live**
+Supabase project (requires `supabase link` and login):
+
+```bash
+node --env-file=.env.local scripts/test-content-read-db.ts
+```
+
+It seeds one throwaway organization with a project, an analysis at a pinned
+commit, and a `files` row whose content is `absent`, then exercises the
+happy backfill (exact commit, exact path, exact bytes back, row flagged
+`stored`), a second read that refetches nothing, healing of an outdated
+`'absent'`, a re-index racing the backfill (serves `null`, stamps nothing),
+hash mismatch refused as `ConsistencyError`, and a path missing at the
+analysed commit served as `null`. It deletes its test organization at the
+end and verifies zero content, files, and analyses rows with the test
+prefix remain. Deliberately not part of `pnpm test`, like the other live
+suites.
+
 **`scripts/check-links.mjs`** — the documentation's internal links:
 
 ```bash

@@ -42,6 +42,20 @@ export class IntegrityError extends Error {
   }
 }
 
+/**
+ * The database contradicts itself about a file and its content: a `stored`
+ * file with no content row under its hash, a status the schema does not
+ * define, or bytes offered for storage that do not hash to the identity
+ * they were fetched for. Never silenced into a typed null — null means
+ * "genuinely absent", and a self-contradiction is not absence.
+ */
+export class ConsistencyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConsistencyError";
+  }
+}
+
 /** The store, in the shape callers use. Implemented in store.ts; the pipeline and the read path call it, both through lib/content. */
 export interface ContentStore {
   /**

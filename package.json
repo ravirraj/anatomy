@@ -11,7 +11,7 @@
     "map-counts": "node scripts/map-counts.ts",
     "insights": "node scripts/insights.ts",
     "analyze": "node --env-file=.env.local scripts/analyze.ts",
-    "test": "node scripts/test-fixtures.ts && node scripts/test-provider.ts && node scripts/test-explanation-store.ts && node scripts/test-citations.ts && node scripts/test-symbols.ts && node scripts/test-search.ts && node scripts/test-content-store.ts && node scripts/test-content-pipeline.ts",
+    "test": "node scripts/test-fixtures.ts && node scripts/test-provider.ts && node scripts/test-explanation-store.ts && node scripts/test-citations.ts && node scripts/test-symbols.ts && node scripts/test-search.ts && node scripts/test-content-store.ts && node scripts/test-content-pipeline.ts && node scripts/test-content-read.ts",
     "typecheck": "next typegen && tsc --noEmit",
     "accuracy": "node scripts/accuracy-fixtures.ts",
     "check-links": "node scripts/check-links.mjs"
