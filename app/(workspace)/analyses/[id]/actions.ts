@@ -2,7 +2,10 @@
 
 import { createHash } from "node:crypto";
 import { tracingStatus, type TracingStatus } from "@/lib/ai/client";
-import { classifyFile, explainFile, explainFolder, type Cache } from "@/lib/ai/tasks";
+import { type ParsedCitation } from "@/lib/ai/citations";
+import { type QuestionInput } from "@/lib/ai/prompts";
+import { formatRetrievedContext, retrieveGroundedContext } from "@/lib/ai/retrieval";
+import { answerQuestion, classifyFile, explainFile, explainFolder, type Cache } from "@/lib/ai/tasks";
 import { loadFileInput, loadFolderInput } from "@/lib/analysis/context";
 import { getFileContent } from "@/lib/content/read";
 import { fetchFileAt, resolveHeadCommit } from "@/lib/pipeline/github";
@@ -21,6 +24,22 @@ export type ExplainResult =
       labelled: { role: ModelRole | null } | null;
       /** Why labelling failed, when it did; the explanation still stands. */
       labelError: string | null;
+    }
+  | { ok: false; error: string };
+
+export type QAResult =
+  | {
+      ok: true;
+      body: string;
+      model: string;
+      cached: boolean;
+      tracing: TracingStatus;
+      citations: ParsedCitation[];
+      retrieval: {
+        totalCharacters: number;
+        files: { fileId: string; path: string; totalLines: number }[];
+        insufficientEvidence: boolean;
+      };
     }
   | { ok: false; error: string };
 
@@ -75,6 +94,57 @@ export async function explainFolderAction(analysisId: string, dir: string): Prom
     return { ok: true, ...answer, tracing: tracingStatus(), labelled: null, labelError: null };
   } catch (error) {
     console.error(`Explaining folder ${dir} failed:`, error);
+    return { ok: false, error: messageOf(error) };
+  }
+}
+
+export async function askQuestionAction(analysisId: string, question: string): Promise<QAResult> {
+  try {
+    const trimmed = question.trim();
+    if (!trimmed) {
+      return { ok: false, error: "Question cannot be empty" };
+    }
+
+    const db = await createServerSupabase();
+    const analysis = await readAnalysis(db, analysisId);
+
+    // 1. Multi-index deterministic retrieval & graph expansion
+    const retrieved = await retrieveGroundedContext(db, analysis.id, trimmed);
+    const contextText = formatRetrievedContext(retrieved);
+
+    // 2. Answer question using bounded grounded context
+    const questionInput: QuestionInput = {
+      question: trimmed,
+      contextText,
+      files: retrieved.files.map((f) => ({
+        path: f.path,
+        contentHash: f.contentHash,
+        totalLines: f.totalLines,
+      })),
+    };
+
+    const cache = cacheFor(db, analysis.organizationId);
+    const answer = await answerQuestion(questionInput, { cache });
+
+    return {
+      ok: true,
+      body: answer.body,
+      model: answer.model,
+      cached: answer.cached,
+      tracing: tracingStatus(),
+      citations: answer.citations,
+      retrieval: {
+        totalCharacters: retrieved.totalCharacters,
+        files: retrieved.files.map((f) => ({
+          fileId: f.fileId,
+          path: f.path,
+          totalLines: f.totalLines,
+        })),
+        insufficientEvidence: retrieved.insufficientEvidence,
+      },
+    };
+  } catch (error) {
+    console.error(`Asking question on ${analysisId} failed:`, error);
     return { ok: false, error: messageOf(error) };
   }
 }

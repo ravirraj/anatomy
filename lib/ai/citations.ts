@@ -3,16 +3,24 @@
 //
 // Every token here is a *candidate*: a word that looks like it could be a
 // path. Whether it is allowed depends on the analysis the model was shown,
-// which the caller supplies as the `allowed` set.
+// which the caller supplies as the `allowed` set or evidence map.
 
 // Code spans, bold and italic — the same subset the renderer permits.
 const MARKUP = /`([^`]+)`|\*\*(.+?)\*\*|__(.+?)__/g;
+
+// Suffix for line numbers: #L10-L25, #L10-25, #L10, :10-25, :10
+const LINE_SUFFIX = /(?:#(?:L)?(\d+)(?:-(?:L)?(\d+))?|:(\d+)(?:-(\d+))?)$/;
+
+export function stripLineSuffix(token: string): string {
+  return token.replace(LINE_SUFFIX, "");
+}
 
 // A token is path-like only if it contains a separator or an extension, so
 // ordinary words ("See", "the", "file") are never treated as mentions. This
 // mirrors ExplanationText, which only links a word when `isPath` is true.
 function isPathLike(core: string): boolean {
-  return core.includes("/") || /\.\w+$/.test(core);
+  const stripped = stripLineSuffix(core);
+  return stripped.includes("/") || /\.\w+$/.test(stripped);
 }
 
 export function pathTokens(body: string): string[] {
@@ -59,31 +67,138 @@ function proseTokens(text: string): string[] {
 // same file; `src/` and `src` name the same directory. Exact match otherwise.
 // Stored paths (from the parser) are already clean, so only the token side is
 // normalized.
-function normalize(token: string): string {
-  let p = token;
+export function normalize(token: string): string {
+  let p = stripLineSuffix(token);
   if (p.startsWith("./")) p = p.slice(2);
   if (p.endsWith("/") && p.length > 1) p = p.slice(0, -1);
   return p;
 }
 
-export type CitationFailure = { paths: string[] };
+export type ParsedCitation = {
+  raw: string;
+  path: string;
+  startLine?: number;
+  endLine?: number;
+};
+
+/**
+ * Parses a citation token into its normalized path and optional line ranges.
+ * Supports:
+ * - `path/to/file.ts#L10-L25`
+ * - `path/to/file.ts#L10-25`
+ * - `path/to/file.ts#L10`
+ * - `path/to/file.ts:10-25`
+ * - `path/to/file.ts:10`
+ * - `path/to/file.ts`
+ */
+export function parseCitation(token: string): ParsedCitation {
+  const raw = token.trim();
+  const match = raw.match(/^(.*?)(?:#(?:L)?(\d+)(?:-(?:L)?(\d+))?|:(\d+)(?:-(\d+))?)$/);
+  if (!match || !match[1]) {
+    return { raw, path: normalize(raw) };
+  }
+
+  const basePath = normalize(match[1]);
+  const s1 = match[2] ? parseInt(match[2], 10) : undefined;
+  const e1 = match[3] ? parseInt(match[3], 10) : s1;
+
+  const s2 = match[4] ? parseInt(match[4], 10) : undefined;
+  const e2 = match[5] ? parseInt(match[5], 10) : s2;
+
+  const startLine = s1 ?? s2;
+  const endLine = e1 ?? e2;
+
+  return {
+    raw,
+    path: basePath,
+    ...(startLine !== undefined ? { startLine } : {}),
+    ...(endLine !== undefined ? { endLine } : {}),
+  };
+}
+
+/**
+ * Extracts and deduplicates parsed citations from markdown body text.
+ */
+export function extractCitations(body: string): ParsedCitation[] {
+  const tokens = pathTokens(body);
+  const citations: ParsedCitation[] = [];
+  const seen = new Set<string>();
+  for (const token of tokens) {
+    const parsed = parseCitation(token);
+    if (!seen.has(parsed.raw)) {
+      seen.add(parsed.raw);
+      citations.push(parsed);
+    }
+  }
+  return citations;
+}
+
+export type FileEvidence = {
+  lines?: number;
+  contentHash?: string;
+};
+
+export type AllowedCitations = Set<string> | Map<string, FileEvidence>;
+
+export type CitationFailure = {
+  paths: string[];
+  details?: string[];
+};
 
 // Returns the offending mentions (empty when every path-shaped token names a
-// file the model was shown). The caller decides what to do with them — the AI
-// layer refuses and never caches; the renderer could degrade gracefully.
-export function verifyCitations(body: string, allowed: Set<string>): CitationFailure {
-  const offending: string[] = [];
+// file the model was shown and adheres to valid line bounds). The caller decides
+// what to do with them — the AI layer refuses and never caches.
+export function verifyCitations(body: string, allowed: AllowedCitations): CitationFailure {
+  const offending = new Set<string>();
+  const details: string[] = [];
+  const isMap = allowed instanceof Map;
+
   for (const token of pathTokens(body)) {
-    if (!allowed.has(normalize(token))) offending.push(token);
+    const parsed = parseCitation(token);
+    const normalizedPath = parsed.path;
+
+    const exists = allowed.has(normalizedPath);
+    if (!exists) {
+      offending.add(token);
+      details.push(`Unknown file path: "${token}"`);
+      continue;
+    }
+
+    if (isMap) {
+      const evidence = (allowed as Map<string, FileEvidence>).get(normalizedPath);
+      if (evidence) {
+        if (parsed.startLine !== undefined && parsed.endLine !== undefined) {
+          if (parsed.startLine < 1) {
+            offending.add(token);
+            details.push(`Invalid line range in "${token}": start line ${parsed.startLine} must be >= 1`);
+          } else if (parsed.startLine > parsed.endLine) {
+            offending.add(token);
+            details.push(`Invalid line range in "${token}": start line ${parsed.startLine} exceeds end line ${parsed.endLine}`);
+          } else if (evidence.lines !== undefined && parsed.endLine > evidence.lines) {
+            offending.add(token);
+            details.push(`Invalid line range in "${token}": end line ${parsed.endLine} exceeds file length of ${evidence.lines} lines`);
+          }
+        }
+      }
+    }
   }
-  return { paths: offending };
+
+  return {
+    paths: Array.from(offending),
+    ...(details.length > 0 ? { details } : {}),
+  };
 }
 
 export class CitationError extends Error {
   readonly paths: string[];
-  constructor(paths: string[]) {
-    super(`The answer names files that are not in this analysis: ${paths.join(", ")}`);
+  readonly details?: string[];
+  constructor(paths: string[], details?: string[]) {
+    const message = details && details.length > 0
+      ? `Citation verification failed: ${details.join("; ")}`
+      : `The answer names files that are not in this analysis: ${paths.join(", ")}`;
+    super(message);
     this.name = "CitationError";
     this.paths = paths;
+    this.details = details;
   }
 }

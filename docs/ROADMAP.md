@@ -26,32 +26,21 @@ deployment.
 
 ---
 
-## Next milestone — *Answers that cite code*
+## Current milestone — *Answers that cite code*
 
-Two things, in this order.
+**Shipped (Phase 5).** Repository-wide question answering grounded in real code, with hash-bound verifiable line citations.
 
 ### 1. A parser we can measure
 
-A fixture corpus of real repositories, with their expected results, checked on
-every build. Then a number: how accurate is the dependency extraction, measured
-against hand-counted ground truth.
-
-Everything else is measured against this, so it comes first.
+A fixture corpus of real repositories (`fixtures/`), checked on every build (`scripts/test-fixtures.ts`), with an F1 score of 1.0 against ground truth (`scripts/accuracy-fixtures.ts`).
 
 ### 2. Questions across the whole repository
 
 > *How does authentication work in this repository?*
 
-A question interface over a whole analysis. Answers cite real files and line
-ranges, open in the map, and highlight the nodes and edges involved. When the
-stored analysis does not contain the answer, the answer says so.
+An interactive question interface over a whole analysis. Answers cite real files and line ranges (`lib/auth/session.ts#L10-L40`), open in the map, and highlight the nodes on the canvas. When the stored analysis does not contain sufficient evidence, the answer clearly states so.
 
-This needs three things that do not exist yet: a symbol index, retrieval over
-the stored files, and a citation format. The design is in
-[docs/ai-system.md](ai-system.md#9-proposed-repository-wide-question-answering).
-
-**Also in this milestone:** verifying that an answer never names a file that
-does not exist. The prompt forbids it; nothing checks it yet.
+**Hash-bound citation verifier:** Every citation is verified against the stored analysis, valid line ranges, and SHA-256 content hashes (`lib/ai/citations.ts`). Any invented or out-of-bounds citation produces a `CitationError` and prevents caching.
 
 ---
 

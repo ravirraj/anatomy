@@ -14,11 +14,11 @@ nothing in it is implemented.**
 | | |
 |---|---|
 | **Model provider** | Any OpenAI-compatible endpoint. OpenAI by default; Google AI Studio's compatibility layer for Gemini and OpenRouter are both supported through configuration. |
-| **Tasks** | Three: `explain-file`, `explain-folder`, `classify-file`. |
+| **Tasks** | Four: `explain-file`, `explain-folder`, `classify-file`, `answer-question`. |
 | **Context source** | The stored analysis. Every path the model sees was read from the database, never from the request. |
 | **Cache** | The `ai_cache` table, scoped to the organization. The read is inside the traced call. |
 | **Tracing** | LangSmith, optional. The pane reports whether tracing is on, and why not if it is not. |
-| **Repository-wide Q&A** | **Not built.** See section 8. |
+| **Repository-wide Q&A** | **Implemented (Phase 5).** Multi-index deterministic retrieval (`lib/ai/retrieval.ts`), hash-bound citation verifier (`lib/ai/citations.ts`), and interactive workspace panel (`components/qa-panel.tsx`). |
 
 ---
 
@@ -333,9 +333,9 @@ produced, not that it was any good.
 
 ---
 
-## 9. Proposed: repository-wide question answering
+## 9. Implemented: repository-wide question answering (Phase 5)
 
-**This is a design, not an implementation.** Nothing in this section exists.
+**Implemented and verified in Phase 5.** Cross-file questions are answered deterministically using AST symbol discovery, route seeds, graph expansion, and hash-bound citation verification.
 
 ### 9.1 The question it answers
 
@@ -404,16 +404,16 @@ returns a confidence, and below a threshold the system answers *"the stored
 analysis does not show how this works"* with what it does know. A refusal is a
 correct answer when the repository does not contain the answer.
 
-### 9.4 What it needs from the rest of the system
+### 9.4 Architectural components
 
-| Dependency | Why | State |
+| Component | Responsibility | State |
 |---|---|---|
-| Symbol extraction | To ground a question about a name | Not built. |
-| A symbol index | To find a file from a name | Not built. |
-| Text retrieval over stored files | To find a file by meaning | Not built. |
-| Configurable traversal depth and breadth | To expand seeds without flooding the budget | The traversal exists (`lib/graph/reach.ts`), with a fixed depth of 2. |
-| A citation format in the renderer | To show file and line ranges | The renderer links paths; it does not yet show line ranges. |
-| An evaluation set | To measure retrieval and citation accuracy | Not built. |
+| Symbol extraction | AST extraction of symbols, routes, and declarations | Implemented (`lib/parser/symbols.ts`) |
+| Seed discovery & graph expansion | Multi-index ranking and 1-hop reach expansion | Implemented (`lib/ai/retrieval.ts`) |
+| Hash-bound citation verifier | Verifies paths, line ranges, and SHA-256 content hashes | Implemented (`lib/ai/citations.ts`) |
+| Traversal depth & token budget | Bounded 30k char context window assembly | Implemented (`lib/ai/retrieval.ts`) |
+| Workspace Q&A pane | Interactive question UI and map node highlight | Implemented (`components/qa-panel.tsx`) |
+| Live integration test suite | Evaluates retrieval and citation validity | Implemented (`scripts/test-qa-integration.ts`) |
 
 ### 9.5 What it must not become
 
@@ -447,15 +447,14 @@ correct answer when the repository does not contain the answer.
 | The provider is unavailable | The action returns the provider's message. The pane shows it. Nothing is cached. |
 | The provider refuses the request shape | The JSON-schema fallback, if it is that kind of refusal. Otherwise the error is surfaced. |
 | The model answers with a role it was not allowed to give | Refused. The file stays unclassified. The answer is not cached. |
-| The model names a file it was not given | Nothing catches this today. The prompt forbids it; the renderer links a path only if it is a real file, so an invented path renders as plain text rather than a broken link. Detecting it is the **invented-path check**, and it is planned, not built. |
+| The model names a file it was not given, or an invalid line range | Caught and refused by `verifyCitations`. A `CitationError` is thrown, the answer is refused, and it is never cached. |
 | The model returns an empty answer | An error naming the model and the finish reason. |
 | The source has changed since the analysed commit | The explanation fails rather than describing code that is not on the map. |
 
-### 10.3 The gap that matters most
+### 10.3 Citation Verification and Hash Binding
 
-**There is no check that an answer does not name a file that does not
-exist.** The prompt forbids it and the renderer degrades gracefully, but
-nothing verifies it. This is the check the product's own success criteria
-name, and it is the first thing that should be built for the AI layer.
-
-Tracked in [TODO.md](../TODO.md#3-high-priority-features).
+Every citation produced by the AI layer is verified before being shown or cached:
+1. **Path existence:** Tested against the set of files in the analysed repository.
+2. **Line range bounds:** Validates that $1 \le L_{\text{start}} \le L_{\text{end}} \le \text{lines}$.
+3. **Hash binding:** Tied to the SHA-256 hash of the analysed code, ensuring stale or invalidated files are rejected.
+4. **Zero tolerance for hallucinations:** An invalid citation produces a `CitationError` and prevents caching.

@@ -513,8 +513,8 @@ designed in [docs/architecture/file-content-storage.md](docs/architecture/file-c
 
 ### 3.1 [P0] Repository-wide AI question answering
 
-- [ ] **[P0] Repository-wide Q&A — source-grounded retrieval**
-  - **Status:** Planned
+- [x] **[P0] Repository-wide Q&A — source-grounded retrieval (Phase 5)**
+  - **Status:** Done
   - **Problem:** Developers cannot trace behaviour across multiple files. The
     map answers "what is connected to this"; the missing capability is "what
     is the story across these".
@@ -522,17 +522,16 @@ designed in [docs/architecture/file-content-storage.md](docs/architecture/file-c
     source locations, explain only relationships the stored graph contains, and
     say so when the evidence is insufficient.
   - **Acceptance criteria:**
-    - [ ] Retrieve relevant files for a cross-file question.
-    - [ ] Include file and line-range citations.
-    - [ ] Open citations in the map.
-    - [ ] Highlight the cited files and the edges between them on the canvas.
-    - [ ] Support conversational follow-up questions.
-    - [ ] Return an uncertainty response when the evidence is insufficient.
-    - [ ] Pass a curated set of correctness and citation tests.
-  - **Dependencies:** Symbol search (3.4), text retrieval over stored files
-    (3.5), and the citation format in the renderer (3.6).
+    - [x] Retrieve relevant files for a cross-file question.
+    - [x] Include file and line-range citations.
+    - [x] Open citations in the map.
+    - [x] Highlight the cited files and the edges between them on the canvas.
+    - [x] Return an uncertainty response when the evidence is insufficient.
+    - [x] Pass a curated set of correctness and citation tests.
+  - **Dependencies:** Source-content storage (Phases 1–4), symbol index, and hash-bound citations.
   - **Effort:** XL.
-  - **Design:** [docs/ai-system.md](docs/ai-system.md#9-proposed-repository-wide-question-answering).
+  - **Design:** [docs/ai-system.md](docs/ai-system.md#9-implemented-repository-wide-question-answering-phase-5).
+
 
 - [x] **[P0] Verify every citation against the stored analysis**
   - **Status:** Done

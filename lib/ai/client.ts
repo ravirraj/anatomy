@@ -49,6 +49,7 @@ export const isOpenRouter = isOpenRouterBaseUrl(BASE_URL);
 export const MODELS = {
   explain: process.env.AI_MODEL_EXPLAIN?.trim() || (isOpenRouter ? "openai/gpt-4o-mini" : "gpt-5.5-2026-04-23"),
   classify: process.env.AI_MODEL_CLASSIFY?.trim() || (isOpenRouter ? "openai/gpt-4o-mini" : "gpt-5.4-mini-2026-03-17"),
+  question: process.env.AI_MODEL_QUESTION?.trim() || (isOpenRouter ? "openai/gpt-4o-mini" : "gpt-5.5-2026-04-23"),
 } as const;
 
 export type TracingStatus = { on: true; project: string } | { on: false; reason: string };

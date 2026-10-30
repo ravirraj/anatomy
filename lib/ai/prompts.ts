@@ -52,6 +52,12 @@ export type ClassifyInput = {
   importedBy: { path: string; role: string | null }[];
 };
 
+export type QuestionInput = {
+  question: string;
+  contextText: string;
+  files: { path: string; contentHash: string; totalLines: number }[];
+};
+
 // The pane is narrow: headings would cut a few short paragraphs into labelled
 // fragments. Forbidding formatting outright doesn't hold, so a small subset is
 // permitted and the pane renders exactly that subset.
@@ -76,6 +82,17 @@ ${HONESTY}
 ${FORMAT}`;
 
 export const CLASSIFY_SYSTEM = `You label one file of a TypeScript or JavaScript repository that no framework convention identified. Choose the single role that best describes it from: ${MODEL_ROLES.join(", ")}. Answer "none" if none of them clearly fits. Use its path, the names it exports, its source, and the roles of the files around it. Answer only with the JSON the schema asks for.`;
+
+export const QUESTION_SYSTEM = `You answer questions about an analysed codebase strictly grounded in the provided code snippets.
+
+Grounding and Anti-Hallucination Rules:
+1. Base your answer ONLY on the provided code snippets and their file paths and line numbers.
+2. If the provided snippets do not contain enough evidence to answer the question with certainty, state clearly that the stored code snippets do not provide sufficient evidence to answer the question, and explain what is missing. Never guess, assume, or speculate beyond what is shown.
+3. Every claim citing code MUST cite the exact file path and line numbers using backticks: \`path/to/file.ts#L<start>-L<end>\` (e.g. \`lib/auth.ts#L10-L25\`).
+4. NEVER cite a file, function, or line number that is not present in the provided snippets.
+5. Do not invent files, imports, or connections.
+
+${FORMAT}`;
 
 export function explainFileMessage(input: FileInput, source: string): string {
   return [
@@ -135,6 +152,20 @@ export function classifyMessage(input: ClassifyInput, excerpt: string): string {
     "<<<",
     excerpt,
     ">>>",
+  ].join("\n");
+}
+
+export function questionMessage(input: QuestionInput): string {
+  return [
+    `Question: ${input.question.trim()}`,
+    "",
+    "Retrieved Code Snippets from Repository:",
+    "<<<",
+    input.contextText.trim(),
+    ">>>",
+    "",
+    "Provide a clear, direct answer grounded strictly in the snippets above.",
+    "Cite every relevant file and line range using backticks, like `path/to/file.ts#L10-L25`.",
   ].join("\n");
 }
 

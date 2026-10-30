@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { isModelRole, MODEL_ROLES, type ModelRole } from "../roles.ts";
 import { traceable } from "langsmith/traceable";
 import { ai, MODELS, openAIOnly, traceConfig } from "./client.ts";
-import { verifyCitations, CitationError } from "./citations.ts";
+import { verifyCitations, CitationError, extractCitations, type FileEvidence, type ParsedCitation } from "./citations.ts";
 import {
   CLASSIFY_SYSTEM,
   classifyMessage,
@@ -10,17 +10,20 @@ import {
   EXPLAIN_FOLDER_SYSTEM,
   explainFileMessage,
   explainFolderMessage,
+  QUESTION_SYSTEM,
+  questionMessage,
   PROMPT_VERSION,
   type ClassifyInput,
   type FileInput,
   type FolderInput,
+  type QuestionInput,
 } from "./prompts.ts";
 
 // The model calls, each behind its cache. The cache read is the first thing
 // inside the traced function, so a hit is still a recorded run, one with no
 // model call in it, and a broken cache is visible as a trace full of calls.
 
-export type Task = "explain-file" | "explain-folder" | "classify-file";
+export type Task = "explain-file" | "explain-folder" | "classify-file" | "answer-question";
 
 export type Cache = {
   read: (key: string) => Promise<string | null>;
@@ -28,6 +31,7 @@ export type Cache = {
 };
 
 export type Explanation = { body: string; model: string; cached: boolean };
+export type QuestionAnswer = { body: string; model: string; cached: boolean; citations: ParsedCitation[] };
 
 // The source is only fetched on a miss: a hit answers from the stored hash alone.
 export type SourceOf = () => Promise<string>;
@@ -76,6 +80,45 @@ export async function explainFolder(input: FolderInput, deps: { cache: Cache }):
     return { body, model, cached: false };
   }, traceConfig("explain-folder"));
   return run(input);
+}
+
+export async function answerQuestion(
+  input: QuestionInput,
+  deps: { cache: Cache; complete?: (model: string, system: string, user: string) => Promise<string> },
+): Promise<QuestionAnswer> {
+  const model = MODELS.question;
+  const allowedEvidence = new Map<string, FileEvidence>();
+  for (const f of input.files) {
+    allowedEvidence.set(f.path, { lines: f.totalLines, contentHash: f.contentHash });
+  }
+
+  const run = traceable(async (question: QuestionInput): Promise<QuestionAnswer> => {
+    const key = cacheKey("answer-question", model, {
+      q: question.question.trim().toLowerCase(),
+      files: [...question.files]
+        .sort((a, b) => a.path.localeCompare(b.path))
+        .map((f) => ({ path: f.path, hash: f.contentHash })),
+    });
+
+    const hit = await deps.cache.read(key);
+    if (hit !== null) {
+      verifyCitationsEvidence(hit, allowedEvidence);
+      return { body: hit, model, cached: true, citations: extractCitations(hit) };
+    }
+
+    const completer = deps.complete ?? complete;
+    const body = await completer(model, QUESTION_SYSTEM, questionMessage(question));
+    verifyCitationsEvidence(body, allowedEvidence);
+    await deps.cache.write({ key, task: "answer-question", model, body });
+    return { body, model, cached: false, citations: extractCitations(body) };
+  }, traceConfig("answer-question"));
+
+  return run(input);
+}
+
+function verifyCitationsEvidence(body: string, allowed: Map<string, FileEvidence>): void {
+  const failing = verifyCitations(body, allowed);
+  if (failing.paths.length) throw new CitationError(failing.paths, failing.details);
 }
 
 // Every path the model was allowed to name: the file itself, what reaches it,
