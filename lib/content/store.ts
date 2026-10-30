@@ -7,11 +7,11 @@
 
 import { createHash } from "node:crypto";
 import { MAX_FILE_BYTES } from "../parser/walk.ts";
-import { IntegrityError, type ContentKey, type ContentReference } from "./types.ts";
+import { IntegrityError, type ContentKey, type ContentReference, type ContentWrite, type ContentWriteResult } from "./types.ts";
 import type { Db } from "./types.ts";
 
 export { IntegrityError } from "./types.ts";
-export type { ContentKey, ContentReference } from "./types.ts";
+export type { ContentKey, ContentReference, ContentWrite, ContentWriteResult } from "./types.ts";
 
 /** The parser sets the bound twice over — once here, once in the schema. */
 export const MAX_CONTENT_BYTES = MAX_FILE_BYTES;
@@ -55,18 +55,66 @@ export async function putContents(db: Db, organizationId: string, content: Uint8
   if (content.byteLength > MAX_CONTENT_BYTES) {
     throw new Error(`A file over ${MAX_CONTENT_BYTES} bytes is skipped by the parser and never stored (${content.byteLength} bytes given)`);
   }
-  const contentHash = sha256(content);
-  const { error } = await db
-    .from("file_contents")
-    // Upsert with ignoreDuplicates, as every conflict-safe write here does
-    // (see lib/pipeline/submit.ts): an existing row is left as it is — the
-    // first write of a body wins — and no error is raised.
-    .upsert(
-      { organization_id: organizationId, content_hash: contentHash, payload: toPayload(content), size: content.byteLength },
-      { onConflict: "organization_id,content_hash", ignoreDuplicates: true },
-    );
-  if (error) throw new Error(`Storing content failed: ${error.message}`);
-  return { organizationId, contentHash, size: content.byteLength };
+  const [result] = await putContentsBatch(db, organizationId, [{ body: content }]);
+  if (!result.stored) throw new Error(`Storing content failed: ${result.reason}`);
+  return { organizationId, contentHash: result.contentHash, size: result.size };
+}
+
+/**
+ * Writes several bodies in one conflict-safe request. The bodies are hashed
+ * here, duplicates within the batch collapse to one row (the first write of
+ * a body wins, every later identical write is a no-op), and nothing already
+ * stored is ever rewritten. The caller owns chunking: this takes exactly
+ * what it is given as one database request, so keep a batch inside the
+ * wire's comfort — lib/pipeline/store.ts holds the policy.
+ */
+export async function putContentsBatch(db: Db, organizationId: string, writes: readonly ContentWrite[]): Promise<ContentWriteResult[]> {
+  const results: ContentWriteResult[] = new Array(writes.length);
+
+  // Hash and validate every write once; identical bodies (the only bodies
+  // that can share a hash) collapse to one row: the hash's first body stands
+  // in for the rest.
+  const canonicalOf = new Map<string, number>();
+  type Prepared = { contentHash: string; payload: string; size: number; first: number; dupes?: number[] };
+  const prepared: Prepared[] = [];
+  for (const [i, write] of writes.entries()) {
+    if (write.body.byteLength > MAX_CONTENT_BYTES) {
+      results[i] = { stored: false, reason: `A file over ${MAX_CONTENT_BYTES} bytes is skipped by the parser and never stored (${write.body.byteLength} bytes given)` };
+      continue;
+    }
+    const contentHash = sha256(write.body);
+    const canonical = canonicalOf.get(contentHash);
+    if (canonical !== undefined) {
+      // A repeat of a body this batch already holds; it gets the same
+      // outcome as the body that carries the row.
+      (prepared[canonical].dupes ??= []).push(i);
+      continue;
+    }
+    canonicalOf.set(contentHash, prepared.length);
+    prepared.push({ contentHash, payload: toPayload(write.body), size: write.body.byteLength, first: i });
+  }
+
+  if (prepared.length > 0) {
+    const { error } = await db
+      .from("file_contents")
+      .upsert(
+        prepared.map((p) => ({ organization_id: organizationId, content_hash: p.contentHash, payload: p.payload, size: p.size })),
+        { onConflict: "organization_id,content_hash", ignoreDuplicates: true },
+      );
+    if (error) {
+      for (const p of prepared) {
+        results[p.first] = { stored: false, reason: error.message };
+        for (const i of p.dupes ?? []) results[i] = { stored: false, reason: error.message };
+      }
+      return results;
+    }
+  }
+
+  for (const p of prepared) {
+    results[p.first] = { stored: true, contentHash: p.contentHash, size: p.size };
+    for (const i of p.dupes ?? []) results[i] = { stored: true, contentHash: p.contentHash, size: p.size };
+  }
+  return results;
 }
 
 /** One row of file_contents, as the client sees it. */

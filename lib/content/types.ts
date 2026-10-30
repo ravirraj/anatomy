@@ -7,6 +7,18 @@ import type { Database } from "../supabase/database.types.ts";
 
 export type Db = SupabaseClient<Database>;
 
+/** One body offered for storage. Nothing else about it is trusted. */
+export type ContentWrite = { body: Uint8Array };
+
+/**
+ * What became of one body offered to the batched write, in the order the
+ * writes were given. A whole request's failure marks its writes failed with
+ * the database's own reason: requests are not transactions.
+ */
+export type ContentWriteResult =
+  | { stored: true; contentHash: string; size: number }
+  | { stored: false; reason: string };
+
 /** A fact about stored bytes: which organization holds them, what their identity is, how long they are. */
 export type ContentReference = {
   organizationId: string;
@@ -37,6 +49,12 @@ export interface ContentStore {
    * again is a no-op, never an overwrite, and returns the same identity.
    */
   putContents(organizationId: string, content: Uint8Array): Promise<ContentReference>;
+
+  /**
+   * Store several bodies in one conflict-safe request, hashing them here and
+   * collapsing identical bodies to one row. The caller owns chunking.
+   */
+  putContentsBatch(organizationId: string, writes: readonly ContentWrite[]): Promise<ContentWriteResult[]>;
 
   /**
    * The exact bytes, verified against their hash and size before being
