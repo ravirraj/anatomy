@@ -67,6 +67,18 @@ outcome is classified, with eight unresolved reasons and four excluded reasons.
 reason. The parser asserts on its own arithmetic before returning: `found ==
 parsed + skipped`.
 
+**The fixture corpus.** Small repository fixtures under `fixtures/`, each with
+a pinned `expected.json` — the parser's own serialized output with the
+absolute root masked — and a test, `scripts/test-fixtures.ts`, that runs the
+parser over every fixture and fails on any change to the bytes of its result.
+A deliberate change is re-baselined with `--update <name>`; a fixture is
+excluded from the project's own lint and type-check, since a fixture may hold
+unresolvable imports on purpose. Five fixtures so far: path aliases (with a
+missed alias target), CommonJS `require`, a barrel-file layout, a Next.js App
+Router application with pages, route handlers and roles, and dynamic imports
+(literal and computed). The corpus is the measuring stick for dependency
+extraction accuracy, so that measurement is not yet done.
+
 **The graph engine.** Pure functions over a file list and an edge list, so
 they run in the browser with no request. Folding into at most 24 groups, a
 canvas projection with scrolling panels of at most 14 rows, shortest unique

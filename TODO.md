@@ -171,7 +171,11 @@ map cannot substitute for.
 ### 2.2 Parser accuracy and unresolved imports
 
 - [ ] **[P0] Build a fixture corpus of real repositories**
-  - **Status:** Planned
+  - **Status:** In progress — the runner and the format exist; five of the
+    listed fixture kinds are in place (`fixtures/`, per-fixture `expected.json`,
+    re-baselined with `node scripts/test-fixtures.ts --update <name>`), and
+    five remain: Pages Router, a two-framework monorepo, a `baseUrl` project,
+    `export =`/`import =`, and unlinked workspace packages.
   - **Problem:** The parser has no regression suite. Every change to the
     resolver is a change to a product nobody can test.
   - **Outcome:** A directory of repositories with their expected results,
@@ -183,10 +187,10 @@ map cannot substitute for.
           project with a barrel-file-heavy `index.ts` layout, a project with
           `require()`, a project with dynamic `import()`, a project with a
           `tsconfig` `baseUrl`, and a project with unlinked workspace packages.
-    - [ ] Each fixture has an expected result: files, edges, routes, roles and
+    - [x] Each fixture has an expected result: files, edges, routes, roles and
           the set of unresolved reasons.
-    - [ ] A test runs the parser over every fixture and compares.
-    - [ ] A fixture that changes is a **failing** test, not a diff to review.
+    - [x] A test runs the parser over every fixture and compares.
+    - [x] A fixture that changes is a **failing** test, not a diff to review.
   - **Dependencies:** None. This is the first thing to build.
   - **Effort:** M.
 

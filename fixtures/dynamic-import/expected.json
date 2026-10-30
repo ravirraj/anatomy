@@ -1,0 +1,160 @@
+{
+  "schemaVersion": 5,
+  "root": "<repo>",
+  "projects": [
+    {
+      "path": ".",
+      "adapter": "none"
+    }
+  ],
+  "files": [
+    {
+      "path": "index.ts",
+      "module": ".",
+      "lines": 7,
+      "bytes": 256,
+      "hash": "dc8370b101efeedfb3d325f5c2bc4377e131726332c6db9c7f73ede134bb0d99",
+      "fanIn": 0,
+      "fanOut": 1,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "load"
+      ]
+    },
+    {
+      "path": "lazy.ts",
+      "module": ".",
+      "lines": 3,
+      "bytes": 45,
+      "hash": "2720c6aba720715570e69928dc2fd37569add9885173a638b9ceee63d8f757fe",
+      "fanIn": 1,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "go"
+      ]
+    },
+    {
+      "path": "loose.ts",
+      "module": ".",
+      "lines": 3,
+      "bytes": 47,
+      "hash": "6501f115033afb2b1632c0a235ae5a9c2b79fb2dadbed0c13d4ec6515d418d9b",
+      "fanIn": 0,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "roll"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source": "index.ts",
+      "target": "lazy.ts",
+      "kind": "dynamic-import",
+      "typeOnly": false,
+      "specifier": "./lazy",
+      "line": 3
+    }
+  ],
+  "routes": [],
+  "symbols": [
+    {
+      "name": "load",
+      "kind": "function",
+      "line": 2,
+      "exported": true,
+      "file": "index.ts"
+    },
+    {
+      "name": "go",
+      "kind": "function",
+      "line": 1,
+      "exported": true,
+      "file": "lazy.ts"
+    },
+    {
+      "name": "roll",
+      "kind": "function",
+      "line": 1,
+      "exported": true,
+      "file": "loose.ts"
+    }
+  ],
+  "coverage": {
+    "files": {
+      "found": 3,
+      "parsed": 3,
+      "skipped": 0,
+      "skippedFiles": [],
+      "excludedDirectories": []
+    },
+    "imports": {
+      "total": {
+        "seen": 2,
+        "internal": 1,
+        "external": 0,
+        "excluded": 0,
+        "unresolved": 1
+      },
+      "byKind": {
+        "import": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "re-export": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "dynamic-import": {
+          "seen": 2,
+          "internal": 1,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 1
+        },
+        "require": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        }
+      },
+      "external": {
+        "package": 0,
+        "builtin": 0,
+        "outside-root": 0
+      },
+      "excluded": {},
+      "unresolvedByReason": {
+        "non-literal-dynamic-import": 1
+      },
+      "unresolved": [
+        {
+          "from": "index.ts",
+          "specifier": "name",
+          "kind": "dynamic-import",
+          "line": 5,
+          "reason": "non-literal-dynamic-import",
+          "detail": "the path is computed at runtime"
+        }
+      ]
+    },
+    "routes": {
+      "omitted": [],
+      "withheld": []
+    }
+  },
+  "configs": []
+}
