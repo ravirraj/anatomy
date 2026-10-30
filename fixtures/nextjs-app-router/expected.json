@@ -12,10 +12,10 @@
       "path": "app/api/users/[id]/route.ts",
       "module": "app/api/users/[id]",
       "lines": 9,
-      "bytes": 277,
-      "hash": "dda768c76484da9304ff5ff6e8797539a096fbd405230b715a8d22f4529ae104",
+      "bytes": 280,
+      "hash": "49c632767f35fd7118094a4a76d009405e71c96887dfdf128f064467cf7fc057",
       "fanIn": 0,
-      "fanOut": 0,
+      "fanOut": 1,
       "reachedBy": "Next.js route handler",
       "role": "api-endpoint",
       "exports": [
@@ -71,7 +71,7 @@
       "lines": 11,
       "bytes": 204,
       "hash": "1fef5c628f8c423088b82f30e943eace640e3461555991cc64074d45629f8222",
-      "fanIn": 2,
+      "fanIn": 3,
       "fanOut": 1,
       "reachedBy": null,
       "role": null,
@@ -82,6 +82,14 @@
     }
   ],
   "edges": [
+    {
+      "source": "app/api/users/[id]/route.ts",
+      "target": "lib/store.ts",
+      "kind": "import",
+      "typeOnly": false,
+      "specifier": "../../../../lib/store",
+      "line": 1
+    },
     {
       "source": "app/api/users/route.ts",
       "target": "lib/store.ts",
@@ -196,18 +204,18 @@
     "imports": {
       "total": {
         "seen": 4,
-        "internal": 3,
+        "internal": 4,
         "external": 0,
         "excluded": 0,
-        "unresolved": 1
+        "unresolved": 0
       },
       "byKind": {
         "import": {
           "seen": 4,
-          "internal": 3,
+          "internal": 4,
           "external": 0,
           "excluded": 0,
-          "unresolved": 1
+          "unresolved": 0
         },
         "re-export": {
           "seen": 0,
@@ -237,19 +245,8 @@
         "outside-root": 0
       },
       "excluded": {},
-      "unresolvedByReason": {
-        "file-not-found": 1
-      },
-      "unresolved": [
-        {
-          "from": "app/api/users/[id]/route.ts",
-          "specifier": "../../../lib/store",
-          "kind": "import",
-          "line": 1,
-          "reason": "file-not-found",
-          "detail": "nothing at app/lib/store with any extension or index"
-        }
-      ]
+      "unresolvedByReason": {},
+      "unresolved": []
     },
     "routes": {
       "omitted": [],

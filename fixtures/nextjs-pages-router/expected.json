@@ -1,0 +1,205 @@
+{
+  "schemaVersion": 5,
+  "root": "<repo>",
+  "projects": [
+    {
+      "path": ".",
+      "adapter": "Next.js"
+    }
+  ],
+  "files": [
+    {
+      "path": "components/frame.tsx",
+      "module": "components",
+      "lines": 8,
+      "bytes": 191,
+      "hash": "55a791ffcc009a6458bc3945b92ea2b8b57c5b61ab9a45cbdf5b4b5d4afc475c",
+      "fanIn": 2,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": "component",
+      "exports": [
+        "default"
+      ]
+    },
+    {
+      "path": "pages/_app.tsx",
+      "module": "pages",
+      "lines": 5,
+      "bytes": 150,
+      "hash": "fb40dfd82f5c5728b0a56115ed23155d138b62758919e9f0860e72dec6ba88cf",
+      "fanIn": 0,
+      "fanOut": 0,
+      "reachedBy": "Next.js custom App",
+      "role": "layout",
+      "exports": [
+        "default"
+      ]
+    },
+    {
+      "path": "pages/api/status.ts",
+      "module": "pages/api",
+      "lines": 5,
+      "bytes": 275,
+      "hash": "82739b836b1bd30770bce77f6852ea132f35bdcb9ba5e908da136be75c5be4ec",
+      "fanIn": 0,
+      "fanOut": 0,
+      "reachedBy": "Next.js API route",
+      "role": "api-endpoint",
+      "exports": [
+        "default"
+      ]
+    },
+    {
+      "path": "pages/index.tsx",
+      "module": "pages",
+      "lines": 5,
+      "bytes": 121,
+      "hash": "f49d6d4d95b6c19be3e9aed529305ac37800179207c5cb924d35ec364828a740",
+      "fanIn": 0,
+      "fanOut": 1,
+      "reachedBy": "Next.js page",
+      "role": "page-route",
+      "exports": [
+        "default"
+      ]
+    },
+    {
+      "path": "pages/posts/[id].tsx",
+      "module": "pages/posts",
+      "lines": 5,
+      "bytes": 150,
+      "hash": "0668070276714da4eca2c37c9d9e46679af39d1f5b03bbe25bf19951927124e1",
+      "fanIn": 0,
+      "fanOut": 1,
+      "reachedBy": "Next.js page",
+      "role": "page-route",
+      "exports": [
+        "default"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source": "pages/index.tsx",
+      "target": "components/frame.tsx",
+      "kind": "import",
+      "typeOnly": false,
+      "specifier": "../components/frame",
+      "line": 1
+    },
+    {
+      "source": "pages/posts/[id].tsx",
+      "target": "components/frame.tsx",
+      "kind": "import",
+      "typeOnly": false,
+      "specifier": "../../components/frame",
+      "line": 1
+    }
+  ],
+  "routes": [],
+  "symbols": [
+    {
+      "name": "default",
+      "kind": "function",
+      "line": 1,
+      "exported": true,
+      "file": "components/frame.tsx"
+    },
+    {
+      "name": "default",
+      "kind": "function",
+      "line": 3,
+      "exported": true,
+      "file": "pages/_app.tsx"
+    },
+    {
+      "name": "default",
+      "kind": "function",
+      "line": 3,
+      "exported": true,
+      "file": "pages/api/status.ts"
+    },
+    {
+      "name": "default",
+      "kind": "function",
+      "line": 3,
+      "exported": true,
+      "file": "pages/index.tsx"
+    },
+    {
+      "name": "default",
+      "kind": "function",
+      "line": 3,
+      "exported": true,
+      "file": "pages/posts/[id].tsx"
+    }
+  ],
+  "coverage": {
+    "files": {
+      "found": 5,
+      "parsed": 5,
+      "skipped": 0,
+      "skippedFiles": [],
+      "excludedDirectories": []
+    },
+    "imports": {
+      "total": {
+        "seen": 3,
+        "internal": 2,
+        "external": 1,
+        "excluded": 0,
+        "unresolved": 0
+      },
+      "byKind": {
+        "import": {
+          "seen": 3,
+          "internal": 2,
+          "external": 1,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "re-export": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "dynamic-import": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "require": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        }
+      },
+      "external": {
+        "package": 1,
+        "builtin": 0,
+        "outside-root": 0
+      },
+      "excluded": {},
+      "unresolvedByReason": {},
+      "unresolved": []
+    },
+    "routes": {
+      "omitted": [
+        {
+          "file": "pages/api/status.ts",
+          "line": 1,
+          "reason": "a pages/api handler chooses its method at runtime"
+        }
+      ],
+      "withheld": []
+    }
+  },
+  "configs": []
+}

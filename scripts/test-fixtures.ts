@@ -9,37 +9,10 @@
 // absolute root replaced by "<repo>", so it is stable across machines and
 // round-trips through the contract validator.
 
-import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { deserializeParseResult, serializeParseResult } from "../lib/parser/contract.ts";
 import { parseRepository } from "../lib/parser/index.ts";
-
-const FIXTURES = path.resolve(import.meta.dirname, "..", "fixtures");
-const ROOT_PLACEHOLDER = "<repo>";
-
-function baseline(result: ReturnType<typeof parseRepository>): string {
-  const text = serializeParseResult(result);
-  // Only the root is machine-specific; it is the absolute path parsed from.
-  return text.replace(new RegExp(JSON.stringify(result.root).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), JSON.stringify(ROOT_PLACEHOLDER));
-}
-
-function fromBaseline(text: string): { result: ReturnType<typeof parseRepository> | null; error: unknown } {
-  try {
-    const expanded = text.replace(JSON.stringify(ROOT_PLACEHOLDER), JSON.stringify(FIXTURES));
-    return { result: deserializeParseResult(expanded), error: null };
-  } catch (error) {
-    return { result: null, error };
-  }
-}
-
-function firstDifference(before: string, after: string): number {
-  const a = before.split("\n");
-  const b = after.split("\n");
-  for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
-    if (a[i] !== b[i]) return i;
-  }
-  return -1;
-}
+import { baseline, expandBaseline, FIXTURES, readBaseline } from "./test-fixtures-shared.ts";
 
 const ok: string[] = [];
 const failed: string[] = [];
@@ -52,13 +25,15 @@ for (const name of readdirSync(FIXTURES, { withFileTypes: true }).filter((e) => 
   if (!updateNames || (updateNames.size && !updateNames.has(name))) {
     let text: string;
     try {
-      text = readFileSync(expectedPath, "utf8");
+      text = readBaseline(expectedPath);
     } catch {
       failed.push(`${name}: no expected.json (run: node scripts/test-fixtures.ts --update ${name})`);
       continue;
     }
-    const { result, error } = fromBaseline(text);
-    if (!result) {
+    let result;
+    try {
+      result = expandBaseline(text);
+    } catch (error) {
       failed.push(`${name}: expected.json does not pass the contract validator: ${String(error)}`);
       continue;
     }
@@ -69,8 +44,8 @@ for (const name of readdirSync(FIXTURES, { withFileTypes: true }).filter((e) => 
     }
     const a = text.split("\n");
     const b = actual.split("\n");
-    let i = firstDifference(text, actual);
-    if (i === -1) i = Math.min(a.length, b.length);
+    let i = 0;
+    while (i < Math.max(a.length, b.length) && a[i] === b[i]) i += 1;
     const context = 2;
     let shown = `${name}: result differs from expected.json, first at line ${i + 1}\n`;
     for (let d = Math.max(0, i - context); d <= Math.min(Math.max(a.length, b.length) - 1, i + context); d += 1) {
@@ -84,12 +59,13 @@ for (const name of readdirSync(FIXTURES, { withFileTypes: true }).filter((e) => 
   } else {
     const actual = baseline(parseRepository(repo));
     writeFileSync(expectedPath, actual);
-    const { error } = fromBaseline(actual);
-    if (error) {
+    try {
+      expandBaseline(actual);
+    } catch (error) {
       failed.push(`${name}: written baseline does not round-trip: ${String(error)}`);
-    } else {
-      ok.push(`${name}: baseline written and it round-trips`);
+      continue;
     }
+    ok.push(`${name}: baseline written and it round-trips`);
   }
 }
 

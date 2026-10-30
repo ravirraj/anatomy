@@ -73,11 +73,22 @@ absolute root masked — and a test, `scripts/test-fixtures.ts`, that runs the
 parser over every fixture and fails on any change to the bytes of its result.
 A deliberate change is re-baselined with `--update <name>`; a fixture is
 excluded from the project's own lint and type-check, since a fixture may hold
-unresolvable imports on purpose. Five fixtures so far: path aliases (with a
-missed alias target), CommonJS `require`, a barrel-file layout, a Next.js App
-Router application with pages, route handlers and roles, and dynamic imports
-(literal and computed). The corpus is the measuring stick for dependency
-extraction accuracy, so that measurement is not yet done.
+unresolvable imports on purpose. Ten fixtures, one per kind the task list
+names: Next.js App Router, Next.js Pages Router, a two-framework monorepo,
+CommonJS `require`, path aliases (with a missed alias target), a barrel-file
+layout, dynamic imports (literal and computed), `baseUrl` resolution (with a
+resolved path, a broken local path and an external package distinguished),
+`export =`/`import =` interoperability, and unlinked workspace packages.
+
+**Accuracy evaluation.** `pnpm accuracy`, separate from the comparison:
+[fixtures/accuracy.json](fixtures/accuracy.json) records the internal
+dependency relationships each fixture truly holds, verified by hand from its
+own sources, and the evaluation reports per-fixture and aggregate TP, FP, FN,
+precision, recall and F1 over `(source, target)` pairs, deduplicated and of
+any edge kind. The observed baseline of the completed corpus: TP 20, FP 0,
+FN 0, precision 1, recall 1, F1 1 — every hand-verified relationship found,
+none invented, none missed. The floor below which a change is a regression is
+the named constant `MINIMUM_F1` in [scripts/accuracy-fixtures.ts](scripts/accuracy-fixtures.ts).
 
 **The graph engine.** Pure functions over a file list and an edge list, so
 they run in the browser with no request. Folding into at most 24 groups, a

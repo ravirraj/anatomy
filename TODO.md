@@ -63,7 +63,7 @@ fixture corpus for the parser.
 | AI explanations | Working for a file or a folder. |
 | Multi-tenancy | Working, verified against the live database. |
 | Progress reporting | Working over a private realtime channel. |
-| Testing | Two suites, 24 checks, no test framework. |
+| Testing | Fixture regression suite over the parser — ten repositories, byte-compared against pinned results, and an accuracy evaluation against hand-verified ground truth — alongside the two suites of 24 checks. |
 | Documentation | This set. |
 | Deployment | None. No public instance, no recorded demo. |
 | Licensing | None. |
@@ -170,18 +170,17 @@ map cannot substitute for.
 
 ### 2.2 Parser accuracy and unresolved imports
 
-- [ ] **[P0] Build a fixture corpus of real repositories**
-  - **Status:** In progress — the runner and the format exist; five of the
-    listed fixture kinds are in place (`fixtures/`, per-fixture `expected.json`,
-    re-baselined with `node scripts/test-fixtures.ts --update <name>`), and
-    five remain: Pages Router, a two-framework monorepo, a `baseUrl` project,
-    `export =`/`import =`, and unlinked workspace packages.
+- [x] **[P0] Build a fixture corpus of real repositories**
+  - **Status:** Done — ten fixtures, one per kind the criteria name, in
+    `fixtures/`, each with its expected result and hand-verified ground truth;
+    the runner is `node scripts/test-fixtures.ts`, re-baselined with
+    `--update <name>`; documented in [fixtures/README.md](fixtures/README.md).
   - **Problem:** The parser has no regression suite. Every change to the
     resolver is a change to a product nobody can test.
   - **Outcome:** A directory of repositories with their expected results,
     checked on every build.
   - **Acceptance criteria:**
-    - [ ] At least ten fixture repositories, spanning at least: a Next.js App
+    - [x] At least ten fixture repositories, spanning at least: a Next.js App
           Router app, a Next.js Pages Router app, a monorepo with two
           frameworks, a CommonJS project, a project with path aliases, a
           project with a barrel-file-heavy `index.ts` layout, a project with
@@ -192,18 +191,24 @@ map cannot substitute for.
     - [x] A test runs the parser over every fixture and compares.
     - [x] A fixture that changes is a **failing** test, not a diff to review.
   - **Dependencies:** None. This is the first thing to build.
-  - **Effort:** M.
+  - **Effort:** Done.
 
-- [ ] **[P0] Measure dependency-extraction accuracy**
-  - **Status:** Planned
+- [x] **[P0] Measure dependency-extraction accuracy**
+  - **Status:** Done — `pnpm accuracy` criterion, against the hand-verified
+    ground truth in [fixtures/accuracy.json](fixtures/accuracy.json). Every
+    internal dependency relationship in the ten fixtures was found (TP 20,
+    FP 0, FN 0), so precision, recall and F1 are all 1 as the observed
+    baseline; the floor below which a change is a regression is the constant
+    `MINIMUM_F1` in [scripts/accuracy-fixtures.ts](scripts/accuracy-fixtures.ts),
+    set to that baseline, and a change below it fails the run.
   - **Problem:** "The parser is accurate" is not a number.
   - **Outcome:** A published measurement with a stated method.
   - **Acceptance criteria:**
-    - [ ] For each fixture, a hand-counted ground truth of its internal edges.
-    - [ ] Precision and recall reported, with the method stated.
-    - [ ] A stated threshold below which a change is a regression.
+    - [x] For each fixture, a hand-counted ground truth of its internal edges.
+    - [x] Precision and recall reported, with the method stated.
+    - [x] A stated threshold below which a change is a regression.
   - **Dependencies:** The fixture corpus.
-  - **Effort:** M.
+  - **Effort:** Done.
 
 - [ ] **State the supported-language boundary in the UI, not only in the docs**
   - **Status:** Planned
