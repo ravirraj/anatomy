@@ -5,6 +5,7 @@
 import { ContentCache } from "../lib/content/cache.ts";
 import { getFileContent, type BackfillDeps } from "../lib/content/read.ts";
 import { sha256 } from "../lib/content/store.ts";
+import type { Db } from "../lib/content/types.ts";
 
 const results: string[] = [];
 const pass = (m: string) => results.push(`ok    ${m}`);
@@ -102,7 +103,7 @@ fake.contents.set(`org_alpha:${sampleHash}`, {
 const deps: BackfillDeps = { cache };
 
 // First read: reads from DB and populates cache
-const read1 = await getFileContent(fake as any, "f1", deps);
+const read1 = await getFileContent(fake as unknown as Db, "f1", deps);
 if (read1 === sampleText) {
   pass("first read returns exact source content");
 } else {
@@ -115,7 +116,7 @@ if (fake.dbFetches === 1) {
 }
 
 // Second read: served from cache without DB access
-const read2 = await getFileContent(fake as any, "f1", deps);
+const read2 = await getFileContent(fake as unknown as Db, "f1", deps);
 if (read2 === sampleText) {
   pass("second read returns exact same source");
 } else {
@@ -144,9 +145,9 @@ fake.files.set("f2_beta", {
 // org_beta has no row in file_contents table for this org, and cache shouldn't share it
 let consistencyCaught = false;
 try {
-  await getFileContent(fake as any, "f2_beta", deps);
-} catch (err: any) {
-  if (err.name === "ConsistencyError") {
+  await getFileContent(fake as unknown as Db, "f2_beta", deps);
+} catch (err: unknown) {
+  if (err instanceof Error && err.name === "ConsistencyError") {
     consistencyCaught = true;
   }
 }
@@ -157,7 +158,7 @@ if (consistencyCaught) {
 }
 
 // 3. Missing file returns null
-const missing = await getFileContent(fake as any, "nonexistent", deps);
+const missing = await getFileContent(fake as unknown as Db, "nonexistent", deps);
 if (missing === null) {
   pass("nonexistent file id returns null gracefully");
 } else {
