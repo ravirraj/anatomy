@@ -1,11 +1,11 @@
 # Source-file content storage — feasibility and architecture
 
-Status: **Design, not implemented.** This document was written before any
-storage code exists. It records what was verified in the code as of
-`SCHEMA_VERSION = 5`, defines the requirements, compares the alternatives, and
-settles the design that [ADR-0001](decisions/0001-source-content-storage.md)
-records as the decision. [TODO.md](../../TODO.md) §3.4 carries the
-implementation tasks.
+Status: **Designed, and the storage foundations are implemented — see §14.**
+This document was written before any storage code existed. It records what
+was verified in the code as of `SCHEMA_VERSION = 5`, defines the
+requirements, compares the alternatives, and settles the design that
+[ADR-0001](decisions/0001-source-content-storage.md) records as the decision.
+[TODO.md](../../TODO.md) §3.4 carries the implementation tasks.
 
 The problem in one line: **Cartograph analyses a repository and throws the
 contents away.** Everything downstream — explanations of code, future Q&A,
@@ -657,3 +657,145 @@ line-precise content with staleness *detectable*, not silent.
 [ADR-0001](decisions/0001-source-content-storage.md) records this decision.
 [TODO.md §3.4](../../TODO.md) lists the implementation tasks with priorities,
 effort, dependencies and acceptance criteria.
+
+---
+
+## 14. What is implemented so far (October 2026)
+
+The database foundations and the storage module exist; everything built on
+them — the pipeline's write, the read side, backfill, cache, GC, benchmarks,
+hash-bound citations — does not yet, exactly as §3.4's remaining tasks
+describe.
+
+### 14.1 Migrations
+
+- `20261030040722_file_contents.sql` — the table, its checks, the immutability
+  trigger, the grants and read policy, `files.content_status`, and the
+  reverse-lookup index on `files (organization_id, hash)`.
+- `20261030041425_file_contents_organization_scope.sql` — the foreign key the
+  first migration should have had:
+
+  ```sql
+  foreign key (organization_id) references public.organizations (id) on delete cascade
+  ```
+
+  which keeps content scoped to and cleaned up with its organization in SQL,
+  as every other table is. Both are applied to
+  the linked project; existing `files` rows default to `content_status =
+  'absent'` and nothing else changed on them.
+
+The schema as implemented:
+
+| Column | Type |
+|---|---|
+| `organization_id` | `text not null`, FK to organizations, cascade |
+| `content_hash` | `text not null`, check `^[0-9a-f]{64}$` |
+| `payload` | `bytea not null` |
+| `size` | `bigint not null`, check `size >= 0 and size <= 1048576` |
+| `created_at` | `timestamptz not null default now()` |
+
+Primary key `(organization_id, content_hash)` — dedup is a primary-key
+guarantee, and isolation is a row-policy guarantee.
+
+### 14.2 Deviations from this document and ADR-0001
+
+- **`organization_id` is `text`, not `uuid`** — the Organizations table is
+  Clerk ids, and every other table keys them as text. The ADR's uuid came
+  from the original proposal; the convention here won.
+- **`putContents` is not chunked** — this document's §8 sketches
+  `putContents(organizationId, readonly ContentPut[])` for the pipeline's
+  store phase. The implemented primitive is one body per call
+  (`putContents(db, organizationId, content)`); the chunked, many-files-per-
+  call shape belongs to the pipeline-writer task that has a chunking
+  discipline to fit it into (the `files` insert already chunks).
+- **`deleteOrphaned` is a contract, not a function** — its signature and
+  conditions are written into `lib/content/types.ts` and nothing calls it;
+  the migration's trigger blocks *updates only*, so a future GC can delete
+  without dropping the trigger. Documented as such in both files.
+- **Immutability is a trigger** — `UPDATE` is refused in the schema
+  (`preserve_file_contents`), not just by the application's upsert
+  discipline, as §5.2 argues it must be.
+
+### 14.3 The module
+
+```text
+lib/content/types.ts   ContentReference, ContentKey, IntegrityError, ContentStore, Db + the GC contract
+lib/content/store.ts   putContents, getContent, existsContent
+                       + MAX_CONTENT_BYTES (= MAX_FILE_BYTES from lib/parser/walk.ts), sha256, isContentHash
+```
+
+- **Write:** hash is computed from the exact bytes, never accepted from the
+  caller; the row goes in via `upsert { ignoreDuplicates: true }`, so an
+  existing body is never touched and a re-run of an unchanged file writes
+  nothing. Anything over the parser's own 1 MB limit is refused here too —
+  storage holds only what the parser parsed. Database errors surface as
+  errors, never as silent success.
+- **Read:** `null` when absent; otherwise the bytes are verified twice
+  before being handed over — `sha256(bytes) === content_hash` and
+  `bytes.byteLength === size` — and a mismatch throws `IntegrityError`
+  rather than serving altered content as if it were the file. The class
+  exists so callers can tell "not here" from "here but broken".
+- **`existsContent`** selects `size`, never the payload.
+- **bytea over the wire:** PostgREST carries bytea as a `\x…` hex literal;
+  the store converts explicitly in both directions (`toPayload` /
+  `fromPayload`). That is the transport's shape, not a storage decision —
+  Postgres holds raw bytes and compression on them (§10's estimates) is
+  unaffected.
+- **Isolation is the database's, not the module's:** the write path works
+  through the same admin client as every other pipeline writer
+  (`lib/supabase/admin.ts`, service role, which bypasses row policies), and
+  the read path filters by `organization_id` the way every other reader
+  does. The module comments say plainly: that filter is a query convention,
+  not the security boundary.
+
+### 14.4 Row-level security, as applied
+
+```sql
+revoke all on public.file_contents from anon, authenticated;
+grant select on public.file_contents to authenticated;
+create policy "members read their organization's rows" on public.file_contents
+  for select to authenticated
+  using (organization_id = (select coalesce(auth.jwt() -> 'o' ->> 'id', auth.jwt() ->> 'org_id')));
+```
+
+Identical wording to what every other table uses. Writes have no grant and
+no policy for members at all; the pipeline's writer uses the service role.
+
+### 14.5 Tests and what they prove
+
+- **`node scripts/test-content-store.ts`** (in `pnpm test`) — the store's
+  own logic against a fake of the three calls it makes: identity from exact
+  bytes, byte-for-byte round trip including non-UTF-8 bytes, empty bodies,
+  dedup stays one row, organizations keep separate rows, absent reads,
+  malformed-identity refusal, corrupted payload and wrong size both refuse,
+  first-write-wins under a planted identity, oversized refuse, database
+  failures surface. **It proves the module's contract, nothing more; its own
+  header says so.**
+- **`node --env-file=.env.local scripts/test-content-rls.ts`** — tenant
+  isolation against the real database, which no fake can prove. One
+  transaction seeds two throwaway organizations and one byte of content
+  each, then exercises every access path as a member role whose
+  `request.jwt.claims` match PostgREST's presentation, and as the writer.
+  Ten checks, all passing on the linked project: a member sees only their
+  organization's rows and reads a foreign hash as absent; every form of
+  member write (insert, update, delete) is refused; the schema refuses a
+  rewrite as postgres too; removal stays possible for a future GC; content
+  cannot exist for an organization that is not there; deleting an
+  organization deletes its content. The transaction never commits, and the
+  driver verifies the database came out with zero content rows and zero
+  test organizations. Deliberately **not** part of `pnpm test`, which must
+  run without a connected database.
+- `lib/supabase/database.types.ts` was regenerated from the live schema
+  after the migrations, per its own header instruction.
+
+### 14.6 Failure handling summary
+
+| Situation | Behaviour |
+|---|---|
+| Write fails in the database | Error with the message; state unchanged |
+| Content over 1 MB | Refused before any request |
+| Malformed hash on read/exists | `IntegrityError` before any request |
+| Read misses | `null` |
+| Payload does not hash to its identity | `IntegrityError`, never partial content |
+| Size agrees differently | `IntegrityError` |
+| Member writes by any path | Refused by grants/policy (and by nothing granted to change) |

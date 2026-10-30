@@ -131,17 +131,17 @@ designed in [docs/architecture/file-content-storage.md](docs/architecture/file-c
 
 ### 2.1 Build, lint, type-check and test reliability
 
-- [ ] **Add a `typecheck` script** that runs `tsc --noEmit` after a build has
+- [x] **Add a `typecheck` script** that runs `tsc --noEmit` after a build has
       generated the route types
-  - **Status:** Planned
+  - **Status:** Done
   - **Problem:** `npx tsc --noEmit` fails on `PageProps` and `LayoutProps`,
     which Next.js generates into `.next/types`. There is no way to type-check
     without building first, and the failure looks like a real error.
-  - **Outcome:** `pnpm typecheck` is a single command that works.
+  - **Outcome:** `pnpm typecheck` is a single command that works: `next typegen && tsc --noEmit`.
   - **Acceptance criteria:**
-    - [ ] The script runs `next build` (or `next typegen`) before `tsc`.
-    - [ ] It exits non-zero on a type error.
-    - [ ] It is documented in [docs/development.md](docs/development.md).
+    - [x] The script runs `next build` (or `next typegen`) before `tsc`.
+    - [x] It exits non-zero on a type error.
+    - [x] It is documented in [docs/development.md](docs/development.md).
   - **Dependencies:** None.
   - **Effort:** S.
 
@@ -608,15 +608,15 @@ designed in [docs/architecture/file-content-storage.md](docs/architecture/file-c
 
 ### 3.4 [P0] Source-content storage
 
-Everything is designed in [docs/architecture/file-content-storage.md](docs/architecture/file-content-storage.md) and decided in [docs/architecture/decisions/0001-source-content-storage.md](docs/architecture/decisions/0001-source-content-storage.md). Nothing here is implemented.
+Everything is designed in [docs/architecture/file-content-storage.md](docs/architecture/file-content-storage.md) and decided in [docs/architecture/decisions/0001-source-content-storage.md](docs/architecture/decisions/0001-source-content-storage.md). [TODO.md](TODO.md) The database foundations and the storage module are implemented (migration `20261030040722` + `20261030041425`, `lib/content`, both tested — module logic by a fake-client suite, tenant isolation against the live project by `scripts/test-content-rls.ts`); the pipeline, read side, cache, GC, benchmarks and hash-bound citations are still to come.
 
 - [ ] **[P0] The `file_contents` table and the content store**
-  - **Status:** Planned
+  - **Status:** Partially done - the migration and the store are in; what remains is pipeline-shaped, not storage-shaped.
   - **Problem:** The database holds a file's hash and never its contents, so nothing downstream can read code, and the answer path borrows source from GitHub.
   - **Outcome:** Content-addressed, immutable, deduplicated storage inside Supabase, behind a module boundary.
   - **Acceptance criteria:**
-    - [ ] A migration adds `file_contents (organization_id, content_hash, payload bytea, size, created_at)`, PK-ied by org+hash, RLS'd, and `files.content_status` (`absent` | `stored`).
-    - [ ] `lib/content` implements `putContents` (chunked, idempotent `ON CONFLICT DO NOTHING`), `getContent`, `existsContent`, `deleteOrphaned`; members have no write grant.
+    - [x] A migration adds `file_contents (organization_id, content_hash, payload bytea, size, created_at)`, PK-ied by org+hash, RLS'd, and `files.content_status` (`absent` | `stored`).
+    - [x] `lib/content` implements `putContents` (idempotent upsert, `ignoreDuplicates` — the first write of a body wins), `getContent`, `existsContent`; members have no write grant. `deleteOrphaned` is documented as a future contract in `lib/content/types.ts`, and belongs to the GC task below; a chunked multi-content write belongs to the pipeline task that has a store-phase writer to call it.
     - [ ] The payload of every file in `ParseResult.files` is stored; nothing the parser skipped (declaration, binary, too-large, unreadable, syntax-error) ever is.
     - [ ] The module boundary is spec'd so an object-storage backend can be swapped in — the ADR names it as the deferred decision it is.
   - **Dependencies:** None. This is the first thing to build.
