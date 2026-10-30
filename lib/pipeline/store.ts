@@ -72,32 +72,35 @@ export async function storeResult(db: Db, analysis: { id: string; organizationId
   // content absent — never silently pretending.
   const { storedHashes, stats } = await storeFileContents(db, analysis, result, contents);
 
-  const rows: Database["public"]["Tables"]["files"]["Insert"][] = [
-    ...result.files.map((f) => ({
-      organization_id: analysis.organizationId,
-      analysis_id: analysis.id,
-      path: f.path,
-      module: f.module,
-      lines: f.lines,
-      bytes: f.bytes,
-      hash: f.hash,
-      fan_in: f.fanIn,
-      fan_out: f.fanOut,
-      reached_by: f.reachedBy,
-      exports: f.exports,
-      content_status: storedHashes.has(f.hash) ? "stored" : "absent",
-    })),
-    ...result.coverage.files.skippedFiles.map((f) => ({
-      organization_id: analysis.organizationId,
-      analysis_id: analysis.id,
-      path: f.path,
-      skip_reason: f.reason,
-      skip_detail: f.detail,
-    })),
-  ];
-  for (let i = 0; i < rows.length; i += FILE_CHUNK) {
-    const { error } = await db.from("files").insert(rows.slice(i, i + FILE_CHUNK));
+  const parsedRows: Database["public"]["Tables"]["files"]["Insert"][] = result.files.map((f) => ({
+    organization_id: analysis.organizationId,
+    analysis_id: analysis.id,
+    path: f.path,
+    module: f.module,
+    lines: f.lines,
+    bytes: f.bytes,
+    hash: f.hash,
+    fan_in: f.fanIn,
+    fan_out: f.fanOut,
+    reached_by: f.reachedBy,
+    exports: f.exports,
+    content_status: storedHashes.has(f.hash) ? "stored" : "absent",
+  }));
+  for (let i = 0; i < parsedRows.length; i += FILE_CHUNK) {
+    const { error } = await db.from("files").insert(parsedRows.slice(i, i + FILE_CHUNK));
     if (error) throw new Error(`Storing files failed: ${error.message}`);
+  }
+
+  const skippedRows: Database["public"]["Tables"]["files"]["Insert"][] = result.coverage.files.skippedFiles.map((f) => ({
+    organization_id: analysis.organizationId,
+    analysis_id: analysis.id,
+    path: f.path,
+    skip_reason: f.reason,
+    skip_detail: f.detail,
+  }));
+  for (let i = 0; i < skippedRows.length; i += FILE_CHUNK) {
+    const { error } = await db.from("files").insert(skippedRows.slice(i, i + FILE_CHUNK));
+    if (error) throw new Error(`Storing skipped files failed: ${error.message}`);
   }
 
   // Ends are matched to stored files by path in the database, which refuses
