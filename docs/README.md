@@ -9,6 +9,8 @@ Everything written about Anatomy. Start at the top.
 | [features.md](features.md) | The feature catalogue: implemented, needs validation, partial, planned, not supported | You want to know whether a feature exists |
 | [development.md](development.md) | Reproducible setup, every command, troubleshooting, how to extend each subsystem | You are setting up or hacking on it |
 | [ai-system.md](ai-system.md) | The AI implementation today, and the design for repository-wide Q&A | You are working on the AI layer |
+| [architecture/file-content-storage.md](architecture/file-content-storage.md) | Why contents are discarded today, the requirements, the alternatives compared, and the design for storing source content | You are touching any part of the content pipeline or the answer path |
+| [architecture/decisions/](architecture/decisions/) | Architecture decision records, one decision each, alternatives and consequences attached | You want to know why a structural choice was made |
 | [security.md](security.md) | Trust boundaries, what is stored, where data goes, known limitations, a verification checklist | You are deploying it or reviewing it |
 | [ROADMAP.md](ROADMAP.md) | The public-facing roadmap | You want to know where it is going |
 | [project-doc.md](project-doc.md) | The product decisions behind the build, with the reasoning attached | You want to know *why* it is like this |

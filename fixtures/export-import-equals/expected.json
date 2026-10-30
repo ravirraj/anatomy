@@ -1,0 +1,180 @@
+{
+  "schemaVersion": 5,
+  "root": "<repo>",
+  "projects": [
+    {
+      "path": ".",
+      "adapter": "none"
+    }
+  ],
+  "files": [
+    {
+      "path": "app/main.ts",
+      "module": "app",
+      "lines": 8,
+      "bytes": 345,
+      "hash": "7a6466b49fdccd2897773d3d93d69c1e5838f502c3abea9365edf6a46c152b93",
+      "fanIn": 0,
+      "fanOut": 2,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "address"
+      ]
+    },
+    {
+      "path": "lib/bridge.js",
+      "module": "lib",
+      "lines": 7,
+      "bytes": 222,
+      "hash": "828fa685c294fdfcb19d0ba693ae1e36a32d0d40bc275cda4cea33d5977f571d",
+      "fanIn": 0,
+      "fanOut": 1,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "url"
+      ]
+    },
+    {
+      "path": "lib/config.ts",
+      "module": "lib",
+      "lines": 6,
+      "bytes": 197,
+      "hash": "251ac0a8bd8c1d1f6d8b0cbc2c58bedfb25740d646d0fa87ff516ac34d9847eb",
+      "fanIn": 2,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "host",
+        "port"
+      ]
+    },
+    {
+      "path": "lib/helper.ts",
+      "module": "lib",
+      "lines": 9,
+      "bytes": 218,
+      "hash": "538d34706f85860f926d0a005241ff40a678d0ffbe0f7e106b60bf5fa9f5a202",
+      "fanIn": 1,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "module.exports"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source": "app/main.ts",
+      "target": "lib/config.ts",
+      "kind": "import",
+      "typeOnly": false,
+      "specifier": "../lib/config",
+      "line": 3
+    },
+    {
+      "source": "app/main.ts",
+      "target": "lib/helper.ts",
+      "kind": "import",
+      "typeOnly": false,
+      "specifier": "../lib/helper",
+      "line": 4
+    },
+    {
+      "source": "lib/bridge.js",
+      "target": "lib/config.ts",
+      "kind": "require",
+      "typeOnly": false,
+      "specifier": "./config",
+      "line": 3
+    }
+  ],
+  "routes": [],
+  "symbols": [
+    {
+      "name": "address",
+      "kind": "function",
+      "line": 6,
+      "exported": true,
+      "file": "app/main.ts"
+    },
+    {
+      "name": "settings",
+      "kind": "const",
+      "line": 3,
+      "exported": false,
+      "file": "lib/bridge.js"
+    },
+    {
+      "name": "Connection",
+      "kind": "class",
+      "line": 3,
+      "exported": false,
+      "file": "lib/helper.ts"
+    }
+  ],
+  "coverage": {
+    "files": {
+      "found": 4,
+      "parsed": 4,
+      "skipped": 0,
+      "skippedFiles": [],
+      "excludedDirectories": []
+    },
+    "imports": {
+      "total": {
+        "seen": 3,
+        "internal": 3,
+        "external": 0,
+        "excluded": 0,
+        "unresolved": 0
+      },
+      "byKind": {
+        "import": {
+          "seen": 2,
+          "internal": 2,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "re-export": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "dynamic-import": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "require": {
+          "seen": 1,
+          "internal": 1,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        }
+      },
+      "external": {
+        "package": 0,
+        "builtin": 0,
+        "outside-root": 0
+      },
+      "excluded": {},
+      "unresolvedByReason": {},
+      "unresolved": []
+    },
+    "routes": {
+      "omitted": [],
+      "withheld": []
+    }
+  },
+  "configs": []
+}

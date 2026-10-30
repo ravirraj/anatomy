@@ -1,0 +1,165 @@
+{
+  "schemaVersion": 5,
+  "root": "<repo>",
+  "projects": [
+    {
+      "path": ".",
+      "adapter": "none"
+    }
+  ],
+  "files": [
+    {
+      "path": "src/app.ts",
+      "module": "src",
+      "lines": 5,
+      "bytes": 136,
+      "hash": "3d98272096f027a590f98dca72daaaacb3d2767fa55f6ebe4d7b617cda7d4241",
+      "fanIn": 0,
+      "fanOut": 1,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "banner"
+      ]
+    },
+    {
+      "path": "src/broken.ts",
+      "module": "src",
+      "lines": 6,
+      "bytes": 156,
+      "hash": "752495570916bdc79293c9ce5de2580ae104c5b4ce53b1f08850e77294a9ff2b",
+      "fanIn": 0,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "use"
+      ]
+    },
+    {
+      "path": "src/util/format.ts",
+      "module": "src/util",
+      "lines": 3,
+      "bytes": 96,
+      "hash": "f4d93512686474bd302609c82b8902b4db0dc3a096ba22d61284bc54d2554db7",
+      "fanIn": 1,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "formatPrice"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source": "src/app.ts",
+      "target": "src/util/format.ts",
+      "kind": "import",
+      "typeOnly": false,
+      "specifier": "@/util/format",
+      "line": 1
+    }
+  ],
+  "routes": [],
+  "symbols": [
+    {
+      "name": "banner",
+      "kind": "function",
+      "line": 3,
+      "exported": true,
+      "file": "src/app.ts"
+    },
+    {
+      "name": "use",
+      "kind": "function",
+      "line": 4,
+      "exported": true,
+      "file": "src/broken.ts"
+    },
+    {
+      "name": "formatPrice",
+      "kind": "function",
+      "line": 1,
+      "exported": true,
+      "file": "src/util/format.ts"
+    }
+  ],
+  "coverage": {
+    "files": {
+      "found": 3,
+      "parsed": 3,
+      "skipped": 0,
+      "skippedFiles": [],
+      "excludedDirectories": []
+    },
+    "imports": {
+      "total": {
+        "seen": 2,
+        "internal": 1,
+        "external": 0,
+        "excluded": 0,
+        "unresolved": 1
+      },
+      "byKind": {
+        "import": {
+          "seen": 2,
+          "internal": 1,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 1
+        },
+        "re-export": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "dynamic-import": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "require": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        }
+      },
+      "external": {
+        "package": 0,
+        "builtin": 0,
+        "outside-root": 0
+      },
+      "excluded": {},
+      "unresolvedByReason": {
+        "alias-target-not-found": 1
+      },
+      "unresolved": [
+        {
+          "from": "src/broken.ts",
+          "specifier": "@/util/missing",
+          "kind": "import",
+          "line": 2,
+          "reason": "alias-target-not-found",
+          "detail": "matched @/*; nothing at src/util/missing"
+        }
+      ]
+    },
+    "routes": {
+      "omitted": [],
+      "withheld": []
+    }
+  },
+  "configs": [
+    {
+      "path": "tsconfig.json",
+      "errors": []
+    }
+  ]
+}

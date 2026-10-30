@@ -1,0 +1,181 @@
+{
+  "schemaVersion": 5,
+  "root": "<repo>",
+  "projects": [
+    {
+      "path": ".",
+      "adapter": "none"
+    }
+  ],
+  "files": [
+    {
+      "path": "packages/calc/double.ts",
+      "module": "packages/calc",
+      "lines": 6,
+      "bytes": 176,
+      "hash": "49fe61385a5d01baa59e643b4fcf10df8b14c914b78ff26e7edbb17021fc65de",
+      "fanIn": 0,
+      "fanOut": 1,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "double"
+      ]
+    },
+    {
+      "path": "packages/calc/main.ts",
+      "module": "packages/calc",
+      "lines": 10,
+      "bytes": 472,
+      "hash": "ff3e28169218715864efdaea7f51124ed5aadb3434c30bb452beb84e4505ef5a",
+      "fanIn": 0,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "sphere"
+      ]
+    },
+    {
+      "path": "packages/calc/shared.ts",
+      "module": "packages/calc",
+      "lines": 3,
+      "bytes": 49,
+      "hash": "754bd1b464aaadfdfc315a99a9ff970e6c5794e943d2785f1cec8664699172fc",
+      "fanIn": 1,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "shared"
+      ]
+    },
+    {
+      "path": "packages/geometry/index.ts",
+      "module": "packages/geometry",
+      "lines": 3,
+      "bytes": 85,
+      "hash": "2e43cb1ae79f61dc7c5b1462bb30521366ef197a07939bec09ca14eeeb4e886a",
+      "fanIn": 0,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "area"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source": "packages/calc/double.ts",
+      "target": "packages/calc/shared.ts",
+      "kind": "import",
+      "typeOnly": false,
+      "specifier": "./shared",
+      "line": 2
+    }
+  ],
+  "routes": [],
+  "symbols": [
+    {
+      "name": "double",
+      "kind": "function",
+      "line": 4,
+      "exported": true,
+      "file": "packages/calc/double.ts"
+    },
+    {
+      "name": "sphere",
+      "kind": "function",
+      "line": 8,
+      "exported": true,
+      "file": "packages/calc/main.ts"
+    },
+    {
+      "name": "shared",
+      "kind": "function",
+      "line": 1,
+      "exported": true,
+      "file": "packages/calc/shared.ts"
+    },
+    {
+      "name": "area",
+      "kind": "function",
+      "line": 1,
+      "exported": true,
+      "file": "packages/geometry/index.ts"
+    }
+  ],
+  "coverage": {
+    "files": {
+      "found": 4,
+      "parsed": 4,
+      "skipped": 0,
+      "skippedFiles": [],
+      "excludedDirectories": []
+    },
+    "imports": {
+      "total": {
+        "seen": 3,
+        "internal": 1,
+        "external": 1,
+        "excluded": 0,
+        "unresolved": 1
+      },
+      "byKind": {
+        "import": {
+          "seen": 3,
+          "internal": 1,
+          "external": 1,
+          "excluded": 0,
+          "unresolved": 1
+        },
+        "re-export": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "dynamic-import": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "require": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        }
+      },
+      "external": {
+        "package": 1,
+        "builtin": 0,
+        "outside-root": 0
+      },
+      "excluded": {},
+      "unresolvedByReason": {
+        "workspace-package-not-linked": 1
+      },
+      "unresolved": [
+        {
+          "from": "packages/calc/main.ts",
+          "specifier": "@unlinked/geometry",
+          "kind": "import",
+          "line": 4,
+          "reason": "workspace-package-not-linked",
+          "detail": "@unlinked/geometry is declared by a package.json in this repository but isn't linked (dependencies not installed)"
+        }
+      ]
+    },
+    "routes": {
+      "omitted": [],
+      "withheld": []
+    }
+  },
+  "configs": []
+}

@@ -1,0 +1,209 @@
+{
+  "schemaVersion": 5,
+  "root": "<repo>",
+  "projects": [
+    {
+      "path": ".",
+      "adapter": "none"
+    }
+  ],
+  "files": [
+    {
+      "path": "src/circle.ts",
+      "module": "src",
+      "lines": 3,
+      "bytes": 85,
+      "hash": "2e43cb1ae79f61dc7c5b1462bb30521366ef197a07939bec09ca14eeeb4e886a",
+      "fanIn": 1,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "area"
+      ]
+    },
+    {
+      "path": "src/index.ts",
+      "module": "src",
+      "lines": 3,
+      "bytes": 108,
+      "hash": "ebde51458bf0e77f04d1f97ed365872ed09eb879f852891c2c5b1d62ffb8f935",
+      "fanIn": 1,
+      "fanOut": 3,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "SQUARE",
+        "three"
+      ]
+    },
+    {
+      "path": "src/main.ts",
+      "module": "src",
+      "lines": 6,
+      "bytes": 170,
+      "hash": "4b08cb816e4b37c0d420ddc44cab5d11912079edf13b83c470447f68301c920a",
+      "fanIn": 0,
+      "fanOut": 1,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "report"
+      ]
+    },
+    {
+      "path": "src/square.ts",
+      "module": "src",
+      "lines": 1,
+      "bytes": 32,
+      "hash": "5fa1b79a8074232c1c5a7e74e34738615ff802a09566b7274e35249330f626f5",
+      "fanIn": 1,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "SQUARE"
+      ]
+    },
+    {
+      "path": "src/triangle.ts",
+      "module": "src",
+      "lines": 3,
+      "bytes": 56,
+      "hash": "54944283e36a4ca335303cd9d1d3fbebf45e5b23dccb976aa6ad92abd501db6b",
+      "fanIn": 1,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "default"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source": "src/index.ts",
+      "target": "src/circle.ts",
+      "kind": "re-export",
+      "typeOnly": false,
+      "specifier": "./circle",
+      "line": 1
+    },
+    {
+      "source": "src/index.ts",
+      "target": "src/square.ts",
+      "kind": "re-export",
+      "typeOnly": false,
+      "specifier": "./square",
+      "line": 2
+    },
+    {
+      "source": "src/index.ts",
+      "target": "src/triangle.ts",
+      "kind": "re-export",
+      "typeOnly": false,
+      "specifier": "./triangle",
+      "line": 3
+    },
+    {
+      "source": "src/main.ts",
+      "target": "src/index.ts",
+      "kind": "import",
+      "typeOnly": false,
+      "specifier": "./index",
+      "line": 2
+    }
+  ],
+  "routes": [],
+  "symbols": [
+    {
+      "name": "area",
+      "kind": "function",
+      "line": 1,
+      "exported": true,
+      "file": "src/circle.ts"
+    },
+    {
+      "name": "report",
+      "kind": "function",
+      "line": 4,
+      "exported": true,
+      "file": "src/main.ts"
+    },
+    {
+      "name": "SQUARE",
+      "kind": "const",
+      "line": 1,
+      "exported": true,
+      "file": "src/square.ts"
+    },
+    {
+      "name": "default",
+      "kind": "function",
+      "line": 1,
+      "exported": true,
+      "file": "src/triangle.ts"
+    }
+  ],
+  "coverage": {
+    "files": {
+      "found": 5,
+      "parsed": 5,
+      "skipped": 0,
+      "skippedFiles": [],
+      "excludedDirectories": []
+    },
+    "imports": {
+      "total": {
+        "seen": 4,
+        "internal": 4,
+        "external": 0,
+        "excluded": 0,
+        "unresolved": 0
+      },
+      "byKind": {
+        "import": {
+          "seen": 1,
+          "internal": 1,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "re-export": {
+          "seen": 3,
+          "internal": 3,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "dynamic-import": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "require": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        }
+      },
+      "external": {
+        "package": 0,
+        "builtin": 0,
+        "outside-root": 0
+      },
+      "excluded": {},
+      "unresolvedByReason": {},
+      "unresolved": []
+    },
+    "routes": {
+      "omitted": [],
+      "withheld": []
+    }
+  },
+  "configs": []
+}

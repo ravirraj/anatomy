@@ -1,0 +1,124 @@
+{
+  "version": 1,
+  "method": "Hand-verified ground truth of internal dependency relationships, one entry per fixture. Each pair is a source file and a target file that the source's own syntax contains a dependency statement to, where the target is a file inside the same fixture repository. Pairs are compared at the (source, target) level, deduplicated: the regression suite tests which edge kinds are found, this measures which relationships. Unresolved, external and excluded imports are out of scope by definition — they produce no internal edge.",
+  "convention": "A relationship is a TRUE POSITIVE when the truth and the parser both hold it, a FALSE POSITIVE when only the parser does, and a FALSE NEGATIVE when only the truth does. With no predictions and no truths, precision, recall and F1 are defined as 1: nothing was claimed and nothing was missed.",
+  "fixtures": {
+    "barrel-index": {
+      "edges": [
+        [
+          "src/index.ts",
+          "src/circle.ts"
+        ],
+        [
+          "src/index.ts",
+          "src/square.ts"
+        ],
+        [
+          "src/index.ts",
+          "src/triangle.ts"
+        ],
+        [
+          "src/main.ts",
+          "src/index.ts"
+        ]
+      ]
+    },
+    "base-url": {
+      "edges": [
+        [
+          "src/main.ts",
+          "lib/format.ts"
+        ]
+      ]
+    },
+    "commonjs": {
+      "edges": [
+        ["index.js", "math.js"]
+      ]
+    },
+    "dynamic-import": {
+      "edges": [
+        [
+          "index.ts",
+          "lazy.ts"
+        ]
+      ]
+    },
+    "export-import-equals": {
+      "edges": [
+        [
+          "app/main.ts",
+          "lib/config.ts"
+        ],
+        [
+          "app/main.ts",
+          "lib/helper.ts"
+        ],
+        [
+          "lib/bridge.js",
+          "lib/config.ts"
+        ]
+      ]
+    },
+    "nextjs-app-router": {
+      "edges": [
+        [
+          "app/page.tsx",
+          "lib/store.ts"
+        ],
+        [
+          "app/api/users/route.ts",
+          "lib/store.ts"
+        ],
+        [
+          "app/api/users/[id]/route.ts",
+          "lib/store.ts"
+        ],
+        [
+          "lib/store.ts",
+          "lib/extra.ts"
+        ]
+      ]
+    },
+    "nextjs-pages-router": {
+      "edges": [
+        [
+          "pages/index.tsx",
+          "components/frame.tsx"
+        ],
+        [
+          "pages/posts/[id].tsx",
+          "components/frame.tsx"
+        ]
+      ]
+    },
+    "path-aliases": {
+      "edges": [
+        [
+          "src/app.ts",
+          "src/util/format.ts"
+        ]
+      ]
+    },
+    "two-framework-monorepo": {
+      "edges": [
+        [
+          "packages/api/src/users/users.controller.ts",
+          "packages/api/src/users/users.service.ts"
+        ],
+        [
+          "packages/web/app/page.tsx",
+          "packages/web/lib/branding.ts"
+        ]
+      ]
+    },
+    "unlinked-workspaces": {
+      "edges": [
+        [
+          "packages/calc/double.ts",
+          "packages/calc/shared.ts"
+        ]
+      ]
+    }
+  }
+}

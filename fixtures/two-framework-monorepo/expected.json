@@ -1,0 +1,199 @@
+{
+  "schemaVersion": 5,
+  "root": "<repo>",
+  "projects": [
+    {
+      "path": ".",
+      "adapter": "none"
+    },
+    {
+      "path": "packages/api",
+      "adapter": "NestJS"
+    },
+    {
+      "path": "packages/web",
+      "adapter": "Next.js"
+    }
+  ],
+  "files": [
+    {
+      "path": "packages/api/src/users/users.controller.ts",
+      "module": "packages/api/src/users",
+      "lines": 17,
+      "bytes": 340,
+      "hash": "499ffe88197322083be40af399aca8dc9ff98ccb8f94498cedd6e40201c2d402",
+      "fanIn": 0,
+      "fanOut": 1,
+      "reachedBy": null,
+      "role": "controller",
+      "exports": [
+        "UsersController"
+      ]
+    },
+    {
+      "path": "packages/api/src/users/users.service.ts",
+      "module": "packages/api/src/users",
+      "lines": 8,
+      "bytes": 134,
+      "hash": "8a783736611b57c3176ed73ea5d125fc8d70c56520b81009c34f16dcb50ce38d",
+      "fanIn": 1,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": "service",
+      "exports": [
+        "UsersService"
+      ]
+    },
+    {
+      "path": "packages/web/app/page.tsx",
+      "module": "packages/web/app",
+      "lines": 5,
+      "bytes": 104,
+      "hash": "58bf54996f72db36573454a069608a894c4b7136f76f8129130d7d29e9cbc114",
+      "fanIn": 0,
+      "fanOut": 1,
+      "reachedBy": "Next.js page",
+      "role": "page-route",
+      "exports": [
+        "default"
+      ]
+    },
+    {
+      "path": "packages/web/lib/branding.ts",
+      "module": "packages/web/lib",
+      "lines": 1,
+      "bytes": 37,
+      "hash": "540117109efedd5b84fde50de249a836fd0cbcc137d636324604ef331237d48c",
+      "fanIn": 1,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "brand"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source": "packages/api/src/users/users.controller.ts",
+      "target": "packages/api/src/users/users.service.ts",
+      "kind": "import",
+      "typeOnly": false,
+      "specifier": "./users.service",
+      "line": 2
+    },
+    {
+      "source": "packages/web/app/page.tsx",
+      "target": "packages/web/lib/branding.ts",
+      "kind": "import",
+      "typeOnly": false,
+      "specifier": "../lib/branding",
+      "line": 1
+    }
+  ],
+  "routes": [
+    {
+      "file": "packages/api/src/users/users.controller.ts",
+      "method": "GET",
+      "pattern": "/users",
+      "line": 8
+    },
+    {
+      "file": "packages/api/src/users/users.controller.ts",
+      "method": "POST",
+      "pattern": "/users",
+      "line": 13
+    }
+  ],
+  "symbols": [
+    {
+      "name": "UsersController",
+      "kind": "class",
+      "line": 4,
+      "exported": true,
+      "file": "packages/api/src/users/users.controller.ts"
+    },
+    {
+      "name": "UsersService",
+      "kind": "class",
+      "line": 3,
+      "exported": true,
+      "file": "packages/api/src/users/users.service.ts"
+    },
+    {
+      "name": "default",
+      "kind": "function",
+      "line": 3,
+      "exported": true,
+      "file": "packages/web/app/page.tsx"
+    },
+    {
+      "name": "brand",
+      "kind": "const",
+      "line": 1,
+      "exported": true,
+      "file": "packages/web/lib/branding.ts"
+    }
+  ],
+  "coverage": {
+    "files": {
+      "found": 4,
+      "parsed": 4,
+      "skipped": 0,
+      "skippedFiles": [],
+      "excludedDirectories": []
+    },
+    "imports": {
+      "total": {
+        "seen": 4,
+        "internal": 2,
+        "external": 2,
+        "excluded": 0,
+        "unresolved": 0
+      },
+      "byKind": {
+        "import": {
+          "seen": 4,
+          "internal": 2,
+          "external": 2,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "re-export": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "dynamic-import": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "require": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        }
+      },
+      "external": {
+        "package": 2,
+        "builtin": 0,
+        "outside-root": 0
+      },
+      "excluded": {},
+      "unresolvedByReason": {},
+      "unresolved": []
+    },
+    "routes": {
+      "omitted": [],
+      "withheld": []
+    }
+  },
+  "configs": []
+}

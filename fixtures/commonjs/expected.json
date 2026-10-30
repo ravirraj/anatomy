@@ -1,0 +1,128 @@
+{
+  "schemaVersion": 5,
+  "root": "<repo>",
+  "projects": [
+    {
+      "path": ".",
+      "adapter": "none"
+    }
+  ],
+  "files": [
+    {
+      "path": "index.js",
+      "module": ".",
+      "lines": 7,
+      "bytes": 192,
+      "hash": "e19ca7cb1430fbcab4213fce87b5d6c5ab023eba89a27745b39b73aaa5faef60",
+      "fanIn": 0,
+      "fanOut": 1,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "run"
+      ]
+    },
+    {
+      "path": "math.js",
+      "module": ".",
+      "lines": 3,
+      "bytes": 61,
+      "hash": "01f9539df71e91e3553b75b65b51542a4c597164e03463ddccc052f803d70993",
+      "fanIn": 1,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "add"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source": "index.js",
+      "target": "math.js",
+      "kind": "require",
+      "typeOnly": false,
+      "specifier": "./math",
+      "line": 1
+    }
+  ],
+  "routes": [],
+  "symbols": [
+    {
+      "name": "add",
+      "kind": "const",
+      "line": 1,
+      "exported": false,
+      "file": "index.js"
+    },
+    {
+      "name": "fs",
+      "kind": "const",
+      "line": 2,
+      "exported": false,
+      "file": "index.js"
+    }
+  ],
+  "coverage": {
+    "files": {
+      "found": 2,
+      "parsed": 2,
+      "skipped": 0,
+      "skippedFiles": [],
+      "excludedDirectories": []
+    },
+    "imports": {
+      "total": {
+        "seen": 2,
+        "internal": 1,
+        "external": 1,
+        "excluded": 0,
+        "unresolved": 0
+      },
+      "byKind": {
+        "import": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "re-export": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "dynamic-import": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "require": {
+          "seen": 2,
+          "internal": 1,
+          "external": 1,
+          "excluded": 0,
+          "unresolved": 0
+        }
+      },
+      "external": {
+        "package": 0,
+        "builtin": 1,
+        "outside-root": 0
+      },
+      "excluded": {},
+      "unresolvedByReason": {},
+      "unresolved": []
+    },
+    "routes": {
+      "omitted": [],
+      "withheld": []
+    }
+  },
+  "configs": []
+}

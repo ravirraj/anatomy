@@ -1,0 +1,186 @@
+{
+  "schemaVersion": 5,
+  "root": "<repo>",
+  "projects": [
+    {
+      "path": ".",
+      "adapter": "none"
+    }
+  ],
+  "files": [
+    {
+      "path": "lib/format.ts",
+      "module": "lib",
+      "lines": 3,
+      "bytes": 97,
+      "hash": "7b0b673c9abeed54914cd14e20f187051a679db8c431260d246d0f393c8c6b1f",
+      "fanIn": 1,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "formatName"
+      ]
+    },
+    {
+      "path": "src/main.ts",
+      "module": "src",
+      "lines": 7,
+      "bytes": 301,
+      "hash": "9413a9aeba0fa6d6491c0710c99074119bd240ca9c2b8f87e1cd27183562e8ab",
+      "fanIn": 0,
+      "fanOut": 1,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "greeting"
+      ]
+    },
+    {
+      "path": "src/pkg.ts",
+      "module": "src",
+      "lines": 7,
+      "bytes": 242,
+      "hash": "9ae70163bb4d8742b95c15ceb24c0c1172cf4768f714443642c3620475e8866c",
+      "fanIn": 0,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "degrees"
+      ]
+    },
+    {
+      "path": "src/wrong.ts",
+      "module": "src",
+      "lines": 7,
+      "bytes": 231,
+      "hash": "45c9459d1be46a93f14ae76c0b049884d29a4ca5a3e7915f4cb2157efb56fecd",
+      "fanIn": 0,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "use"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source": "src/main.ts",
+      "target": "lib/format.ts",
+      "kind": "import",
+      "typeOnly": false,
+      "specifier": "lib/format",
+      "line": 3
+    }
+  ],
+  "routes": [],
+  "symbols": [
+    {
+      "name": "formatName",
+      "kind": "function",
+      "line": 1,
+      "exported": true,
+      "file": "lib/format.ts"
+    },
+    {
+      "name": "greeting",
+      "kind": "function",
+      "line": 5,
+      "exported": true,
+      "file": "src/main.ts"
+    },
+    {
+      "name": "degrees",
+      "kind": "function",
+      "line": 5,
+      "exported": true,
+      "file": "src/pkg.ts"
+    },
+    {
+      "name": "use",
+      "kind": "function",
+      "line": 5,
+      "exported": true,
+      "file": "src/wrong.ts"
+    }
+  ],
+  "coverage": {
+    "files": {
+      "found": 4,
+      "parsed": 4,
+      "skipped": 0,
+      "skippedFiles": [],
+      "excludedDirectories": []
+    },
+    "imports": {
+      "total": {
+        "seen": 3,
+        "internal": 1,
+        "external": 1,
+        "excluded": 0,
+        "unresolved": 1
+      },
+      "byKind": {
+        "import": {
+          "seen": 3,
+          "internal": 1,
+          "external": 1,
+          "excluded": 0,
+          "unresolved": 1
+        },
+        "re-export": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "dynamic-import": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "require": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        }
+      },
+      "external": {
+        "package": 1,
+        "builtin": 0,
+        "outside-root": 0
+      },
+      "excluded": {},
+      "unresolvedByReason": {
+        "file-not-found": 1
+      },
+      "unresolved": [
+        {
+          "from": "src/wrong.ts",
+          "specifier": "lib/missing",
+          "kind": "import",
+          "line": 3,
+          "reason": "file-not-found",
+          "detail": "resolves against baseUrl to lib/missing, which doesn't exist"
+        }
+      ]
+    },
+    "routes": {
+      "omitted": [],
+      "withheld": []
+    }
+  },
+  "configs": [
+    {
+      "path": "tsconfig.json",
+      "errors": []
+    }
+  ]
+}

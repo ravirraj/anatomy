@@ -63,7 +63,7 @@ fixture corpus for the parser.
 | AI explanations | Working for a file or a folder. |
 | Multi-tenancy | Working, verified against the live database. |
 | Progress reporting | Working over a private realtime channel. |
-| Testing | Two suites, 24 checks, no test framework. |
+| Testing | Fixture regression suite over the parser — ten repositories, byte-compared against pinned results, and an accuracy evaluation against hand-verified ground truth — alongside the two suites of 24 checks. |
 | Documentation | This set. |
 | Deployment | None. No public instance, no recorded demo. |
 | Licensing | None. |
@@ -121,7 +121,9 @@ cites real files.**
 
 The corpus first, because everything else is measured against it. The Q&A
 second, because it is the capability the product exists for and the one the
-map cannot substitute for.
+map cannot substitute for. Between them stands source-content storage
+(3.4): the contents are the Q&A retrieval's raw material, and it is
+designed in [docs/architecture/file-content-storage.md](docs/architecture/file-content-storage.md).
 
 ---
 
@@ -129,17 +131,17 @@ map cannot substitute for.
 
 ### 2.1 Build, lint, type-check and test reliability
 
-- [ ] **Add a `typecheck` script** that runs `tsc --noEmit` after a build has
+- [x] **Add a `typecheck` script** that runs `tsc --noEmit` after a build has
       generated the route types
-  - **Status:** Planned
+  - **Status:** Done
   - **Problem:** `npx tsc --noEmit` fails on `PageProps` and `LayoutProps`,
     which Next.js generates into `.next/types`. There is no way to type-check
     without building first, and the failure looks like a real error.
-  - **Outcome:** `pnpm typecheck` is a single command that works.
+  - **Outcome:** `pnpm typecheck` is a single command that works: `next typegen && tsc --noEmit`.
   - **Acceptance criteria:**
-    - [ ] The script runs `next build` (or `next typegen`) before `tsc`.
-    - [ ] It exits non-zero on a type error.
-    - [ ] It is documented in [docs/development.md](docs/development.md).
+    - [x] The script runs `next build` (or `next typegen`) before `tsc`.
+    - [x] It exits non-zero on a type error.
+    - [x] It is documented in [docs/development.md](docs/development.md).
   - **Dependencies:** None.
   - **Effort:** S.
 
@@ -170,36 +172,45 @@ map cannot substitute for.
 
 ### 2.2 Parser accuracy and unresolved imports
 
-- [ ] **[P0] Build a fixture corpus of real repositories**
-  - **Status:** Planned
+- [x] **[P0] Build a fixture corpus of real repositories**
+  - **Status:** Done — ten fixtures, one per kind the criteria name, in
+    `fixtures/`, each with its expected result and hand-verified ground truth;
+    the runner is `node scripts/test-fixtures.ts`, re-baselined with
+    `--update <name>`; documented in [fixtures/README.md](fixtures/README.md).
   - **Problem:** The parser has no regression suite. Every change to the
     resolver is a change to a product nobody can test.
   - **Outcome:** A directory of repositories with their expected results,
     checked on every build.
   - **Acceptance criteria:**
-    - [ ] At least ten fixture repositories, spanning at least: a Next.js App
+    - [x] At least ten fixture repositories, spanning at least: a Next.js App
           Router app, a Next.js Pages Router app, a monorepo with two
           frameworks, a CommonJS project, a project with path aliases, a
           project with a barrel-file-heavy `index.ts` layout, a project with
           `require()`, a project with dynamic `import()`, a project with a
           `tsconfig` `baseUrl`, and a project with unlinked workspace packages.
-    - [ ] Each fixture has an expected result: files, edges, routes, roles and
+    - [x] Each fixture has an expected result: files, edges, routes, roles and
           the set of unresolved reasons.
-    - [ ] A test runs the parser over every fixture and compares.
-    - [ ] A fixture that changes is a **failing** test, not a diff to review.
+    - [x] A test runs the parser over every fixture and compares.
+    - [x] A fixture that changes is a **failing** test, not a diff to review.
   - **Dependencies:** None. This is the first thing to build.
-  - **Effort:** M.
+  - **Effort:** Done.
 
-- [ ] **[P0] Measure dependency-extraction accuracy**
-  - **Status:** Planned
+- [x] **[P0] Measure dependency-extraction accuracy**
+  - **Status:** Done — `pnpm accuracy` criterion, against the hand-verified
+    ground truth in [fixtures/accuracy.json](fixtures/accuracy.json). Every
+    internal dependency relationship in the ten fixtures was found (TP 20,
+    FP 0, FN 0), so precision, recall and F1 are all 1 as the observed
+    baseline; the floor below which a change is a regression is the constant
+    `MINIMUM_F1` in [scripts/accuracy-fixtures.ts](scripts/accuracy-fixtures.ts),
+    set to that baseline, and a change below it fails the run.
   - **Problem:** "The parser is accurate" is not a number.
   - **Outcome:** A published measurement with a stated method.
   - **Acceptance criteria:**
-    - [ ] For each fixture, a hand-counted ground truth of its internal edges.
-    - [ ] Precision and recall reported, with the method stated.
-    - [ ] A stated threshold below which a change is a regression.
+    - [x] For each fixture, a hand-counted ground truth of its internal edges.
+    - [x] Precision and recall reported, with the method stated.
+    - [x] A stated threshold below which a change is a regression.
   - **Dependencies:** The fixture corpus.
-  - **Effort:** M.
+  - **Effort:** Done.
 
 - [ ] **State the supported-language boundary in the UI, not only in the docs**
   - **Status:** Planned
@@ -595,6 +606,99 @@ map cannot substitute for.
   - **Dependencies:** The fixture corpus, for the tests.
   - **Effort:** L.
 
+### 3.4 [P0] Source-content storage
+
+Everything is designed in [docs/architecture/file-content-storage.md](docs/architecture/file-content-storage.md) and decided in [docs/architecture/decisions/0001-source-content-storage.md](docs/architecture/decisions/0001-source-content-storage.md). [TODO.md](TODO.md) The database foundations and the storage module are implemented (migration `20261030040722` + `20261030041425`, `lib/content`, both tested — module logic by a fake-client suite, tenant isolation against the live project by `scripts/test-content-rls.ts`); the pipeline, read side, cache, GC, benchmarks and hash-bound citations are still to come.
+
+- [ ] **[P0] The `file_contents` table and the content store**
+  - **Status:** Partially done - the migration and the store are in; what remains is pipeline-shaped, not storage-shaped.
+  - **Problem:** The database holds a file's hash and never its contents, so nothing downstream can read code, and the answer path borrows source from GitHub.
+  - **Outcome:** Content-addressed, immutable, deduplicated storage inside Supabase, behind a module boundary.
+  - **Acceptance criteria:**
+    - [x] A migration adds `file_contents (organization_id, content_hash, payload bytea, size, created_at)`, PK-ied by org+hash, RLS'd, and `files.content_status` (`absent` | `stored`).
+    - [x] `lib/content` implements `putContents` (idempotent upsert, `ignoreDuplicates` — the first write of a body wins), `getContent`, `existsContent`; members have no write grant. `deleteOrphaned` is documented as a future contract in `lib/content/types.ts`, and belongs to the GC task below; a chunked multi-content write belongs to the pipeline task that has a store-phase writer to call it.
+    - [ ] The payload of every file in `ParseResult.files` is stored; nothing the parser skipped (declaration, binary, too-large, unreadable, syntax-error) ever is.
+    - [ ] The module boundary is spec'd so an object-storage backend can be swapped in — the ADR names it as the deferred decision it is.
+  - **Dependencies:** None. This is the first thing to build.
+  - **Effort:** M.
+
+- [ ] **[P0] The pipeline writes content during indexing**
+  - **Status:** Planned
+  - **Problem:** Contents currently die at the `finally { rm(workdir) }` (`lib/pipeline/run.ts`); the store phase is the last place they exist.
+  - **Outcome:** A run's parsed files have content in the same pass, without breaking the 5-minute stage budget.
+  - **Acceptance criteria:**
+    - [ ] `storeResult` writes content chunks before (or with) the `files` chunk that references them, reusing the existing chunking discipline.
+    - [ ] A re-run of an unchanged repository writes near-zero new content rows (dedup holds).
+    - [ ] The pipeline is measured on a 10k-file fixture repository against the 5-minute budget.
+  - **Dependencies:** The table and store.
+  - **Effort:** S.
+
+- [ ] **[P0] The read side: `getFileContent` / `getFileLines`**
+  - **Status:** Planned
+  - **Problem:** Citations promise line precision; nothing can show a line without the network.
+  - **Outcome:** A read API that answers by file id, with 1-based line ranges that match the parser's recorded line numbers exactly.
+  - **Acceptance criteria:**
+    - [ ] `lib/content/read.ts` exposes `getFileContent(fileId)` and `getFileLines(fileId, start, end)`, both returning a typed `null` for `content_status = 'absent'`.
+    - [ ] A read of a file's lines agrees with the `line` the parser recorded for its routes, edges and symbols (proved by a test reading a fixture back).
+    - [ ] Lazy backfill: a read that finds an absent payload for a hash-known file goes through the hash-verified `fetchFileAt` path and stores it, per the migration section — no separate backfill needed.
+  - **Dependencies:** The store; the pipeline write for any new analysis.
+  - **Effort:** M.
+
+- [ ] **[P1] A bounded process cache on the answer path**
+  - **Status:** Planned
+  - **Problem:** Every retrieval reaching the DB is one more round trip on latency-critical answer time; unbounded caching is not allowed.
+  - **Outcome:** LRU keyed `(fileId, hash)`, 32 MB budget, max entry = the parser's 1 MB limit.
+  - **Acceptance criteria:**
+    - [ ] The key includes the content hash, so a re-index invalidates by missing, not by purging.
+    - [ ] Metrics record hits, misses and budget-highwater; a test proves the budget is never exceeded.
+    - [ ] Reads that miss fall through to the store; the store remains the only authority.
+  - **Dependencies:** The read side.
+  - **Effort:** S.
+
+- [ ] **[P1] Garbage collection of orphaned content**
+  - **Status:** Planned
+  - **Problem:** Content rows outlive the files rows that referenced them (write-before-reference, crashed runs).
+  - **Outcome:** Orphans collected on a schedule; no leak.
+  - **Acceptance criteria:**
+    - [ ] A job deletes content rows with zero referencing `files` rows, at a 24 h cadence.
+    - [ ] A test exercises: write content → delete referencing files → GC collects exactly that row.
+    - [ ] GC never deletes a row a live run could still reference (write-before-reference means a 24 h grace is inherently safe, and the test proves it).
+  - **Dependencies:** The store and the pipeline write.
+  - **Effort:** S.
+
+- [ ] **[P1] Benchmarks before any production reliance**
+  - **Status:** Planned
+  - **Problem:** §10 of the design document is estimates, not measurements.
+  - **Outcome:** The five named benchmarks have numbers, and the design's compression and latency claims are either confirmed or the policy revisited.
+  - **Acceptance criteria:**
+    - [ ] Index-time content write throughput on a real 10k-file repository.
+    - [ ] p95 `getFileLines`, hot and cold cache, for a ~100 KB and a ~1 MB file.
+    - [ ] Measured TOAST/`pglz` compression ratio on a real corpus, to confirm (or revise) the estimate of ~2.5–3×.
+    - [ ] DB size after N re-runs of the same repository (dedup + GC keeps it bounded).
+    - [ ] A concurrent re-index + read mix, to validate immutability's claimed lack of contention.
+  - **Dependencies:** The store; a repository of at least 10k files.
+  - **Effort:** M.
+
+- [ ] **[P2] Citations bound to content hashes**
+  - **Status:** Planned
+  - **Problem:** A re-index that changes a file's hash can leave a served answer describing code that is no longer on the map — detected only by manual inspection today.
+  - **Outcome:** Answers carry `(fileId, content_hash)` bindings; stale bindings are refused, never abbreviated silently.
+  - **Acceptance criteria:**
+    - [ ] A citation binding names a hash the current analysis does not record → the answer is refused, per the existing refusal-and-never-cache rule for a hallucinated path.
+    - [ ] Coverage: the citation tester gains a fixture where the answer is grounded at commit N and judged at commit N+1.
+  - **Dependencies:** The read side and the existing verifier.
+  - **Effort:** M.
+
+- [ ] **[P2] Full-text search over stored contents**
+  - **Status:** Planned
+  - **Problem:** Search is path- and symbol-name-only today, because there is nothing to search.
+  - **Outcome:** Content-aware retrieval for Q&A, over the stored payloads.
+  - **Acceptance criteria:**
+    - [ ] The repository-wide search explores at least (a clause-level) instructions, and the indexes it needs exist.
+    - [ ] A retrieval-quality measure is defined at the same time the index lands, or the feature defers one more time explicitly.
+  - **Dependencies:** The read side; Q&A retrieval task 7 "Measure retrieval quality".
+  - **Effort:** L.
+
 ---
 
 ## 4. Multi-language and framework support
@@ -725,9 +829,11 @@ A framework adapter is six methods. Existing adapters are the best guide.
 ## 5. Developer experience
 
 - [ ] **[P1] Symbol and full-text code search**
-  - **Status:** In progress — path and symbol search are done; full text is
-    not possible until file contents are stored, which they are not: the
-    database holds a file's hash only.
+  - **Status:** In progress — path and symbol search are done; the storage
+    design that unblocks full text is decided
+    ([docs/architecture/file-content-storage.md](docs/architecture/file-content-storage.md),
+    tasks in §3.4), and the implementation is still to come: the database
+    holds a file's hash, never its contents.
   - **Problem:** There is no way to search. Finding a file means finding it on
     the map, which means knowing where it is.
   - **Outcome:** A search over the analysis that finds files, symbols and

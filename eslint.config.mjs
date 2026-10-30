@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Fixture source is deliberately imperfect — unresolvable imports, dynamic
+    // specifiers, CJS — none of it is this project's code.
+    "fixtures/**",
   ]),
 ]);
 

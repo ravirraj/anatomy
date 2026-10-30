@@ -218,16 +218,16 @@ The org id is a Clerk organization id, from the dashboard or from
 ## 6. Tests and quality checks
 
 ```bash
-pnpm test        # both suites
+pnpm test        # every suite; the content store's is included
 pnpm lint        # ESLint
+pnpm typecheck   # tsc --noEmit, after next typegen has made the route types
 pnpm build       # production build, and the type check
 pnpm check-links # every relative link and anchor in the documentation
 ```
 
-There is no separate type-check command: `next build` type-checks the whole
-project, and `pnpm build` is the check to run. `npx tsc --noEmit` fails on
-`PageProps` and `LayoutProps`, which Next.js generates into `.next/types` —
-those types only exist after a build.
+`pnpm typecheck` runs `next typegen` before `tsc --noEmit`: `PageProps` and
+`LayoutProps` are generated into `.next/types`, and a type-check that only
+saw a stale `.next` fails on those as if they were real errors.
 
 ### 6.1 The test suites
 
@@ -256,6 +256,34 @@ node scripts/test-explanation-store.ts
 It checks that answers survive a re-render, that a request in flight is not
 stored as an answer, and that a store that cannot be written still works in
 memory.
+
+**`scripts/test-content-store.ts`** — the content store's logic, against a
+fake of the few calls it makes:
+
+```bash
+node scripts/test-content-store.ts
+```
+
+It checks hashing from exact bytes, byte-for-byte round trips (binary
+included), deduplication, cross-organization rows, absent reads, integrity
+failures (a corrupted payload, a wrong size), refusal of malformed
+identities, first-write-wins, oversized writes, and that a database failure
+surfaces instead of half-working. It cannot prove the database's row
+policies — that is what the next script is for.
+
+**`scripts/test-content-rls.ts`** — the content store's tenant isolation,
+against the **live** Supabase project (requires `supabase link` and login):
+
+```bash
+node --env-file=.env.local scripts/test-content-rls.ts
+```
+
+One transaction seeds two throwaway organizations and their content,
+exercises every access path as a member (with PostgREST-shaped jwt claims)
+and as the writer, and never commits — the database comes out as it went in,
+which the script verifies. This is deliberately not part of `pnpm test`,
+because `pnpm test` must run without a connected database and this one
+touches the linked project.
 
 **`scripts/check-links.mjs`** — the documentation's internal links:
 

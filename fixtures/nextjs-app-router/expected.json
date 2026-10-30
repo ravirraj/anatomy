@@ -1,0 +1,257 @@
+{
+  "schemaVersion": 5,
+  "root": "<repo>",
+  "projects": [
+    {
+      "path": ".",
+      "adapter": "Next.js"
+    }
+  ],
+  "files": [
+    {
+      "path": "app/api/users/[id]/route.ts",
+      "module": "app/api/users/[id]",
+      "lines": 9,
+      "bytes": 280,
+      "hash": "49c632767f35fd7118094a4a76d009405e71c96887dfdf128f064467cf7fc057",
+      "fanIn": 0,
+      "fanOut": 1,
+      "reachedBy": "Next.js route handler",
+      "role": "api-endpoint",
+      "exports": [
+        "GET",
+        "DELETE"
+      ]
+    },
+    {
+      "path": "app/api/users/route.ts",
+      "module": "app/api/users",
+      "lines": 5,
+      "bytes": 116,
+      "hash": "ac7092f6b8f5c0bfe1570a0e7f5e72cf9d9645baa2c8597764022c4b31f6fe6e",
+      "fanIn": 0,
+      "fanOut": 1,
+      "reachedBy": "Next.js route handler",
+      "role": "api-endpoint",
+      "exports": [
+        "GET"
+      ]
+    },
+    {
+      "path": "app/page.tsx",
+      "module": "app",
+      "lines": 5,
+      "bytes": 105,
+      "hash": "ca16f44e168282195803ff0ce0bcd4877a9c53432f5a1fc3d4feb666a33ed5e4",
+      "fanIn": 0,
+      "fanOut": 1,
+      "reachedBy": "Next.js page",
+      "role": "page-route",
+      "exports": [
+        "UserList"
+      ]
+    },
+    {
+      "path": "lib/extra.ts",
+      "module": "lib",
+      "lines": 3,
+      "bytes": 98,
+      "hash": "39f3134da2349ea2889476f17ee8b2271e7b1cc1f0309585dd938af1d877071a",
+      "fanIn": 1,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "fanout"
+      ]
+    },
+    {
+      "path": "lib/store.ts",
+      "module": "lib",
+      "lines": 11,
+      "bytes": 204,
+      "hash": "1fef5c628f8c423088b82f30e943eace640e3461555991cc64074d45629f8222",
+      "fanIn": 3,
+      "fanOut": 1,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "allUsers",
+        "user"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source": "app/api/users/[id]/route.ts",
+      "target": "lib/store.ts",
+      "kind": "import",
+      "typeOnly": false,
+      "specifier": "../../../../lib/store",
+      "line": 1
+    },
+    {
+      "source": "app/api/users/route.ts",
+      "target": "lib/store.ts",
+      "kind": "import",
+      "typeOnly": false,
+      "specifier": "../../../lib/store",
+      "line": 1
+    },
+    {
+      "source": "app/page.tsx",
+      "target": "lib/store.ts",
+      "kind": "import",
+      "typeOnly": false,
+      "specifier": "../lib/store",
+      "line": 1
+    },
+    {
+      "source": "lib/store.ts",
+      "target": "lib/extra.ts",
+      "kind": "import",
+      "typeOnly": false,
+      "specifier": "./extra",
+      "line": 1
+    }
+  ],
+  "routes": [
+    {
+      "file": "app/api/users/route.ts",
+      "method": "GET",
+      "pattern": "/api/users",
+      "line": 3
+    },
+    {
+      "file": "app/api/users/[id]/route.ts",
+      "method": "DELETE",
+      "pattern": "/api/users/[id]",
+      "line": 7
+    },
+    {
+      "file": "app/api/users/[id]/route.ts",
+      "method": "GET",
+      "pattern": "/api/users/[id]",
+      "line": 3
+    }
+  ],
+  "symbols": [
+    {
+      "name": "GET",
+      "kind": "function",
+      "line": 3,
+      "exported": true,
+      "file": "app/api/users/[id]/route.ts"
+    },
+    {
+      "name": "DELETE",
+      "kind": "function",
+      "line": 7,
+      "exported": true,
+      "file": "app/api/users/[id]/route.ts"
+    },
+    {
+      "name": "GET",
+      "kind": "function",
+      "line": 3,
+      "exported": true,
+      "file": "app/api/users/route.ts"
+    },
+    {
+      "name": "UserList",
+      "kind": "function",
+      "line": 3,
+      "exported": true,
+      "file": "app/page.tsx"
+    },
+    {
+      "name": "fanout",
+      "kind": "function",
+      "line": 1,
+      "exported": true,
+      "file": "lib/extra.ts"
+    },
+    {
+      "name": "USERS",
+      "kind": "const",
+      "line": 3,
+      "exported": false,
+      "file": "lib/store.ts"
+    },
+    {
+      "name": "allUsers",
+      "kind": "function",
+      "line": 5,
+      "exported": true,
+      "file": "lib/store.ts"
+    },
+    {
+      "name": "user",
+      "kind": "function",
+      "line": 9,
+      "exported": true,
+      "file": "lib/store.ts"
+    }
+  ],
+  "coverage": {
+    "files": {
+      "found": 5,
+      "parsed": 5,
+      "skipped": 0,
+      "skippedFiles": [],
+      "excludedDirectories": []
+    },
+    "imports": {
+      "total": {
+        "seen": 4,
+        "internal": 4,
+        "external": 0,
+        "excluded": 0,
+        "unresolved": 0
+      },
+      "byKind": {
+        "import": {
+          "seen": 4,
+          "internal": 4,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "re-export": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "dynamic-import": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "require": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        }
+      },
+      "external": {
+        "package": 0,
+        "builtin": 0,
+        "outside-root": 0
+      },
+      "excluded": {},
+      "unresolvedByReason": {},
+      "unresolved": []
+    },
+    "routes": {
+      "omitted": [],
+      "withheld": []
+    }
+  },
+  "configs": []
+}
