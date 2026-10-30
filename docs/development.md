@@ -285,6 +285,37 @@ which the script verifies. This is deliberately not part of `pnpm test`,
 because `pnpm test` must run without a connected database and this one
 touches the linked project.
 
+**`scripts/test-content-pipeline.ts`** — the indexing pipeline's content
+write, against a real parser over temporary fixture directories and a fake
+of the exact database calls it makes:
+
+```bash
+node scripts/test-content-pipeline.ts
+```
+
+It checks that every indexed file ends `stored` (with skipped files carrying
+no claim), that stored bytes are byte-for-byte the disk's and hash to the
+files row's hash, that requests respect the chunk bounds, that duplicate
+bodies collapse within and across runs with the stats counting it, that a
+refused content request fails only its own chunk's files while a metadata
+failure fails the run loudly, that retries repeat nothing, that a file
+whose text is not the round trip of its bytes is stored through the exact
+re-read fallback, and that tampered or missing candidate text is refused
+instead of stored under a stale identity.
+
+**`scripts/test-content-pipeline-db.ts`** — the wire behavior no fake can
+prove, against the **live** Supabase project: the batched bytea write, in
+one bulk request, with byte-for-byte reads back:
+
+```bash
+node --env-file=.env.local scripts/test-content-pipeline-db.ts
+```
+
+It writes into a throwaway test organization and, at the end, deletes that
+organization — the content follows by the foreign key's cascade — and
+verifies the database holds no row with a test organization id. Like the
+RLS suite, this is deliberately not part of `pnpm test`.
+
 **`scripts/check-links.mjs`** — the documentation's internal links:
 
 ```bash

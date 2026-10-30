@@ -608,28 +608,28 @@ designed in [docs/architecture/file-content-storage.md](docs/architecture/file-c
 
 ### 3.4 [P0] Source-content storage
 
-Everything is designed in [docs/architecture/file-content-storage.md](docs/architecture/file-content-storage.md) and decided in [docs/architecture/decisions/0001-source-content-storage.md](docs/architecture/decisions/0001-source-content-storage.md). [TODO.md](TODO.md) The database foundations and the storage module are implemented (migration `20261030040722` + `20261030041425`, `lib/content`, both tested — module logic by a fake-client suite, tenant isolation against the live project by `scripts/test-content-rls.ts`); the pipeline, read side, cache, GC, benchmarks and hash-bound citations are still to come.
+Everything is designed in [docs/architecture/file-content-storage.md](docs/architecture/file-content-storage.md) and decided in [docs/architecture/decisions/0001-source-content-storage.md](docs/architecture/decisions/0001-source-content-storage.md). [TODO.md](TODO.md) The database foundations, the storage module and the pipeline write are implemented (migrations `20261030040722` + `20261030041425`, `lib/content`, and `storeResult` verifying and storing content during indexing — module logic by a fake-client suite, tenant isolation against the live project by `scripts/test-content-rls.ts`, pipeline logic by `scripts/test-content-pipeline.ts` with the wire behavior by `scripts/test-content-pipeline-db.ts`); the read side, cache, GC, benchmarks and hash-bound citations are still to come.
 
-- [ ] **[P0] The `file_contents` table and the content store**
-  - **Status:** Partially done - the migration and the store are in; what remains is pipeline-shaped, not storage-shaped.
+- [x] **[P0] The `file_contents` table and the content store**
+  - **Status:** Done — the migration and the store are in; verified by the fake-client suite and the live RLS suite.
   - **Problem:** The database holds a file's hash and never its contents, so nothing downstream can read code, and the answer path borrows source from GitHub.
   - **Outcome:** Content-addressed, immutable, deduplicated storage inside Supabase, behind a module boundary.
   - **Acceptance criteria:**
     - [x] A migration adds `file_contents (organization_id, content_hash, payload bytea, size, created_at)`, PK-ied by org+hash, RLS'd, and `files.content_status` (`absent` | `stored`).
     - [x] `lib/content` implements `putContents` (idempotent upsert, `ignoreDuplicates` — the first write of a body wins), `getContent`, `existsContent`; members have no write grant. `deleteOrphaned` is documented as a future contract in `lib/content/types.ts`, and belongs to the GC task below; a chunked multi-content write belongs to the pipeline task that has a store-phase writer to call it.
-    - [ ] The payload of every file in `ParseResult.files` is stored; nothing the parser skipped (declaration, binary, too-large, unreadable, syntax-error) ever is.
-    - [ ] The module boundary is spec'd so an object-storage backend can be swapped in — the ADR names it as the deferred decision it is.
+    - [x] The payload of every file in `ParseResult.files` is stored; nothing the parser skipped (declaration, binary, too-large, unreadable, syntax-error) ever is.
+    - [x] The module boundary is spec'd so an object-storage backend can be swapped in — the ADR names it as the deferred decision it is.
   - **Dependencies:** None. This is the first thing to build.
   - **Effort:** M.
 
-- [ ] **[P0] The pipeline writes content during indexing**
-  - **Status:** Planned
+- [x] **[P0] The pipeline writes content during indexing**
+  - **Status:** Done — `storeResult` verifies and stores content in the same pass, documented in `docs/architecture/content-pipeline-integration.md` and `docs/architecture/file-content-storage.md §15`.
   - **Problem:** Contents currently die at the `finally { rm(workdir) }` (`lib/pipeline/run.ts`); the store phase is the last place they exist.
   - **Outcome:** A run's parsed files have content in the same pass, without breaking the 5-minute stage budget.
   - **Acceptance criteria:**
-    - [ ] `storeResult` writes content chunks before (or with) the `files` chunk that references them, reusing the existing chunking discipline.
-    - [ ] A re-run of an unchanged repository writes near-zero new content rows (dedup holds).
-    - [ ] The pipeline is measured on a 10k-file fixture repository against the 5-minute budget.
+    - [x] `storeResult` writes content chunks before the `files` chunk that references them, reusing the existing chunking discipline: a file is marked `stored` only when its content row was confirmed in this run. Candidate texts are re-encoded and hash-verified against `files.hash` (never assumed identical to the bytes), with one exact re-read from the still-alive workdir as fallback; mismatch refuses the association. Bounded by `CONTENT_CHUNK_FILES = 25` and `CONTENT_CHUNK_BYTES = 4 MiB` per request.
+    - [x] A re-run of an unchanged repository writes near-zero new content rows (dedup holds: `ON CONFLICT DO NOTHING` plus run-scoped `sent`-hash skipping, counted in the stats).
+    - [ ] The pipeline is measured on a 10k-file fixture repository against the 5-minute budget. (Benchmark task below; not faked by this task.)
   - **Dependencies:** The table and store.
   - **Effort:** S.
 

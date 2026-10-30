@@ -1,6 +1,8 @@
 # Source-file content storage — feasibility and architecture
 
-Status: **Designed, and the storage foundations are implemented — see §14.**
+Status: **Designed; the storage foundations are implemented — see §14 — and
+the pipeline now writes content during indexing; see
+[content-pipeline-integration.md](content-pipeline-integration.md) and §15.**
 This document was written before any storage code existed. It records what
 was verified in the code as of `SCHEMA_VERSION = 5`, defines the
 requirements, compares the alternatives, and settles the design that
@@ -347,7 +349,6 @@ What the parser already refuses (`walk.ts`):
 | Declaration files | skipped as `declaration-file` | **not stored** — types only, no runtime import graph, no citation target |
 | Readable-would-fail at read time (perms) | skipped as `unreadable` with the OS's message | **not stored** |
 | Files inside excluded directories (`node_modules`, `.next`, nestjs `dist`) | never walked | **not stored** — never *saw* them |
-
 The recommendation is therefore simply: **`file_contents` holds exactly and
 only the payloads of files that `ParseResult.files` contains**, and nothing
 the parser skipped, ever.
@@ -702,12 +703,17 @@ guarantee, and isolation is a row-policy guarantee.
 - **`organization_id` is `text`, not `uuid`** — the Organizations table is
   Clerk ids, and every other table keys them as text. The ADR's uuid came
   from the original proposal; the convention here won.
-- **`putContents` is not chunked** — this document's §8 sketches
-  `putContents(organizationId, readonly ContentPut[])` for the pipeline's
-  store phase. The implemented primitive is one body per call
-  (`putContents(db, organizationId, content)`); the chunked, many-files-per-
-  call shape belongs to the pipeline-writer task that has a chunking
-  discipline to fit it into (the `files` insert already chunks).
+- **`putContents` was not chunked until the pipeline writer arrived** —
+  this document's §8 sketches `putContents(organizationId, readonly ContentPut[])`
+  for the pipeline's store phase. The Phase-1 implemented primitive was one
+  body per call (`putContents(db, organizationId, content)`); Phase 2 added
+  the batched form the pipeline actually drives — `putContentsBatch`, several
+  bodies in one conflict-safe request — and the singular function is now a
+  one-body delegation to it, so the hashing/validation/upsert logic exists
+  exactly once. The chunk *policy* lives with the pipeline's chunking
+  discipline (`CONTENT_CHUNK_FILES` / `CONTENT_CHUNK_BYTES` in
+  `lib/pipeline/store.ts`), because that is where every other chunk constant
+  lives.
 - **`deleteOrphaned` is a contract, not a function** — its signature and
   conditions are written into `lib/content/types.ts` and nothing calls it;
   the migration's trigger blocks *updates only*, so a future GC can delete
@@ -719,9 +725,12 @@ guarantee, and isolation is a row-policy guarantee.
 ### 14.3 The module
 
 ```text
-lib/content/types.ts   ContentReference, ContentKey, IntegrityError, ContentStore, Db + the GC contract
-lib/content/store.ts   putContents, getContent, existsContent
-                       + MAX_CONTENT_BYTES (= MAX_FILE_BYTES from lib/parser/walk.ts), sha256, isContentHash
+lib/content/types.ts   ContentReference, ContentKey, IntegrityError, ContentWrite,
+                       ContentWriteResult, ContentStore, Db + the GC contract
+lib/content/store.ts   putContents (one body; delegates), putContentsBatch
+                       (the pipeline's driver), getContent, existsContent
+                       + MAX_CONTENT_BYTES (= MAX_FILE_BYTES from lib/parser/walk.ts),
+                       sha256, isContentHash
 ```
 
 - **Write:** hash is computed from the exact bytes, never accepted from the
@@ -785,8 +794,31 @@ no policy for members at all; the pipeline's writer uses the service role.
   driver verifies the database came out with zero content rows and zero
   test organizations. Deliberately **not** part of `pnpm test`, which must
   run without a connected database.
-- `lib/supabase/database.types.ts` was regenerated from the live schema
-  after the migrations, per its own header instruction.
+- **`lib/supabase/database.types.ts` was regenerated from the live schema
+  after the migrations, per its own header instruction.**
+- **`node scripts/test-content-pipeline.ts`** (in `pnpm test`) — the
+  pipeline's content write against a real parser and a fake client, over a
+  temporary fixture directory parsed for each scenario. Proves: every
+  indexed file ends `stored` with content_status set only after its body is
+  confirmed in `file_contents`; the stored bytes hash to the `files` row's
+  hash and are byte-for-byte the bytes on disk; skipped files get no claim;
+  chunked requests respect `CONTENT_CHUNK_FILES` and `CONTENT_CHUNK_BYTES`;
+  duplicate bodies within a batch and across runs collapse with the stats
+  counting the collapse; a refused content request fails only its own
+  chunk's files (absent, counted), not the run; a metadata failure fails the
+  run loudly while the content already written stays; a retried run repeats
+  nothing and creates no second row; text that is not the round trip of the
+  bytes (a file with a byte UTF-8 cannot express) is stored via the exact
+  re-read fallback; a tampered/missing candidate text is verified-then-
+  refused, never stored under an identity its body does not hash to.
+- **`node --env-file=.env.local scripts/test-content-pipeline-db.ts`** —
+  the wire behavior no fake can prove, against the live linked project: a
+  batched bytea write (hex `\x` encoding over PostgREST) accepted, duplicate
+  bodies collapsing inside one bulk request, byte-for-byte reads back,
+  a no-write second batch, per-organization scoping. Cleans up by deleting
+  its throwaway test organizations — the content follows them out by the
+  foreign key's cascade — and verifies no row with a test organization id
+  remains. Deliberately not part of `pnpm test`.
 
 ### 14.6 Failure handling summary
 
@@ -799,3 +831,81 @@ no policy for members at all; the pipeline's writer uses the service role.
 | Payload does not hash to its identity | `IntegrityError`, never partial content |
 | Size agrees differently | `IntegrityError` |
 | Member writes by any path | Refused by grants/policy (and by nothing granted to change) |
+
+---
+
+## 15. Phase 2 — the pipeline write, as implemented (October 2026)
+
+The indexing pipeline now preserves what it used to discard. The questions
+the design left to the implementer, and how the code answers them, is
+recorded in full in
+[content-pipeline-integration.md](content-pipeline-integration.md); what
+this section records is the shape, so this document stands alone.
+
+### 15.1 Where the bytes come from
+
+`run.ts` holds `selection` — the walk's candidates — when it calls
+`storeResult`, and passes their texts keyed by path. `storeResult` treats
+them as an *argument to verify, not bytes to trust*:
+
+1. `Buffer.from(candidate.content, "utf8")` is hashed with the store's
+   `sha256` and compared to the parser's `file.hash` (the walk's raw-bytes
+   hash). Equal ⇒ the bytes are byte-for-byte the walk's originals — storing
+   them cannot mismatch without a sha256 collision. No second read happens.
+2. Not equal ⇒ the text was not the round trip of the bytes (a file with a
+   byte UTF-8 cannot express): one exact `readFileSync` from the still-alive
+   workdir, hashed and compared again.
+3. Still not equal ⇒ the file changed under the run: nothing is written
+   under the stale identity; the file stays `absent` and the run continues.
+
+The candidate strings were already in memory (the parser holds them); the
+map references them, so this adds no repository-sized copy.
+
+### 15.2 The write
+
+- Batching is `putContentsBatch(db, organizationId, writes)`: one
+  conflict-safe bulk upsert per call (`ignoreDuplicates: true`, so an
+  existing body is never rewritten), bodies hashed inside the store,
+  duplicates inside a batch collapsed to one row. The singular
+  `putContents` delegates to it.
+- Chunking is the pipeline's, with the other chunk constants:
+  `CONTENT_CHUNK_FILES = 25`, `CONTENT_CHUNK_BYTES = 4 MiB` (raw; hex wire
+  ≈ 8 MB worst case). Requests are independent, *not* one transaction —
+  same as every other chunked write in this file's pipeline.
+- Sequence: clear this analysis's old `files` rows → write all content
+  chunks → insert `files` rows with `content_status = 'stored'` only when
+  the content row for that hash was confirmed during *this* run. The
+  content-then-metadata order makes the §3 invariant hold by construction.
+- Idempotent retries: content rows are `ON CONFLICT DO NOTHING`; a re-run
+  repeats nothing, and a hash whose request failed is retried by the next
+  chunk that carries it (a later batch of the same run), or by a whole
+  re-run.
+- A batch failure is *not* a run failure: the files of that chunk end
+  `absent`, the rest land, the run completes and reports both counts. A
+  metadata (`files`) failure still fails the run loudly, leaving content
+  rows written but unreferenced — the documented pre-GC state.
+
+### 15.3 Observability
+
+`storeResult` returns `ContentStorageStats`:
+
+| Field | Meaning |
+|---|---|
+| `eligible` | files the parser indexed (all were candidates for storing) |
+| `stored` | of those, files whose content is confirmed in `file_contents` |
+| `bytes` | raw bytes sent in confirmed writes (each distinct body once) |
+| `deduplicated` | writes skipped because the body was confirmed earlier this run or collapsed within its request |
+| `absent` | eligible files left `'absent'` |
+| `failed` | of the absent: a database request was refused, or no text arrived for the path |
+| `changed` | of the absent: neither the text nor a fresh read hashed to the parsed identity |
+| `unreadable` | of the absent: the fallback re-read itself failed |
+
+`run.ts` folds them into the final stage message — e.g. *"…; content stored
+for 1,024 files, 3 files without content"* — beside a `console.warn` per
+refused chunk (rate: per batch, never per file, and never any source text).
+
+### 15.4 What Phase 2 does not do (still true)
+
+Lazy backfill, the read service, LRU, GC, full-text search, retrieval/Q&A,
+citation hash-binding, object storage, background jobs — all deferred, as
+the tasks list says. `deleteOrphaned` remains a contract, not a function.
