@@ -107,7 +107,7 @@ if (asOpenAI) {
 }
 
 	const { explainFile, classifyFile, cacheKey } = await import("../lib/ai/tasks.ts");
-	const { MODELS } = await import("../lib/ai/client.ts");
+	const { MODELS, isOpenRouterBaseUrl, resolveBaseUrl } = await import("../lib/ai/client.ts");
 	type EdgeKind = "import" | "re-export" | "dynamic-import" | "require";
 
 // A cache that keeps answers in memory, so a second call can be seen to hit it.
@@ -247,6 +247,48 @@ if (keyA !== keyB) {
   pass("a different model makes a different key");
 } else {
   fail("the model is not part of the key");
+}
+
+console.log("");
+console.log("=== 7. provider detection: OpenAI, OpenRouter, and Gemini/custom endpoints ===");
+
+// A. OpenAI detection (no custom URL)
+if (!isOpenRouterBaseUrl(undefined) && resolveBaseUrl({}) === undefined) {
+  pass("OpenAI default detection is correct");
+} else {
+  fail("OpenAI default detection failed");
+}
+
+// B. OpenRouter detection
+const orUrl = resolveBaseUrl({ OPENROUTER_API_KEY: "sk-or-test-key" });
+if (orUrl === "https://openrouter.ai/api/v1" && isOpenRouterBaseUrl(orUrl)) {
+  pass("OpenRouter auto-configuration from OPENROUTER_API_KEY holds");
+} else {
+  fail(`OpenRouter auto-configuration failed: url=${orUrl}`);
+}
+if (isOpenRouterBaseUrl("https://openrouter.ai/api/v1") && isOpenRouterBaseUrl("https://sub.openrouter.ai/v1")) {
+  pass("OpenRouter hostname pattern matching holds");
+} else {
+  fail("OpenRouter hostname matching failed");
+}
+
+// C. Gemini / custom base URLs take priority and are NOT misidentified as OpenRouter
+const geminiUrl = "https://generativelanguage.googleapis.com/v1beta/openai/";
+const resolvedGemini = resolveBaseUrl({ AI_BASE_URL: geminiUrl, OPENROUTER_API_KEY: "sk-or-test-key" });
+if (resolvedGemini === geminiUrl) {
+  pass("explicit AI_BASE_URL takes priority over OPENROUTER_API_KEY");
+} else {
+  fail(`priority resolution failed: got ${resolvedGemini}`);
+}
+if (!isOpenRouterBaseUrl(geminiUrl)) {
+  pass("Gemini base URL is not detected as OpenRouter");
+} else {
+  fail("Gemini was misclassified as OpenRouter");
+}
+if (!isOpenRouterBaseUrl("http://localhost:11434/v1") && !isOpenRouterBaseUrl("https://api.together.xyz/v1")) {
+  pass("other custom provider URLs are not detected as OpenRouter");
+} else {
+  fail("custom provider was misclassified as OpenRouter");
 }
 
 report();
