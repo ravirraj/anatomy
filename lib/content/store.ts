@@ -95,11 +95,18 @@ export async function putContentsBatch(db: Db, organizationId: string, writes: r
   }
 
   if (prepared.length > 0) {
+    const nowIso = new Date().toISOString();
     const { error } = await db
       .from("file_contents")
       .upsert(
-        prepared.map((p) => ({ organization_id: organizationId, content_hash: p.contentHash, payload: p.payload, size: p.size })),
-        { onConflict: "organization_id,content_hash", ignoreDuplicates: true },
+        prepared.map((p) => ({
+          organization_id: organizationId,
+          content_hash: p.contentHash,
+          payload: p.payload,
+          size: p.size,
+          last_referenced_at: nowIso,
+        })),
+        { onConflict: "organization_id,content_hash" },
       );
     if (error) {
       for (const p of prepared) {

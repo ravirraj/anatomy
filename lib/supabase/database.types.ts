@@ -190,6 +190,7 @@ export type Database = {
         Row: {
           content_hash: string
           created_at: string
+          last_referenced_at: string
           organization_id: string
           payload: string
           size: number
@@ -197,6 +198,7 @@ export type Database = {
         Insert: {
           content_hash: string
           created_at?: string
+          last_referenced_at?: string
           organization_id: string
           payload: string
           size: number
@@ -204,6 +206,7 @@ export type Database = {
         Update: {
           content_hash?: string
           created_at?: string
+          last_referenced_at?: string
           organization_id?: string
           payload?: string
           size?: number

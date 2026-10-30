@@ -149,10 +149,10 @@ class FakeSupabase {
         };
         return after;
       },
-      upsert: (values: ContentRow | ContentRow[], opts: { onConflict: string; ignoreDuplicates: boolean }) => {
+      upsert: (values: ContentRow | ContentRow[], opts: { onConflict: string; ignoreDuplicates?: boolean }) => {
         const rows = Array.isArray(values) ? values : [values];
         fake.contentUpserts.push({ rows });
-        if (opts.onConflict !== "organization_id,content_hash" || !opts.ignoreDuplicates) {
+        if (opts.onConflict !== "organization_id,content_hash") {
           return { error: { message: "expected this test to write conflict-safe" } };
         }
         if (fake.failNextContentUpsert) {

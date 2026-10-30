@@ -30,8 +30,8 @@ class FakeContentsTable {
   rows: { organization_id: string; content_hash: string; payload: string; size: number }[] = [];
   failNextWith: string | null = null;
 
-  async upsert(values: { organization_id: string; content_hash: string; payload: string; size: number }[], opts: { onConflict: string; ignoreDuplicates: boolean }) {
-    if (opts.onConflict !== "organization_id,content_hash" || !opts.ignoreDuplicates) {
+  async upsert(values: { organization_id: string; content_hash: string; payload: string; size: number; last_referenced_at?: string }[], opts: { onConflict: string; ignoreDuplicates?: boolean }) {
+    if (opts.onConflict !== "organization_id,content_hash") {
       return { error: { message: "expected this test to write conflict-safe" } };
     }
     if (this.failNextWith) {

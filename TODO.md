@@ -656,13 +656,13 @@ Everything is designed in [docs/architecture/file-content-storage.md](docs/archi
   - **Effort:** S.
 
 - [x] **[P1] Garbage collection of orphaned content**
-  - **Status:** Done — implemented in `lib/content/gc.ts` and `supabase/migrations/20261030050000_gc_function.sql`; documented in `docs/architecture/file-content-storage.md §17`.
+  - **Status:** Done — implemented in `lib/content/gc.ts`, `supabase/migrations/20261030050000_gc_function.sql`, and `supabase/migrations/20261030060000_gc_concurrency_race.sql`; documented in `docs/architecture/file-content-storage.md §17`.
   - **Problem:** Content rows outlive the files rows that referenced them (write-before-reference, crashed runs).
   - **Outcome:** Orphans collected safely in bounded batches; no leak.
   - **Acceptance criteria:**
     - [x] A database RPC (`delete_orphaned_file_contents`) deletes content rows with zero referencing `files` rows, with configurable grace period (default 24h) and bounded batch sizes.
     - [x] Tests exercise: write content → delete referencing files → GC collects exactly that row (verified by unit test `test-content-gc.ts` and live DB suite `test-content-gc-db.ts`).
-    - [x] GC never deletes a row a live run could still reference (24h grace period inherently protects in-flight indexing, and atomic reference re-check with `FOR UPDATE SKIP LOCKED` eliminates race conditions).
+    - [x] GC never deletes a row a live run could still reference: protected by atomic `last_referenced_at` touch on `ON CONFLICT`, CTE re-check inside `delete_orphaned_file_contents`, and row-level lock coordination (verified by live database suite `scripts/test-content-gc-concurrency.ts`).
   - **Dependencies:** The store and the pipeline write.
   - **Effort:** S.
 

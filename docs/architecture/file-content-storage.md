@@ -1167,25 +1167,30 @@ implements database-enforced safety guarantees:
 - **Cache invalidation:** Upon successful database deletion, deleted content hashes
   are evicted from the in-process `ContentCache`.
 
-#### Concurrency and remaining limitations
+#### Concurrency guarantees and hardening
 
-1. **In-flight indexing:** A new file write generates a `created_at` timestamp of
-   `now()`, which is protected by the 24-hour grace period against any concurrent
-   GC run.
-2. **Old orphan re-indexing edge case:** If a content row became orphaned >24
-   hours ago, and a subsequent indexing run encounters the identical body, the
-   pipeline's `putContentsBatch` performs `ON CONFLICT DO NOTHING`. Because the
-   row is immutable, its `created_at` remains >24 hours old. If GC executes
-   during the sub-second window between `putContentsBatch` and the `files` batch
-   insertion, the atomic RPC could observe zero references and delete the row.
-   The referencing file would then end with `content_status = 'absent'`.
-   **Mitigation:** GC should be scheduled during low-traffic maintenance
-   windows, and the 24-hour grace period ensures only stale, abandoned rows are
-   eligible.
-3. **Multi-instance caching:** In multi-pod deployments, each instance maintains
-   its own bounded cache. Invalidation on GC is process-local; stale entries in
-   other pods will miss on the next re-index or evict naturally via LRU without
-   data corruption.
+1. **In-flight indexing & atomic touch (`last_referenced_at`):** A new file write
+   generates a `created_at` timestamp of `now()`. When an indexing run reuses an existing
+   content hash (even one orphaned >24 hours ago), `putContentsBatch` performs an atomic
+   `ON CONFLICT (organization_id, content_hash) DO UPDATE SET last_referenced_at = excluded.last_referenced_at`.
+   This refreshes `last_referenced_at` to the current time without mutating the immutable
+   content payload, size, or identity.
+2. **Lock ordering safety:**
+   - *Indexing arrives first:* `last_referenced_at` is set to `now()`. The concurrent GC
+     candidate filter evaluates `fc.last_referenced_at < clock_timestamp() - grace_period`, which
+     is false. GC skips the row completely, giving indexing the full grace period to insert file references.
+   - *GC arrives first:* GC locks the candidate row with `FOR UPDATE SKIP LOCKED`. If indexing concurrently
+     attempts to upsert the row, PostgreSQL blocks the insert on the row lock.
+     If GC deletes the row and commits, PostgreSQL's `ON CONFLICT DO UPDATE` detects the deletion and
+     automatically converts to an `INSERT`, safely resurrecting the content row with fresh timestamps.
+     If GC aborts or skips deletion, indexing updates `last_referenced_at` and proceeds cleanly.
+3. **Dual reference re-checking:** In `delete_orphaned_file_contents`, candidate rows are
+   re-verified inside the `DELETE ... USING candidates` CTE under the row lock to confirm that both
+   `last_referenced_at < clock_timestamp() - grace_period` and `not exists (select 1 from files ...)`
+   still hold immediately before deletion.
+4. **Multi-instance caching:** In multi-pod deployments, each instance maintains its own bounded
+   cache. Invalidation on GC is process-local; stale entries in other pods will miss on the next
+   re-index or evict naturally via LRU without data corruption.
 
 ### 17.3 Verification and test coverage
 
@@ -1203,6 +1208,10 @@ implements database-enforced safety guarantees:
   grace period, live `files` reference protection, cross-org isolation, bounded
   batches, live cache invalidation, and concurrent workers operating under
   `FOR UPDATE SKIP LOCKED`.
+- **`node --env-file=.env.local scripts/test-content-gc-concurrency.ts`**: 26 live
+  concurrency checks against PostgreSQL on Supabase testing both lock orderings
+  (indexing-first vs GC-first), row-level lock blocking, deletion resurrection,
+  immutability trigger enforcement, and multi-worker stress concurrency.
 - **`node scripts/test-content-read.ts`** and **`node --env-file=.env.local scripts/test-content-read-db.ts`**:
   All 66 fake and 16 live checks pass, validating that cache integration
   preserves all existing contracts and racing behaviors.
