@@ -80,6 +80,23 @@ async function run() {
   } else {
     fail(`grounded Q&A citations unexpected: ${JSON.stringify(answer.citations)}`);
   }
+
+  // 4. Real database ai_cache accepts 'answer-question' task constraint
+  const testKey = "test_qa_cache_key_" + Date.now();
+  const testOrg = analysis.organization_id;
+  const { error: insertErr } = await db.from("ai_cache").upsert({
+    organization_id: testOrg,
+    key: testKey,
+    task: "answer-question",
+    model: "test-model",
+    body: "test body with answer-question task",
+  });
+  if (insertErr) {
+    fail(`inserting answer-question into ai_cache failed: ${insertErr.message}`);
+  } else {
+    pass("real ai_cache table accepts answer-question task without constraint violation");
+    await db.from("ai_cache").delete().eq("organization_id", testOrg).eq("key", testKey);
+  }
 }
 
 run()
