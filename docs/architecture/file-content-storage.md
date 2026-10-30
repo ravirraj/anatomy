@@ -1,8 +1,9 @@
 # Source-file content storage — feasibility and architecture
 
 Status: **Designed; the storage foundations are implemented (§14), the pipeline
-writes content during indexing (§15), and the read side with lazy backfill is
-implemented (§16).** This document was written before any storage code existed.
+writes content during indexing (§15), the read side with lazy backfill is
+implemented (§16), and the in-process LRU cache and safe garbage collection are
+implemented (§17).** This document was written before any storage code existed.
 It records what was verified in the code as of `SCHEMA_VERSION = 5`, defines the
 requirements, compares the alternatives, and settles the design that
 [ADR-0001](decisions/0001-source-content-storage.md) records as the decision.
@@ -1101,8 +1102,107 @@ map references them, so this adds no repository-sized copy.
 for 1,024 files, 3 files without content"* — beside a `console.warn` per
 refused chunk (rate: per batch, never per file, and never any source text).
 
-### 15.4 What Phase 2 does not do (still true)
+### 15.4 What Phase 2 does not do (historical note)
 
-Lazy backfill, the read service, LRU, GC, full-text search, retrieval/Q&A,
-citation hash-binding, object storage, background jobs — all deferred, as
-the tasks list says. `deleteOrphaned` remains a contract, not a function.
+Lazy backfill was delivered in Phase 3 (§16); LRU cache and GC were delivered in
+Phase 4 (§17); full-text search, retrieval/Q&A, citation hash-binding, object
+storage, and background cron jobs remain deferred, as the tasks list says.
+
+---
+
+## 17. Phase 4 — bounded in-process LRU cache and safe garbage collection, as implemented (October 2026)
+
+Phase 4 delivers the bounded in-process LRU cache (`lib/content/cache.ts`) and
+safe orphan-content garbage collection (`lib/content/gc.ts`,
+`supabase/migrations/20261030050000_gc_function.sql`), fulfilling TODO §3.4's
+Phase 4 goals.
+
+### 17.1 In-process LRU cache (`lib/content/cache.ts`)
+
+- **Organization-scoped keys:** Keys are formatted strictly as
+  `${organizationId}:${contentHash}`. Content is never shared across
+  organizations, preventing cross-tenant data leakage. Identical content hashes
+  in different organizations exist as separate cache entries.
+- **Strict bounds:** Default configuration allocates `maxBytes = 32 MB` and
+  `maxEntries = 256` items. Evictions occur immediately whenever an insertion
+  would exceed either the byte budget or entry count.
+- **LRU promotion and eviction:** Every cache hit promotes the accessed entry
+  using a strictly monotonic access counter, ensuring deterministic LRU
+  ordering regardless of system timer resolution.
+- **Buffer immutability:** Both input buffers (on `set`) and returned buffers
+  (on `get`) are defensively cloned (`new Uint8Array(entry.data)`), ensuring
+  external mutations never corrupt cached content.
+- **Read-path integration:** `lib/content/read.ts` integrates with the cache via
+  `BackfillDeps.cache`. When `content_status === 'stored'`, reads check the cache
+  first before falling back to `getContent(db)`. Verified bytes fetched from
+  the database or newly backfilled from GitHub populate the cache. When
+  `content_status === 'absent'`, the read path inspects the database content
+  table directly to ensure proper transactional healing. Passing `cache: null`
+  explicitly bypasses caching.
+- **Observability:** `getStats()` provides real-time metrics: `hits`, `misses`,
+  `evictions`, `currentSize` (bytes), and `currentEntries`.
+
+### 17.2 Safe orphan-content garbage collection (`lib/content/gc.ts`)
+
+Indexing pipelines write content before inserting files metadata rows. Therefore,
+an unreferenced content row can legitimately be in-flight indexing data. Phase 4
+implements database-enforced safety guarantees:
+
+- **Configurable grace period:** Only content rows older than `gracePeriodMs`
+  (default 24 hours) are eligible for collection. Newly written content is
+  immune, safely protecting active pipeline runs (which complete within a 5-minute
+  hard timeout).
+- **Atomic database RPC with reference rechecking:** The database function
+  `public.delete_orphaned_file_contents(p_organization_id, p_grace_period, p_batch_size)`
+  uses a Common Table Expression with `FOR UPDATE SKIP LOCKED` on candidate
+  `file_contents` rows. In the same atomic statement, it re-verifies that no
+  referencing `files` row was inserted before issuing the `DELETE`.
+- **Dry-run by default:** Destructive deletion requires explicit `execute: true`
+  and `dryRun: false`. By default, candidate rows are scanned and reported
+  without deletion.
+- **Bounded batches:** Executed in bounded batches (`batchSize: 500`, `maxBatches: 10`)
+  to prevent database lock exhaustion and long-running transactions.
+- **Organization isolation:** The optional `organizationId` parameter scopes
+  collection to a single organization, or operates system-wide under the service role.
+- **Cache invalidation:** Upon successful database deletion, deleted content hashes
+  are evicted from the in-process `ContentCache`.
+
+#### Concurrency and remaining limitations
+
+1. **In-flight indexing:** A new file write generates a `created_at` timestamp of
+   `now()`, which is protected by the 24-hour grace period against any concurrent
+   GC run.
+2. **Old orphan re-indexing edge case:** If a content row became orphaned >24
+   hours ago, and a subsequent indexing run encounters the identical body, the
+   pipeline's `putContentsBatch` performs `ON CONFLICT DO NOTHING`. Because the
+   row is immutable, its `created_at` remains >24 hours old. If GC executes
+   during the sub-second window between `putContentsBatch` and the `files` batch
+   insertion, the atomic RPC could observe zero references and delete the row.
+   The referencing file would then end with `content_status = 'absent'`.
+   **Mitigation:** GC should be scheduled during low-traffic maintenance
+   windows, and the 24-hour grace period ensures only stale, abandoned rows are
+   eligible.
+3. **Multi-instance caching:** In multi-pod deployments, each instance maintains
+   its own bounded cache. Invalidation on GC is process-local; stale entries in
+   other pods will miss on the next re-index or evict naturally via LRU without
+   data corruption.
+
+### 17.3 Verification and test coverage
+
+- **`node scripts/test-content-cache.ts`** (in `pnpm test`): 54 deterministic
+  checks covering get/set, cache hit/miss, entry limit eviction, byte budget
+  eviction, LRU promotion, buffer immutability, org isolation, identical hashes
+  across orgs, `cachedGetContent` verification, singleton reset, and
+  `getFileContent`/`getFileLines` cache integration.
+- **`node scripts/test-content-gc.ts`** (in `pnpm test`): 26 unit checks with a
+  fake database verifying grace period retention, reference protection,
+  cross-org isolation, dry-run safety, bounded batching, idempotency, cache
+  invalidation, and error recovery.
+- **`node --env-file=.env.local scripts/test-content-gc-db.ts`**: 19 live
+  checks against PostgreSQL on Supabase testing `delete_orphaned_file_contents`,
+  grace period, live `files` reference protection, cross-org isolation, bounded
+  batches, live cache invalidation, and concurrent workers operating under
+  `FOR UPDATE SKIP LOCKED`.
+- **`node scripts/test-content-read.ts`** and **`node --env-file=.env.local scripts/test-content-read-db.ts`**:
+  All 66 fake and 16 live checks pass, validating that cache integration
+  preserves all existing contracts and racing behaviors.

@@ -81,14 +81,8 @@ export interface ContentStore {
 }
 
 /**
- * The garbage collector's contract, to be implemented by a later phase
- * (TODO 3.4, "Garbage collection of orphaned content"). Nothing here calls
- * it yet, and this file deliberately contains no deletion code: removing a
- * row is correct only when no lives files row references its hash any more,
- * which needs the reverse-lookup read the migration's
- * files (organization_id, hash) index serves.
- *
- * <T> deleteOrphanedContents(db: Db): Promise<number>
- * — deletes file_contents rows of organizations whose hash no files row
- * references, returning how many it removed.
+ * The garbage collector's contract, implemented in `lib/content/gc.ts`.
+ * Deletes file_contents rows of organizations whose hash no files row
+ * references, with a grace period and atomic database-side check-and-delete.
  */
+export type { GcOptions, GcStats } from "./gc.ts";

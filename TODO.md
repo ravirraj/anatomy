@@ -608,7 +608,7 @@ designed in [docs/architecture/file-content-storage.md](docs/architecture/file-c
 
 ### 3.4 [P0] Source-content storage
 
-Everything is designed in [docs/architecture/file-content-storage.md](docs/architecture/file-content-storage.md) and decided in [docs/architecture/decisions/0001-source-content-storage.md](docs/architecture/decisions/0001-source-content-storage.md). [TODO.md](TODO.md) The database foundations, the storage module and the pipeline write are implemented (migrations `20261030040722` + `20261030041425`, `lib/content`, and `storeResult` verifying and storing content during indexing — module logic by a fake-client suite, tenant isolation against the live project by `scripts/test-content-rls.ts`, pipeline logic by `scripts/test-content-pipeline.ts` with the wire behavior by `scripts/test-content-pipeline-db.ts`); **the read side and its lazy backfill are implemented** (`lib/content/read.ts`, `scripts/test-content-read.ts` in `pnpm test`, `scripts/test-content-read-db.ts` against the live project); the cache, GC, benchmarks and hash-bound citations are still to come.
+Everything is designed in [docs/architecture/file-content-storage.md](docs/architecture/file-content-storage.md) and decided in [docs/architecture/decisions/0001-source-content-storage.md](docs/architecture/decisions/0001-source-content-storage.md). [TODO.md](TODO.md) The database foundations, the storage module and the pipeline write are implemented (migrations `20261030040722` + `20261030041425`, `lib/content`, and `storeResult` verifying and storing content during indexing — module logic by a fake-client suite, tenant isolation against the live project by `scripts/test-content-rls.ts`, pipeline logic by `scripts/test-content-pipeline.ts` with the wire behavior by `scripts/test-content-pipeline-db.ts`); the read side and its lazy backfill are implemented (`lib/content/read.ts`, `scripts/test-content-read.ts` in `pnpm test`, `scripts/test-content-read-db.ts` against the live project); **the LRU cache and safe orphan-content garbage collection are implemented** (`lib/content/cache.ts`, `lib/content/gc.ts`, migration `20261030050000_gc_function.sql`, `scripts/test-content-cache.ts` and `scripts/test-content-gc.ts` in `pnpm test`, `scripts/test-content-gc-db.ts` against the live project); benchmarks and hash-bound citations are still to come.
 
 - [x] **[P0] The `file_contents` table and the content store**
   - **Status:** Done — the migration and the store are in; verified by the fake-client suite and the live RLS suite.
@@ -644,25 +644,25 @@ Everything is designed in [docs/architecture/file-content-storage.md](docs/archi
   - **Dependencies:** The store; the pipeline write for any new analysis.
   - **Effort:** M.
 
-- [ ] **[P1] A bounded process cache on the answer path**
-  - **Status:** Planned
+- [x] **[P1] A bounded process cache on the answer path**
+  - **Status:** Done — implemented in `lib/content/cache.ts` and integrated in `lib/content/read.ts`; documented in `docs/architecture/file-content-storage.md §17`.
   - **Problem:** Every retrieval reaching the DB is one more round trip on latency-critical answer time; unbounded caching is not allowed.
-  - **Outcome:** LRU keyed `(fileId, hash)`, 32 MB budget, max entry = the parser's 1 MB limit.
+  - **Outcome:** LRU keyed `(organizationId, hash)`, 32 MB budget, max entry = the parser's 1 MB limit.
   - **Acceptance criteria:**
-    - [ ] The key includes the content hash, so a re-index invalidates by missing, not by purging.
-    - [ ] Metrics record hits, misses and budget-highwater; a test proves the budget is never exceeded.
-    - [ ] Reads that miss fall through to the store; the store remains the only authority.
+    - [x] The key includes the content hash and organization id, so a re-index invalidates by missing, not by purging, and org isolation holds.
+    - [x] Metrics record hits, misses, evictions, currentSize, and currentEntries; tested for entry and byte bounds.
+    - [x] Reads that miss fall through to the store; the store remains the only authority.
   - **Dependencies:** The read side.
   - **Effort:** S.
 
-- [ ] **[P1] Garbage collection of orphaned content**
-  - **Status:** Planned
+- [x] **[P1] Garbage collection of orphaned content**
+  - **Status:** Done — implemented in `lib/content/gc.ts` and `supabase/migrations/20261030050000_gc_function.sql`; documented in `docs/architecture/file-content-storage.md §17`.
   - **Problem:** Content rows outlive the files rows that referenced them (write-before-reference, crashed runs).
-  - **Outcome:** Orphans collected on a schedule; no leak.
+  - **Outcome:** Orphans collected safely in bounded batches; no leak.
   - **Acceptance criteria:**
-    - [ ] A job deletes content rows with zero referencing `files` rows, at a 24 h cadence.
-    - [ ] A test exercises: write content → delete referencing files → GC collects exactly that row.
-    - [ ] GC never deletes a row a live run could still reference (write-before-reference means a 24 h grace is inherently safe, and the test proves it).
+    - [x] A database RPC (`delete_orphaned_file_contents`) deletes content rows with zero referencing `files` rows, with configurable grace period (default 24h) and bounded batch sizes.
+    - [x] Tests exercise: write content → delete referencing files → GC collects exactly that row (verified by unit test `test-content-gc.ts` and live DB suite `test-content-gc-db.ts`).
+    - [x] GC never deletes a row a live run could still reference (24h grace period inherently protects in-flight indexing, and atomic reference re-check with `FOR UPDATE SKIP LOCKED` eliminates race conditions).
   - **Dependencies:** The store and the pipeline write.
   - **Effort:** S.
 

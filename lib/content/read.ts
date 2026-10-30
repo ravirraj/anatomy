@@ -15,6 +15,7 @@
 import { countLines } from "../parser/walk.ts";
 import { fetchFileAt, type Repository } from "../pipeline/github.ts";
 import { createAdminSupabase } from "../supabase/admin.ts";
+import { cachedGetContent, getContentCache, type ContentCache } from "./cache.ts";
 import { ConsistencyError, type Db } from "./types.ts";
 import { existsContent, getContent, putContents, sha256 } from "./store.ts";
 
@@ -32,6 +33,8 @@ export type BackfillDeps = {
   writer?: Db;
   /** One file's bytes at one commit; defaults to the pipeline's fetch. */
   fetchFile?: typeof fetchFileAt;
+  /** Optional content cache; defaults to the process-wide singleton. Pass null to bypass. */
+  cache?: ContentCache | null;
 };
 
 /**
@@ -121,7 +124,7 @@ async function sourceOfCheckedRows(db: Db, file: FileRecord & { hash: string }, 
     // against the row's own record — and throws rather than serve damaged
     // bytes. A stored claim with no row behind it is a database that
     // contradicts itself: reported, never smoothed into a null.
-    const bytes = await getContent(db, file.organization_id, file.hash);
+    const bytes = await getCachedOrDb(db, file.organization_id, file.hash, deps);
     if (bytes === null) {
       throw new ConsistencyError(
         `${file.path} claims its content is stored, but the content table holds nothing under ${file.hash}`,
@@ -147,6 +150,9 @@ async function sourceOfCheckedRows(db: Db, file: FileRecord & { hash: string }, 
     // reject what was already verified.
     const outcome = await flagStored(deps, { id: file.id, organizationId: file.organization_id, hash: file.hash });
     if (outcome.state === "stale" || outcome.state === "vanished") return null;
+    if (deps.cache !== null) {
+      (deps.cache ?? fromCacheSingleton()).set(file.organization_id, file.hash, bytes);
+    }
     return bytesToText(bytes);
   }
   return backfillFromGitHub(db, file, deps);
@@ -188,6 +194,9 @@ async function backfillFromGitHub(db: Db, file: FileRecord & { hash: string }, d
     case "failed":
       // "failed": bookkeeping did not go through; the content did. The text
       // is verified either way, and the next read re-tries the flip.
+      if (deps.cache !== null) {
+        (deps.cache ?? fromCacheSingleton()).set(file.organization_id, file.hash, bytes);
+      }
       return bytesToText(bytes);
     case "stale":
     case "vanished":
@@ -321,6 +330,24 @@ function writerFor(deps: BackfillDeps): Db {
 
 function fetchFor(deps: BackfillDeps): typeof fetchFileAt {
   return deps.fetchFile ?? fetchFileAt;
+}
+
+function fromCacheSingleton(): ContentCache {
+  return getContentCache();
+}
+
+/**
+ * Read content through the cache, falling back to the database.
+ * The cache is keyed by (organization_id, content_hash), so a re-index
+ * that changes the hash naturally produces a miss — no purge needed.
+ * When deps.cache is null, no caching is used.
+ */
+async function getCachedOrDb(db: Db, organizationId: string, contentHash: string, deps: BackfillDeps): Promise<Uint8Array | null> {
+  // cache === null means explicitly bypass caching for this call
+  if (deps.cache === null) {
+    return getContent(db, organizationId, contentHash);
+  }
+  return cachedGetContent(organizationId, contentHash, () => getContent(db, organizationId, contentHash), deps.cache ?? undefined);
 }
 
 function bytesToText(bytes: Uint8Array): string {
