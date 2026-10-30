@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { tracingStatus, type TracingStatus } from "@/lib/ai/client";
 import { classifyFile, explainFile, explainFolder, type Cache } from "@/lib/ai/tasks";
 import { loadFileInput, loadFolderInput } from "@/lib/analysis/context";
+import { getFileContent } from "@/lib/content/read";
 import { fetchFileAt, resolveHeadCommit } from "@/lib/pipeline/github";
 import type { ModelRole } from "@/lib/roles";
 import { createAdminSupabase } from "@/lib/supabase/admin";
@@ -36,7 +37,7 @@ export async function explainFileAction(analysisId: string, path: string): Promi
     const loaded = await loadFileInput(db, analysis.id, path);
     if (!loaded) return { ok: false, error: `${path} isn't a file in this analysis` };
     const cache = cacheFor(db, analysis.organizationId);
-    const source = sourceAtAnalysedCommit(analysis, path, loaded.file.hash);
+    const source = sourceForFile(db, loaded.file.id, path);
 
     // Labelling comes first so the explanation's question includes the role,
     // and asks the same question next time, when the role is read back stored.
@@ -155,14 +156,15 @@ async function storeModelRole(organizationId: string, fileId: string, role: Mode
 // Fetched at most once per request, and only if a cache miss needs it. The
 // bytes must be the ones the parser read; if GitHub's copy hashes differently,
 // explaining it would describe code that isn't on the map.
-function sourceAtAnalysedCommit(analysis: Analysis, path: string, hash: string): () => Promise<string> {
+function sourceForFile(db: Db, fileId: string, path: string): () => Promise<string> {
   let pending: Promise<string> | null = null;
   return () => {
     pending ??= (async () => {
-      const bytes = await fetchFileAt(analysis.repository, analysis.commitSha, path);
-      if (bytes === null) throw new Error(`GitHub has no ${path} at ${analysis.commitSha.slice(0, 7)}, the commit that was analysed`);
-      if (sha256(bytes) !== hash) throw new Error(`GitHub's copy of ${path} at ${analysis.commitSha.slice(0, 7)} isn't what was parsed`);
-      return bytes.toString("utf8");
+      const text = await getFileContent(db, fileId);
+      if (text === null) {
+        throw new Error(`Content for ${path} is unavailable in this analysis`);
+      }
+      return text;
     })();
     return pending;
   };
