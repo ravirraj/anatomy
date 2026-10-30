@@ -99,6 +99,7 @@ export async function explainFolderAction(analysisId: string, dir: string): Prom
 }
 
 export async function askQuestionAction(analysisId: string, question: string): Promise<QAResult> {
+  const t0 = performance.now();
   try {
     const trimmed = question.trim();
     if (!trimmed) {
@@ -110,9 +111,18 @@ export async function askQuestionAction(analysisId: string, question: string): P
 
     // 1. Multi-index deterministic retrieval & graph expansion
     const retrieved = await retrieveGroundedContext(db, analysis.id, trimmed);
+    const tRetrieval = performance.now();
     const contextText = formatRetrievedContext(retrieved);
 
-    // 2. Answer question using bounded grounded context
+    // 2. Fetch all analysis files for verification context
+    const { data: allFilesData } = await db
+      .from("files")
+      .select("path")
+      .eq("analysis_id", analysis.id)
+      .is("skip_reason", null);
+    const allAnalysisFiles = new Set((allFilesData ?? []).map((f) => f.path));
+
+    // 3. Answer question using bounded grounded context
     const questionInput: QuestionInput = {
       question: trimmed,
       contextText,
@@ -124,7 +134,12 @@ export async function askQuestionAction(analysisId: string, question: string): P
     };
 
     const cache = cacheFor(db, analysis.organizationId);
-    const answer = await answerQuestion(questionInput, { cache });
+    const answer = await answerQuestion(questionInput, { cache, allAnalysisFiles });
+    const tTotal = performance.now();
+
+    console.log(
+      `[Q&A Timing] analysisId=${analysisId} retrievalMs=${Math.round(tRetrieval - t0)} totalMs=${Math.round(tTotal - t0)} retrievedFiles=${retrieved.files.length} insufficientEvidence=${retrieved.insufficientEvidence}`,
+    );
 
     return {
       ok: true,

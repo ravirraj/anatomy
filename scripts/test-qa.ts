@@ -190,6 +190,72 @@ async function run() {
       fail("inverted line range did not trigger CitationError");
     }
   }
+
+  // Test 7: Q&A answer with directories and npm packages in prose alongside valid citations passes cleanly
+  {
+    const onboardingInput: QuestionInput = {
+      ...baseInput,
+      question: "Explain repo structure and test runner.",
+    };
+
+    const answer = await answerQuestion(onboardingInput, {
+      cache: mockCache,
+      complete: async () => {
+        return `
+The repository structure is organized as:
+- \`lib/auth/\` contains authentication helpers.
+- \`lib/db/\` contains database connection logic.
+Testing uses \`@testing-library/react\` and \`vitest\` (see package.json in prose).
+For session management, see \`lib/auth/session.ts#L10-L40\`.
+Database client initialization is in \`lib/db/client.ts#L5-L25\`.
+`;
+      },
+    });
+
+    const sessionCitation = answer.citations.find((c) => c.path === "lib/auth/session.ts");
+    const dbCitation = answer.citations.find((c) => c.path === "lib/db/client.ts");
+
+    if (
+      sessionCitation &&
+      sessionCitation.startLine === 10 &&
+      sessionCitation.endLine === 40 &&
+      dbCitation &&
+      dbCitation.startLine === 5 &&
+      dbCitation.endLine === 25
+    ) {
+      pass("Q&A answer with directory and package mentions in prose alongside valid citations passes");
+    } else {
+      fail(`Q&A answer with prose mentions failed: ${JSON.stringify(answer)}`);
+    }
+  }
+
+  // Test 8: Citation outside retrieved evidence (even if file exists elsewhere in analysis) is rejected for line-range citation
+  {
+    const outsideInput: QuestionInput = {
+      ...baseInput,
+      question: "Where is the router?",
+    };
+
+    let threw = false;
+    try {
+      await answerQuestion(outsideInput, {
+        cache: mockCache,
+        allAnalysisFiles: new Set(["lib/auth/session.ts", "lib/db/client.ts", "lib/router.ts"]),
+        complete: async () => {
+          // lib/router.ts is in allAnalysisFiles, but NOT in retrieved evidence (outsideInput.files)
+          return "Routing is configured in `lib/router.ts#L1-L20`.";
+        },
+      });
+    } catch (err) {
+      threw = err instanceof CitationError;
+    }
+
+    if (threw) {
+      pass("line-range citation outside retrieved evidence throws CitationError");
+    } else {
+      fail("citation outside retrieved evidence did not throw CitationError");
+    }
+  }
 }
 
 run()

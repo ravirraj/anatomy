@@ -84,7 +84,11 @@ export async function explainFolder(input: FolderInput, deps: { cache: Cache }):
 
 export async function answerQuestion(
   input: QuestionInput,
-  deps: { cache: Cache; complete?: (model: string, system: string, user: string) => Promise<string> },
+  deps: {
+    cache: Cache;
+    complete?: (model: string, system: string, user: string) => Promise<string>;
+    allAnalysisFiles?: Set<string>;
+  },
 ): Promise<QuestionAnswer> {
   const model = MODELS.question;
   const allowedEvidence = new Map<string, FileEvidence>();
@@ -102,22 +106,36 @@ export async function answerQuestion(
 
     const hit = await deps.cache.read(key);
     if (hit !== null) {
-      verifyCitationsEvidence(hit, allowedEvidence);
-      return { body: hit, model, cached: true, citations: extractCitations(hit) };
+      verifyCitationsEvidence(hit, allowedEvidence, deps.allAnalysisFiles);
+      return {
+        body: hit,
+        model,
+        cached: true,
+        citations: extractCitations(hit, { allAnalysisFiles: deps.allAnalysisFiles }),
+      };
     }
 
     const completer = deps.complete ?? complete;
     const body = await completer(model, QUESTION_SYSTEM, questionMessage(question));
-    verifyCitationsEvidence(body, allowedEvidence);
+    verifyCitationsEvidence(body, allowedEvidence, deps.allAnalysisFiles);
     await deps.cache.write({ key, task: "answer-question", model, body });
-    return { body, model, cached: false, citations: extractCitations(body) };
+    return {
+      body,
+      model,
+      cached: false,
+      citations: extractCitations(body, { allAnalysisFiles: deps.allAnalysisFiles }),
+    };
   }, traceConfig("answer-question"));
 
   return run(input);
 }
 
-function verifyCitationsEvidence(body: string, allowed: Map<string, FileEvidence>): void {
-  const failing = verifyCitations(body, allowed);
+function verifyCitationsEvidence(
+  body: string,
+  allowed: Map<string, FileEvidence>,
+  allAnalysisFiles?: Set<string>,
+): void {
+  const failing = verifyCitations(body, allowed, { allAnalysisFiles });
   if (failing.paths.length) throw new CitationError(failing.paths, failing.details);
 }
 
@@ -198,18 +216,43 @@ function readRole(content: string | null): string {
 }
 
 async function complete(model: string, system: string, user: string): Promise<string> {
-  const response = await ai().chat.completions.create({
-    model,
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: user },
-    ],
-    reasoning_effort: "low",
-    ...openAIOnly(),
-  });
-  const body = response.choices[0]?.message.content?.trim();
-  if (!body) throw new Error(`${model} returned an empty answer (finish reason: ${response.choices[0]?.finish_reason ?? "none"})`);
-  return body;
+  let attempts = 0;
+  while (true) {
+    attempts++;
+    const t0 = performance.now();
+    try {
+      const response = await ai().chat.completions.create({
+        model,
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+        reasoning_effort: "low",
+        max_completion_tokens: 3500,
+        ...openAIOnly(),
+      });
+      const elapsed = Math.round(performance.now() - t0);
+      const usage = response.usage;
+      if (usage) {
+        console.log(
+          `[AI complete] model=${model} elapsed=${elapsed}ms promptTokens=${usage.prompt_tokens} completionTokens=${usage.completion_tokens}`,
+        );
+      }
+      const body = response.choices[0]?.message.content?.trim();
+      if (!body) throw new Error(`${model} returned an empty answer (finish reason: ${response.choices[0]?.finish_reason ?? "none"})`);
+      return body;
+    } catch (err: unknown) {
+      const status = (err as { status?: number })?.status;
+      const isTransient = status === 503 || status === 429 || status === 502;
+      if (isTransient && attempts <= 3) {
+        const delayMs = attempts * 3000;
+        console.warn(`[AI complete] Transient ${status} error, retrying attempt ${attempts}/3 in ${delayMs}ms...`);
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        continue;
+      }
+      throw err;
+    }
+  }
 }
 
 // The role is asked for as a strict JSON schema. Not every endpoint

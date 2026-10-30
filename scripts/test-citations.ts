@@ -242,6 +242,141 @@ const allowed = new Set([
   }
 }
 
+{
+  // Regression test suite for Phase 5 citation extraction and verification hardening
+  const evidenceMap = new Map<string, FileEvidence>([
+    ["lib/ai/tasks.ts", { lines: 100, contentHash: "hash-tasks" }],
+    ["components/explanation-text.tsx", { lines: 50, contentHash: "hash-expl" }],
+  ]);
+  const allAnalysisFiles = new Set<string>([
+    "lib/ai/tasks.ts",
+    "components/explanation-text.tsx",
+    "package.json",
+    "src/App.tsx",
+  ]);
+
+  // 1. Valid file citation
+  const v1 = verifyCitations("See `lib/ai/tasks.ts`.", evidenceMap, { allAnalysisFiles });
+  if (v1.paths.length === 0) pass("valid file citation passes");
+  else fail(`valid file citation failed: ${JSON.stringify(v1)}`);
+
+  // 2. Valid citation with line range
+  const v2 = verifyCitations("See `lib/ai/tasks.ts#L10-L25`.", evidenceMap, { allAnalysisFiles });
+  if (v2.paths.length === 0) pass("valid citation with line range passes");
+  else fail(`valid citation with line range failed: ${JSON.stringify(v2)}`);
+
+  // 3. Unknown explicit citation
+  const v3 = verifyCitations("See `lib/ai/unknown-file.ts`.", evidenceMap, { allAnalysisFiles });
+  if (v3.paths.length === 1 && v3.paths[0] === "lib/ai/unknown-file.ts") {
+    pass("unknown explicit citation is rejected");
+  } else {
+    fail(`unknown explicit citation not caught: ${JSON.stringify(v3)}`);
+  }
+
+  // 4. Directory mentioned in prose
+  const v4 = verifyCitations(
+    "The code is structured into src/components/ui/ and src/tests/ directories.",
+    evidenceMap,
+    { allAnalysisFiles },
+  );
+  if (v4.paths.length === 0) pass("directory mentioned in prose is not flagged");
+  else fail(`directory mentioned in prose flagged: ${JSON.stringify(v4)}`);
+
+  // 5. npm package mentioned in prose
+  const v5 = verifyCitations(
+    "We use @testing-library/react and @supabase/supabase-js for testing.",
+    evidenceMap,
+    { allAnalysisFiles },
+  );
+  if (v5.paths.length === 0) pass("npm package mentioned in prose is not flagged");
+  else fail(`npm package mentioned in prose flagged: ${JSON.stringify(v5)}`);
+
+  // 6. Placeholder path
+  const v6 = verifyCitations(
+    "Documentation is stored at `src/docs/examples/<component>/` for each item.",
+    evidenceMap,
+    { allAnalysisFiles },
+  );
+  if (v6.paths.length === 0) pass("placeholder path is not flagged");
+  else fail(`placeholder path flagged: ${JSON.stringify(v6)}`);
+
+  // 7. package.json mentioned in prose
+  const v7 = verifyCitations(
+    "Check package.json for npm scripts and dependencies.",
+    evidenceMap,
+    { allAnalysisFiles },
+  );
+  if (v7.paths.length === 0) pass("package.json mentioned in prose is not flagged");
+  else fail(`package.json mentioned in prose flagged: ${JSON.stringify(v7)}`);
+
+  // 8. Paths inside code blocks
+  const v8 = verifyCitations(
+    "Run tests:\n```bash\npnpm test\ncat src/fake/path.ts\nnpm install @testing-library/react\n```\nDone.",
+    evidenceMap,
+    { allAnalysisFiles },
+  );
+  if (v8.paths.length === 0) pass("paths inside fenced code blocks are not flagged");
+  else fail(`paths inside code blocks flagged: ${JSON.stringify(v8)}`);
+
+  // 9. Multiple citations
+  const v9 = verifyCitations(
+    "See `lib/ai/tasks.ts#L10-L25` and `components/explanation-text.tsx#L5-L30`.",
+    evidenceMap,
+    { allAnalysisFiles },
+  );
+  if (v9.paths.length === 0) pass("multiple valid citations pass");
+  else fail(`multiple valid citations failed: ${JSON.stringify(v9)}`);
+
+  // 10. Malformed citation with invalid line bounds
+  const v10 = verifyCitations("Check `lib/ai/tasks.ts#L0-L10`.", evidenceMap, { allAnalysisFiles });
+  if (v10.paths.length === 1) pass("malformed line bound citation is caught");
+  else fail(`malformed line bound citation not caught: ${JSON.stringify(v10)}`);
+
+  // 11. Citation outside retrieved evidence (file exists in analysis but not in retrieved evidence for line ranges)
+  const v11 = verifyCitations(
+    "See `src/App.tsx#L10-L20`.",
+    evidenceMap,
+    { allAnalysisFiles },
+  );
+  if (v11.paths.length === 1 && v11.paths[0] === "src/App.tsx#L10-L20") {
+    pass("line-range citation outside retrieved evidence is rejected");
+  } else {
+    fail(`citation outside retrieved evidence not caught: ${JSON.stringify(v11)}`);
+  }
+
+  // 12. Model-generated fabricated citation
+  const v12 = verifyCitations(
+    "Look at `src/auth/jwt-phantom.ts#L1-L20` for token validation.",
+    evidenceMap,
+    { allAnalysisFiles },
+  );
+  if (v12.paths.length === 1 && v12.paths[0] === "src/auth/jwt-phantom.ts#L1-L20") {
+    pass("model-generated fabricated citation is rejected");
+  } else {
+    fail(`fabricated citation not caught: ${JSON.stringify(v12)}`);
+  }
+
+  // 13. EXACT FAILURE REPRODUCTION: The production-like failure from onboarding query
+  const failingAnswer = `
+The repository is organized as follows:
+- \`src/components/ui/\` contains reusable UI components.
+- \`src/docs/examples/\` contains example documentation.
+- \`src/components/blocks/\` contains block layout items.
+- \`src/docs/examples/<component>/\` is a template directory.
+- \`src/tests/\` contains integration tests.
+- \`@testing-library/react\` is used for component assertions.
+- \`package.json\` lists the development dependencies and scripts.
+You can run tests (e.g. pnpm test) to verify changes.
+Check \`lib/ai/tasks.ts#L10-L25\` for task execution.
+`;
+  const repro = verifyCitations(failingAnswer, evidenceMap, { allAnalysisFiles });
+  if (repro.paths.length === 0) {
+    pass("exact onboarding failure text passes cleanly without false positives");
+  } else {
+    fail(`exact onboarding failure text still flagged: ${JSON.stringify(repro.paths)}`);
+  }
+}
+
 console.log("");
 for (const line of results) console.log(line);
 const failed = results.filter((r) => r.startsWith("FAIL")).length;

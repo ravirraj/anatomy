@@ -2,7 +2,7 @@
 // renderer so both agree on what counts as a repository path mention.
 //
 // Every token here is a *candidate*: a word that looks like it could be a
-// path. Whether it is allowed depends on the analysis the model was shown,
+// citation or path. Whether it is allowed depends on the analysis the model was shown,
 // which the caller supplies as the `allowed` set or evidence map.
 
 // Code spans, bold and italic — the same subset the renderer permits.
@@ -15,39 +15,134 @@ export function stripLineSuffix(token: string): string {
   return token.replace(LINE_SUFFIX, "");
 }
 
-// A token is path-like only if it contains a separator or an extension, so
-// ordinary words ("See", "the", "file") are never treated as mentions. This
-// mirrors ExplanationText, which only links a word when `isPath` is true.
-function isPathLike(core: string): boolean {
-  const stripped = stripLineSuffix(core);
-  return stripped.includes("/") || /\.\w+$/.test(stripped);
+export function stripFencedCodeBlocks(text: string): string {
+  return text.replace(/(?:```|~~~)[^\r\n]*\r?\n[\s\S]*?(?:\r?\n(?:```|~~~)|$)/g, "");
 }
 
-export function pathTokens(body: string): string[] {
+const LATIN_ABBREVIATIONS = new Set([
+  "e.g.", "e.g", "i.e.", "i.e", "etc.", "etc", "vs.", "vs",
+  "ex.", "ex", "al.", "al", "n.b.", "n.b", "fig.", "fig",
+]);
+
+export function isDirectoryReference(token: string): boolean {
+  const stripped = stripLineSuffix(token.trim());
+  return stripped.endsWith("/") || stripped.endsWith("\\");
+}
+
+export function isNpmPackage(token: string): boolean {
+  const stripped = stripLineSuffix(token.trim());
+  return stripped.startsWith("@") || stripped.startsWith("npm:") || stripped.startsWith("pnpm:");
+}
+
+export function isPlaceholderPath(token: string): boolean {
+  return /<[^>]+>|\[\.\.\.[^\]]+\]|\*|\.\.\./.test(token);
+}
+
+export function isAbbreviation(token: string): boolean {
+  const clean = token.trim().toLowerCase();
+  return LATIN_ABBREVIATIONS.has(clean);
+}
+
+const CODE_EXTENSIONS = new Set([
+  "ts", "tsx", "js", "jsx", "mjs", "cjs", "json", "md", "sql", "css", "scss",
+  "html", "yaml", "yml", "toml", "sh", "py", "go", "rs", "c", "cpp", "h",
+  "graphql", "gql", "prisma", "env",
+]);
+
+export function hasFileExtension(path: string): boolean {
+  const filename = path.split("/").pop() ?? path;
+  if (filename === ".env" || filename.startsWith(".env.") || filename === ".gitignore") {
+    return true;
+  }
+  const match = filename.match(/\.([a-zA-Z0-9_\-]+)$/);
+  if (!match || !match[1]) return false;
+  const ext = match[1].toLowerCase();
+  if (/^\d+$/.test(ext)) return false;
+  return CODE_EXTENSIONS.has(ext);
+}
+
+export function hasLineNumbers(token: string): boolean {
+  return LINE_SUFFIX.test(token.trim());
+}
+
+export const STANDARD_PROJECT_FILES = new Set([
+  "package.json",
+  "tsconfig.json",
+  "jsconfig.json",
+  "README.md",
+  "LICENSE",
+  ".gitignore",
+  "pnpm-lock.yaml",
+  "package-lock.json",
+  "yarn.lock",
+  ".env.example",
+]);
+
+/**
+ * Determines whether a candidate token qualifies as a path or citation to check.
+ * Strictly separates actual citations and paths from directory references,
+ * npm packages, placeholders, commands, and abbreviations.
+ */
+export function isCitationCandidate(
+  token: string,
+  inCodeSpan: boolean,
+  isLegacySet = false,
+): boolean {
+  const raw = token.trim();
+  if (!raw || /\s/.test(raw)) return false;
+  if (isAbbreviation(raw)) return false;
+  if (raw.startsWith("http://") || raw.startsWith("https://")) return false;
+  if (isNpmPackage(raw)) return false;
+  if (isPlaceholderPath(raw)) return false;
+
+  if (isDirectoryReference(raw)) {
+    // In code spans under legacy Set-based checking (explainFolder / explainFile),
+    // directories are validated against the allowed set. In Q&A or prose, they are
+    // directory references and excluded from code citation verification.
+    return isLegacySet && inCodeSpan;
+  }
+
+  // If token has explicit line numbers (#L10-L25 or :10-25), it is an explicit citation candidate
+  if (hasLineNumbers(raw)) return true;
+
+  const stripped = stripLineSuffix(raw);
+
+  // In code spans (`...`), require either a recognizable file extension or a path separator
+  if (inCodeSpan) {
+    return hasFileExtension(stripped) || stripped.includes("/");
+  }
+
+  // In bare prose (outside backticks), only treat as path candidate if it has
+  // BOTH path separators AND a valid file extension, preventing English abbreviations,
+  // version numbers, and conversational phrases from entering citation verification.
+  return stripped.includes("/") && hasFileExtension(stripped);
+}
+
+export function pathTokens(body: string, isLegacySet = false): string[] {
+  const cleanedBody = stripFencedCodeBlocks(body);
   const tokens: string[] = [];
   let last = 0;
-  for (const m of body.matchAll(MARKUP)) {
+  for (const m of cleanedBody.matchAll(MARKUP)) {
     const at = m.index ?? 0;
-    if (at > last) tokens.push(...proseTokens(body.slice(last, at)));
+    if (at > last) tokens.push(...proseTokens(cleanedBody.slice(last, at)));
     if (m[1] !== undefined) {
-      // A code span: the inner text is a candidate path.
+      // A code span: check if the inner text is a valid citation candidate
       const inner = m[1].trim();
-      if (inner && isPathLike(inner)) tokens.push(inner);
+      if (inner && isCitationCandidate(inner, true, isLegacySet)) tokens.push(inner);
     } else {
-      // Bold: recurse so code spans and bare words inside it are found too.
+      // Bold: recurse so code spans and bare words inside it are found too
       const inner = m[2] ?? m[3] ?? "";
-      tokens.push(...pathTokens(inner));
+      tokens.push(...pathTokens(inner, isLegacySet));
     }
     last = at + m[0].length;
   }
-  if (last < body.length) tokens.push(...proseTokens(body.slice(last)));
+  if (last < cleanedBody.length) tokens.push(...proseTokens(cleanedBody.slice(last)));
   return tokens;
 }
 
 // Prose between markup: italics lose their markers, stray backticks and
 // asterisks go, then each whitespace-separated word is stripped of its
-// surrounding punctuation. This mirrors ExplanationText exactly so the
-// verifier and the renderer never disagree about which words are mentions.
+// surrounding punctuation.
 function proseTokens(text: string): string[] {
   const cleaned = text
     .replace(/(^|[^\w*])\*(?=\S)([^*]+?)\*(?!\w)/g, "$1$2")
@@ -58,7 +153,7 @@ function proseTokens(text: string): string[] {
     if (!word) continue;
     const match = word.match(/^([("'[]*)(.*?)([)"'\].,;:!?]*)$/);
     const core = match?.[2] ?? word;
-    if (core && core.length > 2 && isPathLike(core)) out.push(core);
+    if (core && core.length > 2 && isCitationCandidate(core, false, false)) out.push(core);
   }
   return out;
 }
@@ -119,7 +214,7 @@ export function parseCitation(token: string): ParsedCitation {
 /**
  * Extracts and deduplicates parsed citations from markdown body text.
  */
-export function extractCitations(body: string): ParsedCitation[] {
+export function extractCitations(body: string, options?: CitationOptions): ParsedCitation[] {
   const tokens = pathTokens(body);
   const citations: ParsedCitation[] = [];
   const seen = new Set<string>();
@@ -127,6 +222,16 @@ export function extractCitations(body: string): ParsedCitation[] {
     const parsed = parseCitation(token);
     if (!seen.has(parsed.raw)) {
       seen.add(parsed.raw);
+      if (options?.allAnalysisFiles) {
+        const resolved = findMatchingPath(
+          parsed.path,
+          (p) => options.allAnalysisFiles!.has(p),
+          options.allAnalysisFiles,
+        );
+        if (resolved) {
+          parsed.path = resolved;
+        }
+      }
       citations.push(parsed);
     }
   }
@@ -145,29 +250,94 @@ export type CitationFailure = {
   details?: string[];
 };
 
+export type CitationOptions = {
+  allAnalysisFiles?: Set<string>;
+};
+
+const RESOLVE_EXTENSIONS = [
+  ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
+  "/index.ts", "/index.tsx", "/index.js",
+];
+
+export function findMatchingPath(
+  path: string,
+  checker: (p: string) => boolean,
+  allFiles?: Set<string>,
+): string | null {
+  const norm = normalize(path);
+  if (checker(norm)) return norm;
+
+  // Candidate path variants to check
+  const variants: string[] = [norm];
+
+  // If path ends in .js / .mjs / .cjs, TS ESM uses .js imports for .ts source files
+  if (norm.endsWith(".js")) {
+    const base = norm.slice(0, -3);
+    variants.push(`${base}.ts`, `${base}.tsx`);
+  } else if (norm.endsWith(".mjs")) {
+    const base = norm.slice(0, -4);
+    variants.push(`${base}.mts`, `${base}.ts`);
+  } else if (norm.endsWith(".cjs")) {
+    const base = norm.slice(0, -4);
+    variants.push(`${base}.cts`, `${base}.ts`);
+  } else if (!hasFileExtension(norm)) {
+    for (const ext of RESOLVE_EXTENSIONS) {
+      variants.push(`${norm}${ext}`);
+    }
+  }
+
+  // 1. Check direct variants against checker
+  for (const v of variants) {
+    if (checker(v)) return v;
+  }
+
+  // 2. If allFiles set is available, check relative / suffix matches
+  // e.g. "init.ts" or "cli/init.ts" matching "src/cli/init.ts"
+  if (allFiles) {
+    for (const v of variants) {
+      const suffix = v.startsWith("/") ? v : `/${v}`;
+      for (const filePath of allFiles) {
+        if (filePath.endsWith(suffix) || filePath === v) {
+          if (checker(filePath)) return filePath;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
 // Returns the offending mentions (empty when every path-shaped token names a
 // file the model was shown and adheres to valid line bounds). The caller decides
 // what to do with them — the AI layer refuses and never caches.
-export function verifyCitations(body: string, allowed: AllowedCitations): CitationFailure {
+export function verifyCitations(
+  body: string,
+  allowed: AllowedCitations,
+  options?: CitationOptions,
+): CitationFailure {
   const offending = new Set<string>();
   const details: string[] = [];
   const isMap = allowed instanceof Map;
+  const isLegacySet = !isMap && !options;
 
-  for (const token of pathTokens(body)) {
+  for (const token of pathTokens(body, isLegacySet)) {
     const parsed = parseCitation(token);
     const normalizedPath = parsed.path;
 
-    const exists = allowed.has(normalizedPath);
-    if (!exists) {
-      offending.add(token);
-      details.push(`Unknown file path: "${token}"`);
-      continue;
-    }
+    // Line-bound citations (#L10-L25 or :10-25) cite specific source lines and
+    // must strictly be present in the allowed retrieved evidence
+    if (parsed.startLine !== undefined && parsed.endLine !== undefined) {
+      const allowedFiles = new Set(allowed instanceof Map ? Array.from(allowed.keys()) : Array.from(allowed));
+      const matchedEvidencePath = findMatchingPath(normalizedPath, (p) => allowed.has(p), allowedFiles);
+      if (!matchedEvidencePath) {
+        offending.add(token);
+        details.push(`Unknown file path or uncited evidence in "${token}": "${normalizedPath}" is not in retrieved evidence`);
+        continue;
+      }
 
-    if (isMap) {
-      const evidence = (allowed as Map<string, FileEvidence>).get(normalizedPath);
-      if (evidence) {
-        if (parsed.startLine !== undefined && parsed.endLine !== undefined) {
+      if (isMap) {
+        const evidence = (allowed as Map<string, FileEvidence>).get(matchedEvidencePath);
+        if (evidence) {
           if (parsed.startLine < 1) {
             offending.add(token);
             details.push(`Invalid line range in "${token}": start line ${parsed.startLine} must be >= 1`);
@@ -180,6 +350,22 @@ export function verifyCitations(body: string, allowed: AllowedCitations): Citati
           }
         }
       }
+      continue;
+    }
+
+    // Bare file mentions without line numbers: check against allowed evidence,
+    // all analysis files (including extensionless TS import paths and relative suffixes),
+    // or standard root manifest files
+    const allowedFiles = new Set(allowed instanceof Map ? Array.from(allowed.keys()) : Array.from(allowed));
+    const existsInAllowed = findMatchingPath(normalizedPath, (p) => allowed.has(p), allowedFiles);
+    const existsInAllFiles = options?.allAnalysisFiles
+      ? findMatchingPath(normalizedPath, (p) => options.allAnalysisFiles!.has(p), options.allAnalysisFiles)
+      : null;
+    const isStandard = STANDARD_PROJECT_FILES.has(normalizedPath);
+
+    if (!existsInAllowed && !existsInAllFiles && !isStandard) {
+      offending.add(token);
+      details.push(`Unknown file path: "${token}"`);
     }
   }
 

@@ -12,10 +12,10 @@ export type RetrievalBudget = {
 };
 
 export const DEFAULT_BUDGET: Required<RetrievalBudget> = {
-  maxCharacters: 30000,
-  maxFiles: 8,
-  maxWindowsPerFile: 3,
-  seedLimit: 6,
+  maxCharacters: 18000,
+  maxFiles: 6,
+  maxWindowsPerFile: 2,
+  seedLimit: 5,
 };
 
 export type TargetWindow = {
@@ -55,12 +55,39 @@ export type RetrievalResult = {
 const STOP_WORDS = new Set([
   "a", "about", "across", "all", "an", "and", "any", "are", "as", "at",
   "be", "between", "both", "but", "by", "can", "do", "does", "each",
-  "explain", "file", "files", "for", "from", "get", "has", "have", "how",
-  "in", "is", "it", "its", "make", "of", "on", "or", "over", "repository",
-  "repo", "show", "tell", "that", "the", "their", "there", "this", "through",
+  "file", "files", "for", "from", "get", "has", "have", "how",
+  "in", "is", "it", "its", "make", "of", "on", "or", "over",
+  "show", "tell", "that", "the", "their", "there", "this", "through",
   "to", "under", "up", "used", "what", "when", "where", "which", "who", "why",
   "with", "work", "works",
 ]);
+
+const ONBOARDING_PATTERNS = [
+  /\bexplain\b/i,
+  /\boverview\b/i,
+  /\barchitecture\b/i,
+  /\bunderstand(?:ing)?\b/i,
+  /\bcontribut(?:e|ing)\b/i,
+  /\bonboard(?:ing)?\b/i,
+  /\bhow to start\b/i,
+  /\bget started\b/i,
+  /\bwalkthrough\b/i,
+  /\bstructure\b/i,
+  /\bcodebase\b/i,
+  /\brepository\b/i,
+  /\brepo\b/i,
+];
+
+export function isOnboardingQuery(query: string): boolean {
+  return ONBOARDING_PATTERNS.some((p) => p.test(query));
+}
+
+const ENTRY_POINT_PATTERNS = [
+  /(?:^|\/)(?:index|main|app|entry|cli|root|server)\.(?:tsx?|jsx?|mjs|cjs)$/i,
+  /(?:^|\/)(?:page|layout)\.(?:tsx?|jsx?)$/i,
+  /(?:^|\/)(?:route|router)\.(?:tsx?|jsx?)$/i,
+  /(?:^|\/)(?:config|setup)\.(?:tsx?|jsx?|mjs|cjs)$/i,
+];
 
 /**
  * Normalizes query string and extracts candidate identifier tokens, path fragments,
@@ -316,6 +343,50 @@ export async function retrieveGroundedContext(
         endLine,
         score: bestScore,
         reason: `file path matches token "${matchedToken}"`,
+      });
+    }
+  }
+
+  // D. For broad repository or onboarding queries, prioritize foundational entry points and hubs
+  const broadQuery = isOnboardingQuery(rawQuery);
+  if (broadQuery || seedWindows.length < 2) {
+    type FileRecord = { id: string; path: string; hash: string; lines: number; role: string | null };
+    const scoredFiles: { file: FileRecord; score: number; reason: string }[] = [];
+    for (const file of fileMap.values()) {
+      let score = 0;
+      let reason = "";
+
+      const isEntry = ENTRY_POINT_PATTERNS.some((p) => p.test(file.path));
+      if (isEntry) {
+        score = 85;
+        reason = "primary application entry point / core module";
+      } else if (file.role === "route" || file.role === "entry") {
+        score = 80;
+        reason = `core role "${file.role}"`;
+      } else if (file.path.split("/").length <= 2) {
+        score = 65;
+        reason = "shallow repository structure file";
+      }
+
+      if (score > 0) {
+        scoredFiles.push({ file, score, reason });
+      }
+    }
+
+    scoredFiles.sort((a, b) => b.score - a.score || a.file.path.localeCompare(b.file.path));
+
+    const maxEntrySeeds = broadQuery ? 4 : 2;
+    for (const item of scoredFiles.slice(0, maxEntrySeeds)) {
+      const endLine = Math.min(item.file.lines, 40);
+      seedWindows.push({
+        fileId: item.file.id,
+        path: item.file.path,
+        contentHash: item.file.hash,
+        totalLines: item.file.lines,
+        startLine: 1,
+        endLine,
+        score: item.score,
+        reason: item.reason,
       });
     }
   }

@@ -8,10 +8,6 @@ import { wrapOpenAI } from "langsmith/wrappers/openai";
 // cached answer without changing its key. Each model is part of its own
 // tasks' cache keys, so re-pinning one invalidates only its own answers.
 
-
-
-
-
 /**
  * Detects whether the effective base URL points to OpenRouter by inspecting its hostname.
  */
