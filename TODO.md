@@ -540,19 +540,27 @@ designed in [docs/architecture/file-content-storage.md](docs/architecture/file-c
     `app.js`/`index.js` bootstraps. Fixed generally in `lib/ai/retrieval.ts`:
     per-token concept variants (light suffix stemming plus one small glossary
     of generic engineering vocabulary, `db↔database`, `auth→login/jwt`,
-    `error→exception`, `upload→multipart` — no repo or question special
-    cases), bidirectional subtoken matching over symbol names and path
-    segments, role-aware seeding through the already-indexed `file_roles`,
-    breadth-first window budgeting under a strict character budget
-    (24k chars, 8 files, 2 windows per file), and entry-point fallbacks
-    re-scored below any concept match (`30` vs the old `85`). Regression
-    fixture with a full auth flow added to `scripts/test-retrieval.ts`
-    (routes/controller/middleware/JWT/user model/bcrypt, no-op setup files
-    must not leak), question categories for errors, uploads and databases.
-    Measured on the real authsphere analysis: 4 files/2,506 chars →
-    8 auth files/17,298 chars, and the end-to-end answer explains the JWT,
-    PKCE, OAuth and session flows with citation-verified lines
-    (`scripts/measure-authsphere.ts`).
+    `error→exception`, `upload→multipart`, `sdk→client/package/library` — no
+    repo or question special cases), bidirectional subtoken matching over
+    symbol names and path segments, two-variant path corroboration, role-aware
+    seeding through the already-indexed `file_roles`, a greedy breadth-first
+    window budget that gives every matched directory a slot before one crowded
+    directory claims two (28k chars, 16 files, 2 windows per file, cap 1 per
+    directory in the first sweep), stop words extended with trivial verbs
+    (`use`, `uses`, `using`) that flooded hook-heavy codebases, and entry-point
+    fallbacks re-scored below any concept match (`30` vs the old `85`).
+    Regression fixture with a full auth flow added to `scripts/test-retrieval.ts`
+    (routes/controller/middleware/JWT/user model/bcrypt, plus an SDK client
+    package island the graph cannot reach, no-op setup files must not leak),
+    question categories for errors, uploads, databases and the SDK. Measured
+    on the real authsphere analysis: the auth question retrieves the full
+    spread (controller, middleware, jwt, session model, validators, login
+    page, client SDK) at 16 files / 21k chars / ~150 ms, and the SDK question
+    reaches the whole SDK story — server side (`sdk.controller`,
+    `sdk.validators`, `sdkCors`, `sdk.service`) *and* client side
+    (`packages/src/client`, `options.ts`, `AuthContext`) — at 16 files /
+    24.8k chars / ~160 ms; end-to-end answers explain the flows with
+    citation-verified lines (`scripts/measure-authsphere.ts`).
 
 
 - [x] **[P0] Verify every citation against the stored analysis**

@@ -8,6 +8,7 @@ import {
   formatRetrievedContext,
   mergeCandidateWindows,
   retrieveGroundedContext,
+  DEFAULT_BUDGET,
   type Db,
   tokenVariants,
   identifierSubtokens,
@@ -213,7 +214,20 @@ class MockDb {
       return {
         select: () => ({
           eq: () => ({
-            or: () => Promise.resolve({ data: this.edges, error: null }),
+            or: (orFilter: string) => {
+              // Emulate PostgREST's `.or("source_file_id.in.(a,b),target_file_id.in.(a,b)")`
+              // — only edges actually touching one of the listed ids come back.
+              const seedIds = new Set<string>();
+              for (const m of orFilter.matchAll(/in\.\(([^)]*)\)/g)) {
+                for (const id of (m[1] ?? "").split(",")) {
+                  if (id.trim()) seedIds.add(id.trim());
+                }
+              }
+              const filtered = this.edges.filter(
+                (edge) => seedIds.has(edge.source_file_id) || seedIds.has(edge.target_file_id),
+              );
+              return Promise.resolve({ data: filtered, error: null });
+            },
           }),
         }),
       };
@@ -417,6 +431,29 @@ const fixtureFiles: FixtureFile[] = [
     symbolNames: [["logDebug", 3, true], ["rotateLog", 14]],
     imports: [],
   },
+  {
+    // A backend file claiming the same concept by name: the competition case.
+    id: "fx_sdk_routes",
+    path: "backend/src/routes/sdk.routes.js",
+    role: "router",
+    symbolNames: [["sdkAuthorizeRoute", 4, true], ["sdkTokenRoute", 16, true]],
+    imports: [],
+  },
+  {
+    // The client SDK package: a graph island (nothing imports into it), like
+    // real front-end packages. Discovery must come from concept vocabulary,
+    // not from edges or roles.
+    id: "fx_sdk_index",
+    path: "packages/src/index.ts",
+    symbolNames: [["AuthSphere", 40, true], ["initAuth", 52, true]],
+    imports: [],
+  },
+  {
+    id: "fx_sdk_api",
+    path: "packages/src/client/api.ts",
+    symbolNames: [["fetchWithAuth", 8, true]],
+    imports: [],
+  },
 ];
 
 const fxTexts = new Map<string, string>();
@@ -488,7 +525,20 @@ class FixtureDb {
       return {
         select: () => ({
           eq: () => ({
-            or: () => Promise.resolve({ data: this.edges, error: null }),
+            or: (orFilter: string) => {
+              // Emulate PostgREST's `.or("source_file_id.in.(a,b),target_file_id.in.(a,b)")`
+              // — only edges actually touching one of the listed ids come back.
+              const seedIds = new Set<string>();
+              for (const m of orFilter.matchAll(/in\.\(([^)]*)\)/g)) {
+                for (const id of (m[1] ?? "").split(",")) {
+                  if (id.trim()) seedIds.add(id.trim());
+                }
+              }
+              const filtered = this.edges.filter(
+                (edge) => seedIds.has(edge.source_file_id) || seedIds.has(edge.target_file_id),
+              );
+              return Promise.resolve({ data: filtered, error: null });
+            },
           }),
         }),
       };
@@ -562,7 +612,7 @@ const fxAuth = await fixtureAsk("How does authentication work?");
   } else {
     fail(`bcrypt discovered outside graph expansion or not at all: ${JSON.stringify(bcryptWin)}`);
   }
-  if (fxAuth.files.length <= 8 && fxAuth.totalCharacters <= 24000) {
+  if (fxAuth.files.length <= DEFAULT_BUDGET.maxFiles && fxAuth.totalCharacters <= 24000) {
     pass(`retrieval bounded: ${fxAuth.files.length} files, ${fxAuth.totalCharacters} chars, ${Math.round(fxAuth.totalCharacters / Math.max(1, fxAuth.windows.length))} chars/window`);
   } else {
     fail(`budget breach: ${fxAuth.files.length} files, ${fxAuth.totalCharacters} chars`);
@@ -602,6 +652,23 @@ const fxDatabase = await fixtureAsk("How does the database work?");
   }
 }
 
+// SDK category: must reach both sides — the backend route that claims the
+// name, and the client package island that carries the public interface.
+const fxSdk = await fixtureAsk("How does the SDK work, and how does a developer use the SDK?");
+{
+  const paths = new Set(fxSdk.files.map((f) => f.path));
+  if (paths.has("backend/src/routes/sdk.routes.js") && paths.has("packages/src/client/api.ts") && paths.has("packages/src/index.ts")) {
+    pass("sdk question reaches the named backend route and the client package island");
+  } else {
+    fail(`sdk question missed: ${[...paths].join(", ")}`);
+  }
+  if (![...paths].some((p) => UNRELATED.has(p))) {
+    pass("unrelated setup files do not appear for the sdk question");
+  } else {
+    fail(`unrelated setup files leaked in: ${[...paths].filter((p) => UNRELATED.has(p)).join(", ")}`);
+  }
+}
+
 // Concept-expansion unit checks: plain vocabulary, no repo knowledge.
 {
   const t = tokenVariants("authentication");
@@ -615,6 +682,12 @@ const fxDatabase = await fixtureAsk("How does the database work?");
     pass("identifier subtokens split camel case and acronym runs");
   } else {
     fail(`bad subtokens: ${JSON.stringify(identifierSubtokens("verifyJWT"))}`);
+  }
+  const sdkPatch = tokenVariants("sdk").map((v) => v.text);
+  if (sdkPatch[0] === "sdk" && sdkPatch.includes("client") && sdkPatch.includes("packages") && sdkPatch.includes("library")) {
+    pass("\"sdk\" expands to its generic client/package/library vocabulary");
+  } else {
+    fail(`bad sdk variants: ${JSON.stringify(sdkPatch)}`);
   }
 }
 

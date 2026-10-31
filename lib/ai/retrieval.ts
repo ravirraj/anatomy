@@ -7,13 +7,22 @@ export type Db = SupabaseClient<Database>;
 export type RetrievalBudget = {
   maxCharacters?: number;
   maxFiles?: number;
+  /**
+   * Soft cap on files from one directory in round 1. A concept that lives in
+   * a heavily-matched directory must not claim the whole budget before other
+   * matched directories get a slot; deferred files are appended in score
+   * order, so a question concentrated in one directory still fills every
+   * slot exactly as without the cap.
+   */
+  maxFilesPerDirectory?: number;
   maxWindowsPerFile?: number;
   seedLimit?: number;
 };
 
 export const DEFAULT_BUDGET: Required<RetrievalBudget> = {
-  maxCharacters: 24000,
-  maxFiles: 8,
+  maxCharacters: 28000,
+  maxFiles: 16,
+  maxFilesPerDirectory: 1,
   maxWindowsPerFile: 2,
   seedLimit: 5,
 };
@@ -58,7 +67,8 @@ const STOP_WORDS = new Set([
   "file", "files", "for", "from", "get", "has", "have", "how",
   "in", "is", "it", "its", "make", "of", "on", "or", "over",
   "show", "tell", "that", "the", "their", "there", "this", "through",
-  "to", "under", "up", "used", "what", "when", "where", "which", "who", "why",
+  "to", "under", "up", "use", "used", "uses", "using",
+  "what", "when", "where", "which", "who", "why",
   "with", "work", "works",
 ]);
 
@@ -134,6 +144,7 @@ const GLOSSARY: Record<string, string[]> = {
   cache: ["redis", "store"],
   queue: ["job", "worker", "background"],
   webhooks: ["webhook", "event"],
+  sdk: ["client", "package", "packages", "library"],
 };
 
 const ROLE_HINTS: { words: string[]; role: string }[] = [
@@ -464,6 +475,7 @@ export async function retrieveGroundedContext(
       ...pathLower.split("/").flatMap((seg) => identifierSubtokens(seg)),
     ];
     const filenameParts = new Set(identifierSubtokens(filename));
+    const matchedVariants = new Set<string>();
     let bestScore = 0;
     let matchedToken = "";
 
@@ -482,8 +494,15 @@ export async function retrieveGroundedContext(
           bestScore = score - penalty;
           matchedToken = token;
         }
+        if (score > 0) matchedVariants.add(variant);
       }
     }
+    // Corroboration: two distinct concept variants in one path (e.g. an SDK
+    // client package matching both "packages" and "client") confirm the same
+    // idea from different segments — a single segment hit alone does not.
+    // Ranks the public client surface into the same band as weaker exact
+    // matches rather than below every loosely-related support file.
+    if (bestScore > 0 && matchedVariants.size >= 2) bestScore += 14;
 
     if (bestScore > 0) {
       if (file.role) bestScore += 10;
@@ -598,6 +617,9 @@ export async function retrieveGroundedContext(
   ];
 
   const expandedWindows: TargetWindow[] = [];
+  if (process.env.RETRIEVAL_DEBUG) {
+    console.error(`roots: ${topSeedFiles.map((id) => fileMap.get(id)?.path).join("; ")}`);
+  }
   if (topSeedFiles.length > 0) {
     const { data: edgesData, error: edgesError } = await db
       .from("edges")
@@ -670,13 +692,12 @@ export async function retrieveGroundedContext(
     }
   }
   // Round 1: one window per file in best-score order.
-  const orderedForBudget: TargetWindow[] = grouped
-    ? rounds
-        .map((group) => group[0]!)
-        .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
-    : [];
+  const allBest = rounds
+    .map((group) => group[0]!)
+    .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
   // Remaining rounds: extra windows per file, interleaved by score so the
   // strongest leftovers land before weaker extras.
+  const extras: TargetWindow[] = [];
   {
     const leftovers = order.filter((w) => w !== (grouped.get(w.fileId)?.best ?? w));
     const perFile = new Map<string, TargetWindow[]>();
@@ -694,10 +715,45 @@ export async function retrieveGroundedContext(
       for (const q of queues) {
         const next = q.shift();
         if (next !== undefined) {
-          orderedForBudget.push(next);
+          extras.push(next);
           rest = true;
         }
       }
+    }
+  }
+
+  // Per-directory breadth rule, applied greedily in score order: the highest
+  // remaining candidate wins the next slot unless its directory already holds
+  // its round-1 share. A heavily-matched directory cannot claim the budget
+  // before other matched directories get in (a cross-file question wants
+  // spread over the whole feature — the server side AND the client package
+  // side), while a question concentrated in one directory fills every slot
+  // with the same files the plain score order would pick. Skipped candidates
+  // resume score order right after.
+  const orderedForBudget: TargetWindow[] = [];
+  const dirCounts = new Map<string, number>();
+  const available = [...allBest];
+  while (available.length > 0) {
+    let picked = -1;
+    for (let i = 0; i < available.length; i++) {
+      const slash = available[i].path.lastIndexOf("/");
+      const dir = slash === -1 ? "" : available[i].path.slice(0, slash);
+      if ((dirCounts.get(dir) ?? 0) < config.maxFilesPerDirectory) {
+        picked = i;
+        break;
+      }
+    }
+    if (picked === -1) break;
+    const [win] = available.splice(picked, 1);
+    const slash = win.path.lastIndexOf("/");
+    const dir = slash === -1 ? "" : win.path.slice(0, slash);
+    dirCounts.set(dir, (dirCounts.get(dir) ?? 0) + 1);
+    orderedForBudget.push(win);
+  }
+  orderedForBudget.push(...available, ...extras);
+  if (process.env.RETRIEVAL_DEBUG) {
+    for (const [i, win] of orderedForBudget.slice(0, Number(process.env.RETRIEVAL_DEBUG) || 30).entries()) {
+      console.error(`budget[${i}] ${win.score} ${win.path} ${win.startLine}-${win.endLine} :: ${win.reason.slice(0, 160)}`);
     }
   }
 

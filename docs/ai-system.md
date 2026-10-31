@@ -344,16 +344,22 @@ Concept questions failed: *"How does authentication work?"* tokenized to
 `jwt*` — nothing matched, and the entry-point fallback answered from
 bootstrap files at scores above every real match. Seed discovery now expands
 each query token into concept variants (light suffix stemming plus one small
-generic engineering glossary — `db↔database`, `auth→login/jwt`, `error→exception`,
-`upload→multipart` — vocabulary, not repository or question knowledge),
-matches bidirectionally against identifier subtokens (`verifyJWT` →
-`verify`+`jwt`) and path segments, seeds through the files' indexed
-architectural roles, and budgets windows breadth-first under a strict
-character budget so the strongest window of every related file lands before
-any file claims a second. Fallback entry seeds are re-scored below all
-concept evidence. A full auth-flow fixture with errors/uploads/database
-question categories lives in `scripts/test-retrieval.ts`; the measured
-authsphere case is recorded in [TODO.md](../TODO.md).
+generic engineering glossary — `db↔database`, `auth→login/jwt`,
+`error→exception`, `upload→multipart`, `sdk→client/package/library` —
+vocabulary, not repository or question knowledge), matches bidirectionally
+against identifier subtokens (`verifyJWT` → `verify`+`jwt`) and path segments,
+corroborates paths that echo *two* variants of the same concept, seeds through
+the files' indexed architectural roles, and budgets windows breadth-first: a
+greedy per-directory pass gives every matched area a slot before one crowded
+directory takes two (round-cap 1 file, with skipped candidates resuming score
+order), under a strict character budget (28k chars, 16 files, 2 windows per
+file). Trivial verbs (`use`, `used`, `uses`, `using`) are stop-listed after
+they were observed flooding hook-heavy codebases at score 100. Fallback entry
+seeds are re-scored below all concept evidence. A full auth-flow fixture with
+errors/uploads/database/**sdk** question categories — including an SDK client
+package that the dependency graph cannot reach, as in real front-end
+packages — lives in `scripts/test-retrieval.ts`; the measured authsphere
+cases are recorded in [TODO.md](../TODO.md).
 
 ### 9.1 The question it answers
 
@@ -429,7 +435,7 @@ correct answer when the repository does not contain the answer.
 | Symbol extraction | AST extraction of symbols, routes, and declarations | Implemented (`lib/parser/symbols.ts`) |
 | Seed discovery & graph expansion | Multi-index ranking and 1-hop reach expansion | Implemented (`lib/ai/retrieval.ts`) |
 | Hash-bound citation verifier | Verifies paths, line ranges, and SHA-256 content hashes | Implemented (`lib/ai/citations.ts`) |
-| Traversal depth & token budget | Bounded 24k char, 8-file context assembly, breadth-first windows | Implemented (`lib/ai/retrieval.ts`) |
+| Traversal depth & token budget | Bounded 28k char, 16-file context assembly, breadth-first per-directory windows | Implemented (`lib/ai/retrieval.ts`) |
 | Workspace Q&A pane | Interactive question UI and map node highlight | Implemented (`components/qa-panel.tsx`) |
 | Live integration test suite | Evaluates retrieval and citation validity | Implemented (`scripts/test-qa-integration.ts`) |
 | Live retrieval measurement | End-to-end grounded answer for one real analysis | Implemented (`scripts/measure-authsphere.ts`) |

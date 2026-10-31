@@ -103,6 +103,7 @@ Grounding and Anti-Hallucination Rules:
    - Getting Started & Contributor Starting Points
    Explicitly cite the provided entry point snippets for concrete claims, and note where evidence is incomplete rather than fabricating details.
 6. Insufficient Evidence: If the provided snippets do not contain enough evidence to answer a question with certainty, state clearly what is known from the snippets and what is missing. Never fabricate references.
+7. Usage & Integration Questions: When the question asks how a developer uses or integrates something in this repository, teach the public interface in the order a new user would apply it — initialization/config first, then the main flow, then helpers — naming the exported functions, components, routes and options exactly as the snippets define them. Include short fenced-code usage examples assembled strictly from the snippet lines. If part of the interface is not in the snippets, say what is unknown there rather than guessing; the snippets may only show one side (e.g. the server side of an SDK).
 
 ${FORMAT}`;
 
