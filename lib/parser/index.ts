@@ -1,7 +1,7 @@
 import { statSync } from "node:fs";
 import path from "node:path";
 import { Project, ts } from "ts-morph";
-import { extractExports, extractImports, extractSymbols } from "./extract.ts";
+import { extractCalls, extractExports, extractImportBindings, extractImports, extractSymbols } from "./extract.ts";
 import { dedupeEdges, fanCounts } from "./graph.ts";
 import { createResolver } from "./resolve.ts";
 import {
@@ -79,7 +79,7 @@ export function parseSelection({ root, walk }: Selection): ParseResult {
 
   const coverage: Coverage["imports"] = {
     total: emptyCounts(),
-    byKind: { import: emptyCounts(), "re-export": emptyCounts(), "dynamic-import": emptyCounts(), require: emptyCounts() },
+    byKind: { import: emptyCounts(), "re-export": emptyCounts(), "dynamic-import": emptyCounts(), require: emptyCounts(), call: emptyCounts() },
     external: { package: 0, builtin: 0, "outside-root": 0 },
     excluded: {},
     unresolvedByReason: {},
@@ -88,10 +88,23 @@ export function parseSelection({ root, walk }: Selection): ParseResult {
   const rawEdges: Edge[] = [];
   const exportsOf = new Map<string, string[]>();
   const symbolsOf = new Map<string, Omit<ParsedSymbol, "file">[]>();
+  // local binding name -> { target file, imported name } for internal imports
+  const importMaps = new Map<string, Map<string, { target: string; imported: string }>>();
 
   for (const { candidate, sourceFile } of parsed) {
     exportsOf.set(candidate.path, extractExports(sourceFile));
     symbolsOf.set(candidate.path, extractSymbols(sourceFile));
+
+    // Resolve imported binding names to their target files (for call resolution).
+    const imap = new Map<string, { target: string; imported: string }>();
+    for (const b of extractImportBindings(sourceFile)) {
+      const outcome = resolver.resolve(candidate.absolutePath, b.specifier, "import");
+      if (outcome.status === "internal") {
+        imap.set(b.local, { target: outcome.target, imported: b.imported });
+      }
+    }
+    importMaps.set(candidate.path, imap);
+
     for (const found of extractImports(sourceFile)) {
       const specifier = found.literal ? found.specifier : found.expression;
       const outcome: ImportStatus = found.literal
@@ -135,6 +148,108 @@ export function parseSelection({ root, walk }: Selection): ParseResult {
             detail: outcome.detail,
           });
           break;
+      }
+    }
+  }
+
+  // ---- Call relationships (Phase 3) ----
+  const callCoverage: { total: number; resolved: number; unresolved: number; unresolvedCalls: { from: string; callee: string; line: number; reason: string }[] } = {
+    total: 0,
+    resolved: 0,
+    unresolved: 0,
+    unresolvedCalls: [],
+  };
+
+  for (const { candidate, sourceFile } of parsed) {
+    const callSites = extractCalls(sourceFile);
+    const symbols = symbolsOf.get(candidate.path) ?? [];
+    const imap = importMaps.get(candidate.path) ?? new Map();
+    // Helper: find the enclosing symbol for a line.
+    const enclosingSymbol = (line: number): (typeof symbols)[number] | undefined =>
+      symbols.find((s) => s.line <= line && (s.endLine ?? s.line) >= line);
+
+    for (const site of callSites) {
+      callCoverage.total++;
+      const callee = site.callee.trim();
+      // Resolve callee to a target file.
+      let targetFile: string | null = null;
+      let resolvedSymbolName: string | null = null;
+
+      // Constructor / simple identifier / member expression base.
+      const isMember = callee.includes(".");
+      const baseName = isMember ? callee.split(".")[0]! : callee;
+      const memberName = isMember ? callee.split(".").slice(1).join(".") : null;
+
+      // 1. Local symbol in the same file.
+      if (!isMember && symbols.some((s) => s.name === baseName)) {
+        targetFile = candidate.path;
+        resolvedSymbolName = baseName;
+      }
+
+      // 2. Imported binding.
+      if (!targetFile) {
+        const imp = imap.get(baseName);
+        if (imp) {
+          targetFile = imp.target;
+          // Determine the exported name in the target.
+          const targetExports = exportsOf.get(targetFile as string) ?? [];
+          if (memberName) {
+            if (targetExports.includes(memberName)) resolvedSymbolName = memberName;
+            else resolvedSymbolName = memberName; // best-effort
+          } else {
+            const importedName = imp.imported;
+            resolvedSymbolName = importedName === "default" ? "default" : importedName;
+            // If target doesn't export it, mark unresolved.
+            if (importedName !== "*" && importedName !== "default" && !targetExports.includes(importedName)) {
+              targetFile = null;
+            }
+          }
+        }
+      }
+
+      // 3. Namespace import member: ns.method()
+      if (!targetFile && isMember) {
+        const imp = imap.get(baseName);
+        if (imp && imp.imported === "*") {
+          targetFile = imp.target;
+          const targetExports = exportsOf.get(targetFile as string) ?? [];
+          if (memberName && targetExports.includes(memberName)) {
+            resolvedSymbolName = memberName;
+          } else if (memberName) {
+            resolvedSymbolName = memberName;
+          } else {
+            targetFile = null;
+          }
+        }
+      }
+
+      if (targetFile && targetFile !== candidate.path) {
+        // cross-file: ensure target exists in parsed files
+        if (!exportsOf.has(targetFile as string)) targetFile = null;
+      }
+
+      if (targetFile) {
+        callCoverage.resolved++;
+        // Only cross-file calls become graph edges; intra-file calls are
+        // recorded in coverage but do not create a file-level edge.
+        if (targetFile !== candidate.path) {
+          rawEdges.push({
+            source: candidate.path,
+            target: targetFile,
+            kind: "call",
+            typeOnly: false,
+            specifier: callee,
+            line: site.line,
+          });
+        }
+      } else {
+        callCoverage.unresolved++;
+        callCoverage.unresolvedCalls.push({
+          from: candidate.path,
+          callee,
+          line: site.line,
+          reason: "unresolved-call",
+        });
       }
     }
   }
@@ -183,6 +298,7 @@ export function parseSelection({ root, walk }: Selection): ParseResult {
       },
       imports: coverage,
       routes: { omitted: conventions.omitted, withheld: conventions.withheld },
+      calls: callCoverage,
     },
     configs: resolver.configs(),
   };

@@ -2,7 +2,7 @@ import type { Edge } from "./types.ts";
 
 // Pure functions over a file list and an edge list. No I/O, nothing to mock.
 
-/** One edge per source→target→kind. It stays type-only only if every occurrence was. */
+/** One edge per source+target+kind. It stays type-only only if every occurrence was. */
 export function dedupeEdges(edges: readonly Edge[]): Edge[] {
   const byKey = new Map<string, Edge>();
   for (const edge of edges) {
@@ -18,7 +18,7 @@ export function dedupeEdges(edges: readonly Edge[]): Edge[] {
 
 /**
  * Fan-in and fan-out count distinct files, so importing and re-exporting the
- * same file counts once.
+ * same file counts once. Self-edges (intra-file calls) are excluded.
  */
 export function fanCounts(paths: readonly string[], edges: readonly Edge[]): Map<string, { fanIn: number; fanOut: number }> {
   const incoming = new Map<string, Set<string>>();
@@ -28,9 +28,10 @@ export function fanCounts(paths: readonly string[], edges: readonly Edge[]): Map
     outgoing.set(p, new Set());
   }
   for (const edge of dedupeEdges(edges)) {
+    if (edge.source === edge.target) continue;
     const out = outgoing.get(edge.source);
     const into = incoming.get(edge.target);
-    if (!out || !into) throw new Error(`Edge ${edge.source} → ${edge.target} names a file that isn't in the list`);
+    if (!out || !into) throw new Error(`Edge ${edge.source} -> ${edge.target} names a file that isn't in the list`);
     out.add(edge.target);
     into.add(edge.source);
   }

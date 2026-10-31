@@ -85,10 +85,26 @@
     {
       "source": "app/api/users/[id]/route.ts",
       "target": "lib/store.ts",
+      "kind": "call",
+      "typeOnly": false,
+      "specifier": "user",
+      "line": 4
+    },
+    {
+      "source": "app/api/users/[id]/route.ts",
+      "target": "lib/store.ts",
       "kind": "import",
       "typeOnly": false,
       "specifier": "../../../../lib/store",
       "line": 1
+    },
+    {
+      "source": "app/api/users/route.ts",
+      "target": "lib/store.ts",
+      "kind": "call",
+      "typeOnly": false,
+      "specifier": "allUsers",
+      "line": 4
     },
     {
       "source": "app/api/users/route.ts",
@@ -101,10 +117,26 @@
     {
       "source": "app/page.tsx",
       "target": "lib/store.ts",
+      "kind": "call",
+      "typeOnly": false,
+      "specifier": "allUsers",
+      "line": 4
+    },
+    {
+      "source": "app/page.tsx",
+      "target": "lib/store.ts",
       "kind": "import",
       "typeOnly": false,
       "specifier": "../lib/store",
       "line": 1
+    },
+    {
+      "source": "lib/store.ts",
+      "target": "lib/extra.ts",
+      "kind": "call",
+      "typeOnly": false,
+      "specifier": "fanout",
+      "line": 6
     },
     {
       "source": "lib/store.ts",
@@ -303,6 +335,13 @@
           "external": 0,
           "excluded": 0,
           "unresolved": 0
+        },
+        "call": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
         }
       },
       "external": {
@@ -317,6 +356,49 @@
     "routes": {
       "omitted": [],
       "withheld": []
+    },
+    "calls": {
+      "total": 10,
+      "resolved": 4,
+      "unresolved": 6,
+      "unresolvedCalls": [
+        {
+          "from": "app/api/users/[id]/route.ts",
+          "callee": "Response.json",
+          "line": 4,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "app/api/users/[id]/route.ts",
+          "callee": "Response",
+          "line": 8,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "app/api/users/route.ts",
+          "callee": "Response.json",
+          "line": 4,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "app/page.tsx",
+          "callee": "allUsers().join",
+          "line": 4,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "lib/extra.ts",
+          "callee": "names.map",
+          "line": 2,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "lib/extra.ts",
+          "callee": "n.toUpperCase",
+          "line": 2,
+          "reason": "unresolved-call"
+        }
+      ]
     }
   },
   "configs": []

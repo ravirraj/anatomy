@@ -69,6 +69,14 @@
     {
       "source": "src/main.ts",
       "target": "lib/format.ts",
+      "kind": "call",
+      "typeOnly": false,
+      "specifier": "formatName",
+      "line": 6
+    },
+    {
+      "source": "src/main.ts",
+      "target": "lib/format.ts",
       "kind": "import",
       "typeOnly": false,
       "specifier": "lib/format",
@@ -188,6 +196,13 @@
           "external": 0,
           "excluded": 0,
           "unresolved": 0
+        },
+        "call": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
         }
       },
       "external": {
@@ -213,6 +228,25 @@
     "routes": {
       "omitted": [],
       "withheld": []
+    },
+    "calls": {
+      "total": 3,
+      "resolved": 1,
+      "unresolved": 2,
+      "unresolvedCalls": [
+        {
+          "from": "src/pkg.ts",
+          "callee": "level",
+          "line": 6,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "src/wrong.ts",
+          "callee": "gone",
+          "line": 6,
+          "reason": "unresolved-call"
+        }
+      ]
     }
   },
   "configs": [

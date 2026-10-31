@@ -69,6 +69,14 @@
     {
       "source": "packages/calc/double.ts",
       "target": "packages/calc/shared.ts",
+      "kind": "call",
+      "typeOnly": false,
+      "specifier": "shared",
+      "line": 5
+    },
+    {
+      "source": "packages/calc/double.ts",
+      "target": "packages/calc/shared.ts",
       "kind": "import",
       "typeOnly": false,
       "specifier": "./shared",
@@ -185,6 +193,13 @@
           "external": 0,
           "excluded": 0,
           "unresolved": 0
+        },
+        "call": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
         }
       },
       "external": {
@@ -210,6 +225,19 @@
     "routes": {
       "omitted": [],
       "withheld": []
+    },
+    "calls": {
+      "total": 2,
+      "resolved": 1,
+      "unresolved": 1,
+      "unresolvedCalls": [
+        {
+          "from": "packages/calc/main.ts",
+          "callee": "area",
+          "line": 9,
+          "reason": "unresolved-call"
+        }
+      ]
     }
   },
   "configs": []

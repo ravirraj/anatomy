@@ -161,6 +161,7 @@ function coverage(value: unknown, at: string): Coverage {
   const byKind = object(imports.byKind, `${at}.imports.byKind`);
   const external = object(imports.external, `${at}.imports.external`);
   const routes = object(o.routes, `${at}.routes`);
+  const calls = object(o.calls, `${at}.calls`);
   return {
     files: {
       found: count(files.found, `${at}.files.found`),
@@ -176,6 +177,7 @@ function coverage(value: unknown, at: string): Coverage {
         "re-export": statusCounts(byKind["re-export"], `${at}.imports.byKind.re-export`),
         "dynamic-import": statusCounts(byKind["dynamic-import"], `${at}.imports.byKind.dynamic-import`),
         require: statusCounts(byKind.require, `${at}.imports.byKind.require`),
+        call: statusCounts(byKind.call, `${at}.imports.byKind.call`),
       },
       external: {
         package: count(external.package, `${at}.imports.external.package`),
@@ -189,6 +191,19 @@ function coverage(value: unknown, at: string): Coverage {
     routes: {
       omitted: array(routes.omitted, `${at}.routes.omitted`, omittedRoute),
       withheld: array(routes.withheld, `${at}.routes.withheld`, withheldRoutes),
+    },
+    calls: {
+      total: count(calls.total, `${at}.calls.total`),
+      resolved: count(calls.resolved, `${at}.calls.resolved`),
+      unresolved: count(calls.unresolved, `${at}.calls.unresolved`),
+      unresolvedCalls: array(calls.unresolvedCalls, `${at}.calls.unresolvedCalls`, (v, p) => {
+        const o = object(v, p);
+        const from = string(o.from, `${p}.from`);
+        const callee = string(o.callee, `${p}.callee`);
+        const line = count(o.line, `${p}.line`);
+        const reason = string(o.reason, `${p}.reason`);
+        return { from, callee, line, reason };
+      }),
     },
   };
 }

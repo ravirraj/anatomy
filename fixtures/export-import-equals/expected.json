@@ -171,6 +171,13 @@
           "external": 0,
           "excluded": 0,
           "unresolved": 0
+        },
+        "call": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
         }
       },
       "external": {
@@ -185,6 +192,19 @@
     "routes": {
       "omitted": [],
       "withheld": []
+    },
+    "calls": {
+      "total": 1,
+      "resolved": 0,
+      "unresolved": 1,
+      "unresolvedCalls": [
+        {
+          "from": "app/main.ts",
+          "callee": "Connection.open",
+          "line": 7,
+          "reason": "unresolved-call"
+        }
+      ]
     }
   },
   "configs": []

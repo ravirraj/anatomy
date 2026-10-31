@@ -5,9 +5,9 @@ import type { Role } from "../roles.ts";
 
 export const SCHEMA_VERSION = 6;
 
-export type EdgeKind = "import" | "re-export" | "dynamic-import" | "require";
+export type EdgeKind = "import" | "re-export" | "dynamic-import" | "require" | "call";
 
-export const EDGE_KINDS: readonly EdgeKind[] = ["import", "re-export", "dynamic-import", "require"];
+export const EDGE_KINDS: readonly EdgeKind[] = ["import", "re-export", "dynamic-import", "require", "call"];
 
 export type ParsedFile = {
   /** Repository-relative, forward slashes. */
@@ -206,6 +206,13 @@ export type Coverage = {
     omitted: OmittedRoute[];
     /** Projects where something sets every pattern at runtime, so none of their routes is listed. */
     withheld: WithheldRoutes[];
+  };
+  calls: {
+    total: number;
+    resolved: number;
+    unresolved: number;
+    /** Every unresolved call site. */
+    unresolvedCalls: { from: string; callee: string; line: number; reason: string }[];
   };
 };
 

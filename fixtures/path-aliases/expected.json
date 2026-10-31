@@ -55,6 +55,14 @@
     {
       "source": "src/app.ts",
       "target": "src/util/format.ts",
+      "kind": "call",
+      "typeOnly": false,
+      "specifier": "formatPrice",
+      "line": 4
+    },
+    {
+      "source": "src/app.ts",
+      "target": "src/util/format.ts",
       "kind": "import",
       "typeOnly": false,
       "specifier": "@/util/format",
@@ -154,6 +162,13 @@
           "external": 0,
           "excluded": 0,
           "unresolved": 0
+        },
+        "call": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
         }
       },
       "external": {
@@ -179,6 +194,25 @@
     "routes": {
       "omitted": [],
       "withheld": []
+    },
+    "calls": {
+      "total": 3,
+      "resolved": 1,
+      "unresolved": 2,
+      "unresolvedCalls": [
+        {
+          "from": "src/broken.ts",
+          "callee": "gone",
+          "line": 5,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "src/util/format.ts",
+          "callee": "(cents / 100).toFixed",
+          "line": 2,
+          "reason": "unresolved-call"
+        }
+      ]
     }
   },
   "configs": [

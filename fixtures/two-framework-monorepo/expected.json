@@ -193,6 +193,13 @@
           "external": 0,
           "excluded": 0,
           "unresolved": 0
+        },
+        "call": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
         }
       },
       "external": {
@@ -207,6 +214,43 @@
     "routes": {
       "omitted": [],
       "withheld": []
+    },
+    "calls": {
+      "total": 5,
+      "resolved": 0,
+      "unresolved": 5,
+      "unresolvedCalls": [
+        {
+          "from": "packages/api/src/users/users.controller.ts",
+          "callee": "Controller",
+          "line": 4,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "packages/api/src/users/users.controller.ts",
+          "callee": "Get",
+          "line": 8,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "packages/api/src/users/users.controller.ts",
+          "callee": "this.users.all",
+          "line": 10,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "packages/api/src/users/users.controller.ts",
+          "callee": "Post",
+          "line": 13,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "packages/api/src/users/users.service.ts",
+          "callee": "Injectable",
+          "line": 3,
+          "reason": "unresolved-call"
+        }
+      ]
     }
   },
   "configs": []

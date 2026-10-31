@@ -144,6 +144,13 @@
           "external": 0,
           "excluded": 0,
           "unresolved": 0
+        },
+        "call": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
         }
       },
       "external": {
@@ -169,6 +176,25 @@
     "routes": {
       "omitted": [],
       "withheld": []
+    },
+    "calls": {
+      "total": 2,
+      "resolved": 0,
+      "unresolved": 2,
+      "unresolvedCalls": [
+        {
+          "from": "index.ts",
+          "callee": "direct.go",
+          "line": 6,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "index.ts",
+          "callee": "computed.roll",
+          "line": 6,
+          "reason": "unresolved-call"
+        }
+      ]
     }
   },
   "configs": []

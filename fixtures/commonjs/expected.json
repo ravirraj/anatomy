@@ -114,6 +114,13 @@
           "external": 1,
           "excluded": 0,
           "unresolved": 0
+        },
+        "call": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
         }
       },
       "external": {
@@ -128,6 +135,12 @@
     "routes": {
       "omitted": [],
       "withheld": []
+    },
+    "calls": {
+      "total": 1,
+      "resolved": 1,
+      "unresolved": 0,
+      "unresolvedCalls": []
     }
   },
   "configs": []

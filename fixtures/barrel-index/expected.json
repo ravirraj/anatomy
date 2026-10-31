@@ -108,6 +108,14 @@
     {
       "source": "src/main.ts",
       "target": "src/index.ts",
+      "kind": "call",
+      "typeOnly": false,
+      "specifier": "three",
+      "line": 5
+    },
+    {
+      "source": "src/main.ts",
+      "target": "src/index.ts",
       "kind": "import",
       "typeOnly": false,
       "specifier": "./index",
@@ -212,6 +220,13 @@
           "external": 0,
           "excluded": 0,
           "unresolved": 0
+        },
+        "call": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
         }
       },
       "external": {
@@ -226,6 +241,19 @@
     "routes": {
       "omitted": [],
       "withheld": []
+    },
+    "calls": {
+      "total": 2,
+      "resolved": 1,
+      "unresolved": 1,
+      "unresolvedCalls": [
+        {
+          "from": "src/main.ts",
+          "callee": "area",
+          "line": 5,
+          "reason": "unresolved-call"
+        }
+      ]
     }
   },
   "configs": []

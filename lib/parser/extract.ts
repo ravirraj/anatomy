@@ -85,6 +85,46 @@ export const WHOLE_MODULE = "module.exports";
  * the top level, and CommonJS assignments to module.exports or exports
  * wherever they appear. Source order, each name once.
  */
+export type RawImportBinding = {
+  /** Local name the module is bound to in this file. */
+  local: string;
+  /** Name exported by the source module ("default" for default imports). */
+  imported: string;
+  /** Module specifier as written. */
+  specifier: string;
+  kind: "named" | "default" | "namespace";
+  line: number;
+};
+
+/**
+ * The names a file imports from other modules, as written. Resolution to a
+ * target file happens in the parser (resolve.ts), so this stays pure syntax.
+ */
+export function extractImportBindings(sourceFile: SourceFile): RawImportBinding[] {
+  const found: RawImportBinding[] = [];
+  for (const statement of sourceFile.getStatements()) {
+    if (!Node.isImportDeclaration(statement)) continue;
+    const specifier = statement.getModuleSpecifierValue();
+    const clause = statement.getImportClause();
+    if (!clause) continue;
+    const line = statement.getStartLineNumber();
+    const defaultImport = clause.getDefaultImport();
+    if (defaultImport) {
+      found.push({ local: defaultImport.getText(), imported: "default", specifier, kind: "default", line });
+    }
+    const namespaceImport = clause.getNamespaceImport();
+    if (namespaceImport) {
+      found.push({ local: namespaceImport.getText(), imported: "*", specifier, kind: "namespace", line });
+    }
+    for (const named of clause.getNamedImports()) {
+      const imported = named.getNameNode().getText();
+      const local = named.getAliasNode()?.getText() ?? imported;
+      found.push({ local, imported, specifier, kind: "named", line });
+    }
+  }
+  return found;
+}
+
 export function extractExports(sourceFile: SourceFile): string[] {
   const found: { name: string; at: number }[] = [];
   const add = (name: string, at: Node) => found.push({ name, at: at.getStart() });
@@ -307,6 +347,43 @@ function isModuleExports(node: Node): boolean {
 function literalText(node: Node | undefined): string | null {
   if (node && (Node.isStringLiteral(node) || Node.isNoSubstitutionTemplateLiteral(node))) return node.getLiteralValue();
   return null;
+}
+
+export type RawCall = {
+  /** Callee expression text as written, e.g. "foo", "obj.method", "new Bar". */
+  callee: string;
+  line: number;
+  constructor: boolean;
+};
+
+/**
+ * Call sites in a file: every CallExpression and NewExpression, except the
+ * import()/require() calls already captured by extractImports. Nested calls
+ * are recorded individually. The enclosing caller symbol and the target file
+ * are resolved by the parser afterwards.
+ */
+export function extractCalls(sourceFile: SourceFile): RawCall[] {
+  const found: RawCall[] = [];
+  const seen = new Set<string>();
+  const add = (callee: string, line: number, constructor: boolean) => {
+    const key = `${callee}\\0${line}\\0${constructor}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    found.push({ callee, line, constructor });
+  };
+
+  for (const ne of sourceFile.getDescendantsOfKind(SyntaxKind.NewExpression)) {
+    add(ne.getExpression().getText(), ne.getStartLineNumber(), true);
+  }
+  for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+    const callee = call.getExpression();
+    if (callee.getKind() === SyntaxKind.ImportKeyword) continue;
+    if (Node.isIdentifier(callee) && callee.getText() === "require") continue;
+    add(callee.getText(), call.getStartLineNumber(), false);
+  }
+
+  found.sort((a, b) => a.line - b.line);
+  return found;
 }
 
 function isTypeOnlyClause(clause: ImportClause): boolean {
