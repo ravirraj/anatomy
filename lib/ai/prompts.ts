@@ -122,6 +122,8 @@ Grounding and Anti-Hallucination Rules:
    - Unknown layers: state clearly that the retrieved evidence does not establish them and that this is not proof the feature is absent - other or unretrieved files may contain it. Never say a feature does not exist or is missing solely because a layer is Unknown.
    - Never upgrade a Partial or Unknown layer to a confident claim, and never downgrade a Verified layer to a guess.
 
+9. SDK and Client/Server Separation: When the evidence spans both a client-facing package (paths under packages/, client/, sdk/, or a published module) and server/backend code, distinguish the two explicitly: describe the client integration journey (installation, configuration, initialization, authentication, token handling, protected API usage) separately from the server/management surface, and state which side each cited file belongs to. Assemble the journey only from verified snippets; for any step (install commands, exports, init parameters, available methods) not present in the snippets, state that it is not established by the retrieved evidence rather than inventing it. Never present a management/server endpoint as a client SDK method, or vice versa.
+
 ${FORMAT}`;
 
 export function explainFileMessage(input: FileInput, source: string): string {
@@ -197,10 +199,13 @@ export function questionMessage(input: QuestionInput): string {
   ];
   if (input.coverage) {
     const c = input.coverage;
+    const verified = [...c.verified].sort();
+    const partial = [...c.partial].sort();
+    const unknown = [...c.unknown].sort();
     lines.push("Evidence coverage of the final retrieved package (a guide to confidence, not proof of existence):");
-    lines.push(`- Verified layers (source text establishes them): ${c.verified.length ? c.verified.join(", ") : "none"}`);
-    lines.push(`- Partial layers (affiliated files exist, but the retrieved text does not establish them): ${c.partial.length ? c.partial.join(", ") : "none"}`);
-    lines.push(`- Unknown layers (no affiliated evidence was retrieved; NOT proof the feature is absent): ${c.unknown.length ? c.unknown.join(", ") : "none"}`);
+    lines.push(`- Verified layers (source text establishes them): ${verified.length ? verified.join(", ") : "none"}`);
+    lines.push(`- Partial layers (affiliated files exist, but the retrieved text does not establish them): ${partial.length ? partial.join(", ") : "none"}`);
+    lines.push(`- Unknown layers (no affiliated evidence was retrieved; NOT proof the feature is absent): ${unknown.length ? unknown.join(", ") : "none"}`);
     lines.push(c.unknownNote);
     lines.push("");
   }

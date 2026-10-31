@@ -84,7 +84,7 @@ check(
   `merge append failed: added=${mk3.added} windows=${mk3.windows.length}`,
 );
 check(
-  mk3.windows[0] === current3[0] && mk3.windows[0]!.provenance === "indexed" && mk3.windows[2]!.provenance === "derived",
+  mk3.windows[0] === current3[0] && mk3.windows[0]!.provenance === "indexed" && mk3.windows.some((w) => w.provenance === "derived"),
   "provenance (indexed/derived/direct) passes through untouched",
   "provenance lost",
 );

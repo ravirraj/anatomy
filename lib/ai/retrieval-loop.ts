@@ -31,6 +31,7 @@ import {
 import {
   DEFAULT_BUDGET,
   retrieveGroundedContext,
+  supportFilePenalty,
   type Db,
   type RetrievalBudget,
   type RetrievalResult,
@@ -73,6 +74,8 @@ export type IterationPass = {
   categories: string[];
   addedWindows: number;
   addedFiles: number;
+  /** Existing files displaced by strictly stronger targeted evidence. */
+  replacedFiles: number;
   ms: number;
 };
 
@@ -137,16 +140,24 @@ export function mergeIterationWindows(
   current: { windows: RetrievedWindow[]; totalCharacters: number },
   candidates: RetrievedWindow[],
   limits: { maxFiles: number; maxWindowsPerFile: number; maxCharacters: number; scoreFloor: number },
+  options?: { allowReplacement?: boolean; protectedFiles?: Set<string>; replacementMargin?: number },
 ): {
   windows: RetrievedWindow[];
   totalCharacters: number;
   added: number;
   addedFiles: number;
+  replacedFiles: number;
   rejectedBudget: number;
   candidatesConsidered: number;
 } {
   const windows = [...current.windows];
   let totalCharacters = current.totalCharacters;
+  // Fold stronger candidates first so the budget (char/file caps) is spent
+  // on the most relevant evidence; sort by effective score (support files
+  // demoted) to mirror the base pipeline's prioritization.
+  const sortedCandidates = [...candidates].sort(
+    (a, b) => (b.score - supportFilePenalty(b.path)) - (a.score - supportFilePenalty(a.path)) || a.path.localeCompare(b.path),
+  );
   const perFile = new Map<string, number>();
   const files = new Set<string>();
 
@@ -157,10 +168,13 @@ export function mergeIterationWindows(
 
   let added = 0;
   let addedFiles = 0;
+  let replacedFiles = 0;
   let rejectedBudget = 0;
   let candidatesConsidered = 0;
 
-  for (const cand of candidates) {
+  const margin = options?.replacementMargin ?? 10;
+
+  for (const cand of sortedCandidates) {
     candidatesConsidered += 1;
     const existing = windows.filter((w) => w.fileId === cand.fileId);
     const exactDuplicate = existing.some(
@@ -174,9 +188,45 @@ export function mergeIterationWindows(
     }
     const isNewFile = !files.has(cand.fileId);
     if (isNewFile) {
-      if (files.size >= limits.maxFiles || cand.score < limits.scoreFloor) {
+      if (cand.score < limits.scoreFloor) {
         rejectedBudget += 1;
-        continue; // file budget full, or weak relationship-only padding
+        continue; // weak relationship-only padding
+      }
+      if (files.size >= limits.maxFiles) {
+        // File budget full. Displace only when explicitly allowed and only
+        // the weakest, non-protected existing file that is strictly weaker
+        // than the candidate: stronger direct evidence is never displaced,
+        // and a file that is the sole source-text contributor to a currently
+        // verified category is protected.
+        let victim: string | null = null;
+        let victimScore = Infinity;
+        if (options?.allowReplacement) {
+          const fileBest = new Map<string, number>();
+          for (const w of windows) {
+            const cur = fileBest.get(w.fileId) ?? 0;
+            if (w.score > cur) fileBest.set(w.fileId, w.score);
+          }
+          for (const [fid, best] of fileBest) {
+            if (options.protectedFiles?.has(fid)) continue;
+            if (best >= cand.score - margin) continue;
+            if (best < victimScore || (best === victimScore && (victim === null || fid < victim))) {
+              victim = fid;
+              victimScore = best;
+            }
+          }
+        }
+        if (victim === null) {
+          rejectedBudget += 1;
+          continue; // file budget full, no eligible displacement
+        }
+        // Remove the displaced file's windows and free its slot/chars.
+        for (const w of windows.filter((w) => w.fileId === victim)) totalCharacters -= w.text.length;
+        const remaining = windows.filter((w) => w.fileId !== victim);
+        windows.length = 0;
+        windows.push(...remaining);
+        files.delete(victim);
+        perFile.delete(victim);
+        replacedFiles += 1;
       }
     }
     if (totalCharacters + cand.text.length > limits.maxCharacters) {
@@ -193,7 +243,7 @@ export function mergeIterationWindows(
     added += 1;
   }
 
-  return { windows, totalCharacters, added, addedFiles, rejectedBudget, candidatesConsidered };
+  return { windows, totalCharacters, added, addedFiles, replacedFiles, rejectedBudget, candidatesConsidered };
 }
 
 /**
@@ -296,8 +346,29 @@ export async function retrieveWithCoverageLoop(
       }
     }
 
-    // Append-only merge: dedupe, caps, char/file budget, provenance intact.
-    const merged = mergeIterationWindows({ windows, totalCharacters }, candidates, limits);
+    // Protected files: those contributing source-text to a currently verified
+    // category. They may never be displaced by targeted evidence.
+    const protectedFiles = new Set<string>();
+    for (const concept of coverage.concepts) {
+      for (const cat of concept.categories) {
+        if (cat.status !== "found") continue;
+        for (const ev of cat.evidence) {
+          if (ev.signal !== "source-text") continue;
+          const f = buildResult().files.find((x) => x.path === ev.path);
+          if (f) protectedFiles.add(f.fileId);
+        }
+      }
+    }
+    // Merge: dedupe, caps, char/file budget, provenance intact. Displacement
+    // is allowed only for strictly weaker, non-protected files, so stronger
+    // direct evidence is never displaced (Phase 6 rule) while a saturated
+    // budget can still admit strictly stronger targeted evidence.
+    const merged = mergeIterationWindows(
+      { windows, totalCharacters },
+      candidates,
+      limits,
+      { allowReplacement: true, protectedFiles, replacementMargin: 10 },
+    );
 
     passes.push({
       pass,
@@ -305,6 +376,7 @@ export async function retrieveWithCoverageLoop(
       categories: pairs.map((p) => p.category),
       addedWindows: merged.added,
       addedFiles: merged.addedFiles,
+      replacedFiles: merged.replacedFiles,
       ms: Math.round(performance.now() - passStartedAt),
     });
 

@@ -352,6 +352,43 @@ Database client initialization is in \`lib/db/client.ts#L5-L25\`.
     }
   }
 
+  // Test 11: SDK integration question - coverage-aware synthesis keeps client/server distinction guidance reachable
+  {
+    let seenUser = "";
+    let seenSystem = "";
+    const sdkInput: QuestionInput = {
+      ...baseInput,
+      question: "How does the SDK work in this project?",
+      coverage: {
+        verified: ["controllers", "frontend"],
+        partial: ["routes"],
+        unknown: ["models"],
+        unknownNote: "\"unknown\" means the retrieved evidence does not establish the category; it is never proof that a feature does not exist.",
+      },
+    };
+
+    const answer = await answerQuestion(sdkInput, {
+      cache: mockCache,
+      complete: async (_model, system, user) => {
+        seenSystem = system;
+        seenUser = user;
+        return "Client SDK entry is in `lib/auth/session.ts#L1-L40`; server handlers in `lib/db/client.ts#L1-L30`.";
+      },
+    });
+
+    if (
+      answer.citations.length === 2 &&
+      seenUser.includes("Evidence coverage of the final retrieved package") &&
+      seenUser.includes("Verified layers (source text establishes them): controllers, frontend") &&
+      seenSystem.includes("SDK and Client/Server Separation") &&
+      seenSystem.includes("distinguish the two explicitly")
+    ) {
+      pass("SDK integration question carries coverage and client/server separation guidance");
+    } else {
+      fail(`SDK integration synthesis failed: systemHasRule=${seenSystem.includes("SDK and Client/Server Separation")} userHasCoverage=${seenUser.includes("Evidence coverage")} citations=${answer.citations.length}`);
+    }
+  }
+
 }
 
 run()

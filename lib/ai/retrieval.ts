@@ -28,6 +28,31 @@ export const DEFAULT_BUDGET: Required<RetrievalBudget> = {
   seedLimit: 5,
 };
 
+/**
+ * General, vocabulary-free penalty for files that are unlikely to carry the
+ * primary implementation evidence for a question: test harnesses, specs,
+ * documentation, configuration and setup files. These still enter the package
+ * when nothing better is available, but they never crowd out a same-or-lower
+ * scored source file. Repository-adaptive: the patterns are file kinds, not
+ * repository-specific words.
+ */
+export function supportFilePenalty(path: string): number {
+  const lower = path.toLowerCase();
+  const segments = lower.split("/");
+  const filename = segments[segments.length - 1] ?? lower;
+  let penalty = 0;
+  if (segments.some((s) => s === "test" || s === "tests" || s === "__tests__" || s === "spec" || s === "specs" || s === "docs" || s === "doc")) penalty += 15;
+  if (/\.(test|spec)\.[a-z]+$/.test(filename)) penalty += 15;
+  if (/\.(config|conf)\.[a-z]+$/.test(filename)) penalty += 10;
+  if (/(^|\.)(eslint|prettier|babel|jest|vitest|setup|mocks?|fixtures?)\b/.test(filename)) penalty += 10;
+  return penalty;
+}
+
+/** Effective ranking score: raw score minus the support-file penalty. */
+export function effectiveScore(win: { score: number; path: string }): number {
+  return win.score - supportFilePenalty(win.path);
+}
+
 export type TargetWindow = {
   fileId: string;
   path: string;
@@ -816,7 +841,7 @@ export async function retrieveGroundedContext(
   }
 
   // Sort seed windows by score descending, then path ascending
-  seedWindows.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
+  seedWindows.sort((a, b) => effectiveScore(b) - effectiveScore(a) || a.path.localeCompare(b.path));
 
   // Stage 3: Dependency Graph Expansion (indexed relationships only)
   // Expand the top seed files to their 1-hop neighbours over the analysis's
@@ -1004,15 +1029,15 @@ export async function retrieveGroundedContext(
   const allWindows = [...seedWindows, ...expandedWindows, ...derivedWindows];
   const mergedWindows = mergeCandidateWindows(allWindows);
 
-  // Sort merged windows by score descending
-  mergedWindows.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
+  // Sort merged windows by effective score descending (support files demoted)
+  mergedWindows.sort((a, b) => effectiveScore(b) - effectiveScore(a) || a.path.localeCompare(b.path));
 
   // Stage 5: Retrieve actual source text and enforce budget.
   // Breadth first: every file gets its best window served before any file
   // claims a second one, so one dense file cannot eat the character budget —
   // a spread of related files grounds answers better than one deep file.
   const order = [...mergedWindows].sort(
-    (a, b) => b.score - a.score || a.path.localeCompare(b.path),
+    (a, b) => effectiveScore(b) - effectiveScore(a) || a.path.localeCompare(b.path),
   );
   const rounds: TargetWindow[][] = [];
   const grouped = new Map<string, { windows: TargetWindow[]; best: TargetWindow }>();
@@ -1028,7 +1053,7 @@ export async function retrieveGroundedContext(
   // Round 1: one window per file in best-score order.
   const allBest = rounds
     .map((group) => group[0]!)
-    .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
+    .sort((a, b) => effectiveScore(b) - effectiveScore(a) || a.path.localeCompare(b.path));
   // Remaining rounds: extra windows per file, interleaved by score so the
   // strongest leftovers land before weaker extras.
   const extras: TargetWindow[] = [];
@@ -1041,7 +1066,7 @@ export async function retrieveGroundedContext(
       perFile.set(w.fileId, list);
     }
     const queues = [...perFile.values()].map((ws) =>
-      ws.sort((a, b) => b.score - a.score || a.startLine - b.startLine),
+      ws.sort((a, b) => effectiveScore(b) - effectiveScore(a) || a.startLine - b.startLine),
     );
     let rest = true;
     while (rest) {

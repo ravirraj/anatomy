@@ -143,19 +143,17 @@ final answer runs, so the report stays at the retrieval/coverage level):
 | Query | Before (Phase 5 single pass) | After (coverage-loop) |
 |---|---|---|
 | "How does authentication work in this repository?" | found 4 / partial 0 / unknown 0, one retrieval | same coverage, 0 extra passes, loop stops `sufficient-coverage` immediately, no regression (loop ms ~296, single call) |
-| "How does the developer SDK work?" | found 1 (frontend) / partial 2 (routes, controllers) / unknown 0 | same coverage, 1 pass (ms ~185) issuing 2 focused queries (`sdk route router endpoint`, `sdk controller handler`), 0 windows added -> loop stops `budget-exhausted`; loop ms ~376; package stays 16 files / ~26.3k chars |
+| "How does the developer SDK work?" | found 1 (frontend) / partial 2 (routes, controllers) / unknown 0 | coverage now found 3 / partial 0 / unknown 0 in 2 passes (pass 1: routes+controllers, 3 added files via displacement; pass 2: controllers, 1 added); loop ms ~462; package still 16 files / ~27.8k chars (weakest non-protected evidence displaced by strictly stronger targeted evidence) |
 
-Interpretation of the SDK after-state: the targeted retrievals DO surface
-strong evidence the base package missed - `backend/src/routes/sdk.routes.js`
+Interpretation of the SDK after-state: the targeted retrievals surface strong
+evidence the base package missed - `backend/src/routes/sdk.routes.js`
 (1-50, indexed, score 94, `sdk` controllers/validator imports in text) and
-`backend/src/controllers/sdk.controller.js` (score 116) - but the question's
-own package already pins all 16 file slots, so the loop honestly refuses to
-displace them and reports `budget-exhausted` instead of inventing space.
-Coverage therefore did not regress, and the improvement mechanics are
-demonstrated end-to-end on the fixture suites (routes flips
-partial -> found and controllers partial -> found through a route-table and a
-header-window drill; two-pass exhaustion, no-candidate and
-max-passes stops are each pinned by tests). Candidate displacement of
-weaker evidence is deliberately out of Phase 6 scope and recorded for a
-later phase. `node scripts/test-retrieval-loop.ts` is wired into `pnpm test`
-after the Phase 5 suite.
+`backend/src/controllers/sdk.controller.js` (score 116) - and the loop now
+displaces the weakest, non-protected evidence (support/test/doc/config files)
+to admit them, flipping routes and controllers from partial to found in two
+passes. Displacement is strictly bounded: only a targeted candidate that
+outscores the weakest removable file by a margin, and only when that file is
+not the sole source-text contributor to a currently verified category, may
+replace it - so stronger direct evidence is never displaced and the 16-file /
+28k-character limits still hold. The loop reports `replacedFiles` per pass
+for auditability.
