@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 5,
+  "schemaVersion": 6,
   "root": "<repo>",
   "projects": [
     {
@@ -140,56 +140,122 @@
       "name": "GET",
       "kind": "function",
       "line": 3,
+      "endLine": 5,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [
+        {
+          "name": "_req",
+          "type": "Request"
+        },
+        {
+          "name": "ctx",
+          "type": "{ params: { id: string } }"
+        }
+      ],
+      "returnType": "unknown",
+      "signature": "GET(_req: Request, ctx: { params: { id: string } }): unknown",
       "file": "app/api/users/[id]/route.ts"
     },
     {
       "name": "DELETE",
       "kind": "function",
       "line": 7,
+      "endLine": 9,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [
+        {
+          "name": "_req",
+          "type": "Request"
+        },
+        {
+          "name": "_ctx",
+          "type": "unknown"
+        }
+      ],
+      "returnType": "unknown",
+      "signature": "DELETE(_req: Request, _ctx: unknown): unknown",
       "file": "app/api/users/[id]/route.ts"
     },
     {
       "name": "GET",
       "kind": "function",
       "line": 3,
+      "endLine": 5,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [],
+      "returnType": "unknown",
+      "signature": "GET(): unknown",
       "file": "app/api/users/route.ts"
     },
     {
       "name": "UserList",
       "kind": "function",
       "line": 3,
+      "endLine": 5,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [],
+      "returnType": "any",
+      "signature": "UserList(): any",
       "file": "app/page.tsx"
     },
     {
       "name": "fanout",
       "kind": "function",
       "line": 1,
+      "endLine": 3,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [
+        {
+          "name": "names",
+          "type": "string[]"
+        }
+      ],
+      "returnType": "string[]",
+      "signature": "fanout(names: string[]): string[]",
       "file": "lib/extra.ts"
     },
     {
       "name": "USERS",
       "kind": "const",
       "line": 3,
+      "endLine": 3,
       "exported": false,
+      "exportKind": "none",
+      "signature": "USERS = [\"ada\", \"grace\"]",
       "file": "lib/store.ts"
     },
     {
       "name": "allUsers",
       "kind": "function",
       "line": 5,
+      "endLine": 7,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [],
+      "returnType": "string[]",
+      "signature": "allUsers(): string[]",
       "file": "lib/store.ts"
     },
     {
       "name": "user",
       "kind": "function",
       "line": 9,
+      "endLine": 11,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [
+        {
+          "name": "id",
+          "type": "string"
+        }
+      ],
+      "returnType": "{ id: string }",
+      "signature": "user(id: string): { id: string }",
       "file": "lib/store.ts"
     }
   ],

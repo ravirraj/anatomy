@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 5,
+  "schemaVersion": 6,
   "root": "<repo>",
   "projects": [
     {
@@ -53,14 +53,20 @@
       "name": "add",
       "kind": "const",
       "line": 1,
+      "endLine": 1,
       "exported": false,
+      "exportKind": "none",
+      "signature": "add",
       "file": "index.js"
     },
     {
       "name": "fs",
       "kind": "const",
       "line": 2,
+      "endLine": 2,
       "exported": false,
+      "exportKind": "none",
+      "signature": "fs = require(\"fs\")",
       "file": "index.js"
     }
   ],

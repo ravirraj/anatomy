@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 5,
+  "schemaVersion": 6,
   "root": "<repo>",
   "projects": [
     {
@@ -81,28 +81,63 @@
       "name": "double",
       "kind": "function",
       "line": 4,
+      "endLine": 6,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [
+        {
+          "name": "n",
+          "type": "number"
+        }
+      ],
+      "returnType": "number",
+      "signature": "double(n: number): number",
       "file": "packages/calc/double.ts"
     },
     {
       "name": "sphere",
       "kind": "function",
       "line": 8,
+      "endLine": 10,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [
+        {
+          "name": "radius",
+          "type": "number"
+        }
+      ],
+      "returnType": "number",
+      "signature": "sphere(radius: number): number",
       "file": "packages/calc/main.ts"
     },
     {
       "name": "shared",
       "kind": "function",
       "line": 1,
+      "endLine": 3,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [],
+      "returnType": "number",
+      "signature": "shared(): number",
       "file": "packages/calc/shared.ts"
     },
     {
       "name": "area",
       "kind": "function",
       "line": 1,
+      "endLine": 3,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [
+        {
+          "name": "radius",
+          "type": "number"
+        }
+      ],
+      "returnType": "number",
+      "signature": "area(radius: number): number",
       "file": "packages/geometry/index.ts"
     }
   ],

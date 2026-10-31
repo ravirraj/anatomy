@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 5,
+  "schemaVersion": 6,
   "root": "<repo>",
   "projects": [
     {
@@ -81,28 +81,66 @@
       "name": "formatName",
       "kind": "function",
       "line": 1,
+      "endLine": 3,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [
+        {
+          "name": "first",
+          "type": "string"
+        },
+        {
+          "name": "last",
+          "type": "string"
+        }
+      ],
+      "returnType": "string",
+      "signature": "formatName(first: string, last: string): string",
       "file": "lib/format.ts"
     },
     {
       "name": "greeting",
       "kind": "function",
       "line": 5,
+      "endLine": 7,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [
+        {
+          "name": "first",
+          "type": "string"
+        },
+        {
+          "name": "last",
+          "type": "string"
+        }
+      ],
+      "returnType": "string",
+      "signature": "greeting(first: string, last: string): string",
       "file": "src/main.ts"
     },
     {
       "name": "degrees",
       "kind": "function",
       "line": 5,
+      "endLine": 7,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [],
+      "returnType": "number",
+      "signature": "degrees(): number",
       "file": "src/pkg.ts"
     },
     {
       "name": "use",
       "kind": "function",
       "line": 5,
+      "endLine": 7,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [],
+      "returnType": "string",
+      "signature": "use(): string",
       "file": "src/wrong.ts"
     }
   ],

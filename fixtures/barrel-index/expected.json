@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 5,
+  "schemaVersion": 6,
   "root": "<repo>",
   "projects": [
     {
@@ -120,28 +120,51 @@
       "name": "area",
       "kind": "function",
       "line": 1,
+      "endLine": 3,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [
+        {
+          "name": "radius",
+          "type": "number"
+        }
+      ],
+      "returnType": "number",
+      "signature": "area(radius: number): number",
       "file": "src/circle.ts"
     },
     {
       "name": "report",
       "kind": "function",
       "line": 4,
+      "endLine": 6,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [],
+      "returnType": "number",
+      "signature": "report(): number",
       "file": "src/main.ts"
     },
     {
       "name": "SQUARE",
       "kind": "const",
       "line": 1,
+      "endLine": 1,
       "exported": true,
+      "exportKind": "named",
+      "signature": "SQUARE = \"square\"",
       "file": "src/square.ts"
     },
     {
       "name": "default",
       "kind": "function",
       "line": 1,
+      "endLine": 3,
       "exported": true,
+      "exportKind": "default",
+      "parameters": [],
+      "returnType": "number",
+      "signature": "default(): number",
       "file": "src/triangle.ts"
     }
   ],

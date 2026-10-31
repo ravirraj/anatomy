@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 5,
+  "schemaVersion": 6,
   "root": "<repo>",
   "projects": [
     {
@@ -98,21 +98,32 @@
       "name": "address",
       "kind": "function",
       "line": 6,
+      "endLine": 8,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [],
+      "returnType": "string",
+      "signature": "address(): string",
       "file": "app/main.ts"
     },
     {
       "name": "settings",
       "kind": "const",
       "line": 3,
+      "endLine": 3,
       "exported": false,
+      "exportKind": "none",
+      "signature": "settings = require(\"./config\")",
       "file": "lib/bridge.js"
     },
     {
       "name": "Connection",
       "kind": "class",
       "line": 3,
+      "endLine": 7,
       "exported": false,
+      "exportKind": "none",
+      "signature": "class Connection {",
       "file": "lib/helper.ts"
     }
   ],

@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 5,
+  "schemaVersion": 6,
   "root": "<repo>",
   "projects": [
     {
@@ -67,21 +67,46 @@
       "name": "banner",
       "kind": "function",
       "line": 3,
+      "endLine": 5,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [
+        {
+          "name": "cents",
+          "type": "number"
+        }
+      ],
+      "returnType": "string",
+      "signature": "banner(cents: number): string",
       "file": "src/app.ts"
     },
     {
       "name": "use",
       "kind": "function",
       "line": 4,
+      "endLine": 6,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [],
+      "returnType": "string",
+      "signature": "use(): string",
       "file": "src/broken.ts"
     },
     {
       "name": "formatPrice",
       "kind": "function",
       "line": 1,
+      "endLine": 3,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [
+        {
+          "name": "cents",
+          "type": "number"
+        }
+      ],
+      "returnType": "string",
+      "signature": "formatPrice(cents: number): string",
       "file": "src/util/format.ts"
     }
   ],

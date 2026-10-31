@@ -169,11 +169,66 @@ export function extractExports(sourceFile: SourceFile): string[] {
  * declaration, so it makes no symbol here; the names it exports are already
  * in extractExports.
  */
+function jsDocText(node: Node): string | undefined {
+  // ts-morph exposes getJsDocs on declarations that can carry JSDoc.
+  const docs = (node as { getJsDocs?: () => { getInnerText(): string }[] }).getJsDocs?.();
+  if (!docs || docs.length === 0) return undefined;
+  const text = docs.map((d) => d.getInnerText().trim()).filter(Boolean).join("\n").trim();
+  return text.length > 0 ? text : undefined;
+}
+
+function paramType(p: { getTypeNode?: () => Node | undefined; getType?: () => { getText: () => string } }): string {
+  const node = p.getTypeNode?.();
+  if (node) return node.getText();
+  try { return p.getType?.()?.getText() ?? "unknown"; } catch { return "unknown"; }
+}
+
+function enrichDeclaration(
+  name: string,
+  kind: SymbolKind,
+  node: Node,
+  exported: boolean,
+  defaultExport: boolean,
+): Omit<ParsedSymbol, "file"> {
+  const out: Omit<ParsedSymbol, "file"> = {
+    name,
+    kind,
+    line: node.getStartLineNumber(),
+    endLine: node.getEndLineNumber(),
+    exported,
+    exportKind: defaultExport ? "default" : exported ? "named" : "none",
+  };
+  const doc = jsDocText(node);
+  if (doc) out.documentation = doc;
+
+  // Function-like declarations carry parameters and a return type.
+  const fnLike = node as {
+    getParameters?: () => { getName(): string; getTypeNode?: () => Node | undefined; getType?: () => { getText: () => string } }[];
+    getReturnTypeNode?: () => Node | undefined;
+    getReturnType?: () => { getText: () => string };
+  };
+  if (typeof fnLike.getParameters === "function") {
+    const params = fnLike.getParameters().map((p) => ({ name: p.getName(), type: paramType(p) }));
+    out.parameters = params;
+    let rt: string | undefined;
+    if (typeof fnLike.getReturnTypeNode === "function") rt = fnLike.getReturnTypeNode()?.getText();
+    if (!rt && typeof fnLike.getReturnType === "function") {
+      try { rt = fnLike.getReturnType().getText(); } catch { rt = undefined; }
+    }
+    if (rt) out.returnType = rt;
+    const paramText = params.map((p) => `${p.name}: ${p.type}`).join(", ");
+    out.signature = `${name}(${paramText})${rt ? `: ${rt}` : ""}`;
+  } else {
+    // Non-function declarations: signature is the first line, trimmed.
+    const firstLine = node.getText().split("\n")[0]?.trim();
+    if (firstLine) out.signature = firstLine.length > 200 ? firstLine.slice(0, 200) + "…" : firstLine;
+  }
+
+  return out;
+}
+
 export function extractSymbols(sourceFile: SourceFile): Omit<ParsedSymbol, "file">[] {
   const found: Omit<ParsedSymbol, "file">[] = [];
-
-  const add = (name: string, kind: SymbolKind, at: Node, exported: boolean) =>
-    found.push({ name, kind, line: at.getStartLineNumber(), exported });
 
   for (const statement of sourceFile.getStatements()) {
     if (Node.isFunctionDeclaration(statement) || Node.isClassDeclaration(statement) || Node.isInterfaceDeclaration(statement) || Node.isTypeAliasDeclaration(statement) || Node.isEnumDeclaration(statement)) {
@@ -188,15 +243,13 @@ export function extractSymbols(sourceFile: SourceFile): Omit<ParsedSymbol, "file
               ? "type"
               : "enum";
       if (statement.hasDefaultKeyword()) {
-        add("default", kind, statement, true);
+        found.push(enrichDeclaration("default", kind, statement, true, true));
         continue;
       }
       const name = statement.getNameNode();
-      if (name) add(name.getText(), kind, statement, exported);
+      if (name) found.push(enrichDeclaration(name.getText(), kind, statement, exported, false));
     } else if (Node.isModuleDeclaration(statement) && Node.isIdentifier(statement.getNameNode())) {
-      // `namespace x {}` and its older spelling `module x {}`; the string-named
-      // `declare module "x"` form exports nothing from this file.
-      add(statement.getName(), "namespace", statement, statement.hasExportKeyword());
+      found.push(enrichDeclaration(statement.getName(), "namespace", statement, statement.hasExportKeyword(), false));
     } else if (Node.isVariableStatement(statement)) {
       const exported = statement.hasExportKeyword();
       const kind: SymbolKind = statement.getDeclarationList().getFlags() & ts.NodeFlags.Const
@@ -206,13 +259,16 @@ export function extractSymbols(sourceFile: SourceFile): Omit<ParsedSymbol, "file
           : "var";
       for (const declaration of statement.getDeclarations()) {
         const name = declaration.getNameNode();
-        if (Node.isIdentifier(name)) add(name.getText(), kind, declaration, exported);
-        // `export const { a, b: c } = x` declares a and c.
-        else
+        if (Node.isIdentifier(name)) {
+          found.push(enrichDeclaration(name.getText(), kind, declaration, exported, false));
+        } else {
           for (const element of name.getDescendantsOfKind(SyntaxKind.BindingElement)) {
             const bound = element.getNameNode();
-            if (Node.isIdentifier(bound)) add(bound.getText(), kind, declaration, exported);
+            if (Node.isIdentifier(bound)) {
+              found.push(enrichDeclaration(bound.getText(), kind, element, exported, false));
+            }
           }
+        }
       }
     }
   }

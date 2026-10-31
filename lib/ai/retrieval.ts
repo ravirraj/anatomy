@@ -181,6 +181,23 @@ export type RetrievalResult = {
   plan: QuestionPlan;
   windows: RetrievedWindow[];
   files: { fileId: string; path: string; contentHash: string; totalLines: number }[];
+  /**
+   * Enriched symbol/API surface for the retrieved files, when available.
+   * Optional and additive: older callers and tests may omit it.
+   */
+  symbols?: {
+    fileId: string;
+    path: string;
+    name: string;
+    kind: string;
+    line: number;
+    endLine?: number;
+    exported: boolean;
+    exportKind?: string;
+    signature?: string;
+    returnType?: string;
+    documentation?: string;
+  }[];
   totalCharacters: number;
   insufficientEvidence: boolean;
 };
@@ -1174,6 +1191,47 @@ export async function retrieveGroundedContext(
     }
   }
 
+  // Enriched symbol/API surface for the retrieved files (Phase 2). Loaded
+  // after budget selection so only retrieved files pay the query cost.
+  let retrievedSymbols: RetrievalResult["symbols"] = [];
+  const retrievedFileIds = [...includedFilesMap.keys()];
+  if (retrievedFileIds.length > 0) {
+    const idList = retrievedFileIds.join(",");
+    let symData: Record<string, unknown>[] = [];
+    try {
+      const { data, error } = await (db as unknown as { from: (t: string) => { select: (c: string) => { eq: (k: string, v: string) => Promise<{ data: unknown; error: unknown }> } } })
+        .from("symbols")
+        .select("file_id, name, kind, line, end_line, exported, export_kind, signature, return_type, documentation")
+        .eq("analysis_id", analysisId);
+      if (!error && data) symData = data as Record<string, unknown>[];
+    } catch {
+      const { data } = await db
+        .from("symbols")
+        .select("file_id, name, kind, line, exported")
+        .eq("analysis_id", analysisId);
+      symData = (data ?? []) as Record<string, unknown>[];
+    }
+    if (symData) {
+      const retrievedSet = new Set(retrievedFileIds);
+      const pathById = new Map([...includedFilesMap.values()].map((f) => [f.fileId, f.path]));
+      retrievedSymbols = symData
+        .filter((s: Record<string, unknown>) => retrievedSet.has(s.file_id as string))
+        .map((s: Record<string, unknown>) => ({
+        fileId: s.file_id as string,
+        path: pathById.get(s.file_id as string) ?? "",
+        name: s.name as string,
+        kind: s.kind as string,
+        line: s.line as number,
+        ...(typeof s.end_line === "number" ? { endLine: s.end_line as number } : {}),
+        exported: s.exported as boolean,
+        ...(s.export_kind ? { exportKind: s.export_kind as string } : {}),
+        ...(s.signature ? { signature: s.signature as string } : {}),
+        ...(s.return_type ? { returnType: s.return_type as string } : {}),
+        ...(s.documentation ? { documentation: s.documentation as string } : {}),
+      }));
+    }
+  }
+
   return {
     analysisId,
     query: rawQuery,
@@ -1181,6 +1239,7 @@ export async function retrieveGroundedContext(
     plan,
     windows: retrievedWindows,
     files: [...includedFilesMap.values()],
+    symbols: retrievedSymbols,
     totalCharacters: currentCharacters,
     insufficientEvidence: retrievedWindows.length === 0,
   };
@@ -1260,10 +1319,30 @@ export function formatRetrievedContext(result: RetrievalResult): string {
   }
 
   const sections: string[] = [];
+  // Group symbols by file for an API-surface appendix (Phase 2 enrichment).
+  const symbolsByFile = new Map<string, NonNullable<RetrievalResult["symbols"]>>();
+  for (const sym of result.symbols ?? []) {
+    const list = symbolsByFile.get(sym.path) ?? [];
+    list.push(sym);
+    symbolsByFile.set(sym.path, list);
+  }
+
   for (const win of result.windows) {
-    sections.push(
-      `--- File: ${win.path} (lines ${win.startLine}-${win.endLine}) [hash: ${win.contentHash.slice(0, 8)}] ---\n${win.text}`,
-    );
+    let section = `--- File: ${win.path} (lines ${win.startLine}-${win.endLine}) [hash: ${win.contentHash.slice(0, 8)}] ---\n${win.text}`;
+    const syms = symbolsByFile.get(win.path);
+    if (syms && syms.length > 0 && win.startLine === 1) {
+      // Append the API surface once, on the first window of the file.
+      const api = syms
+        .filter((s) => s.exported)
+        .map((s) => {
+          const sig = s.signature ?? s.name;
+          const doc = s.documentation ? ` — ${s.documentation.split("\n")[0]}` : "";
+          return `- ${s.name} (${s.kind})${s.exportKind && s.exportKind !== "named" ? ` [${s.exportKind}]` : ""}: ${sig}${doc}`;
+        })
+        .join("\n");
+      if (api) section += `\n\n[API surface]\n${api}`;
+    }
+    sections.push(section);
   }
 
   return sections.join("\n\n");

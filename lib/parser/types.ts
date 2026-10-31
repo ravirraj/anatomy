@@ -3,7 +3,7 @@
 
 import type { Role } from "../roles.ts";
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 export type EdgeKind = "import" | "re-export" | "dynamic-import" | "require";
 
@@ -103,7 +103,21 @@ export type ParsedSymbol = {
   kind: SymbolKind;
   /** Where it's declared. */
   line: number;
+  /** Last line of the declaration (inclusive). */
+  endLine?: number;
   exported: boolean;
+  /** "named" | "default" | "none" (CommonJS whole-module exports are "named" with the exported name). */
+  exportKind?: "named" | "default" | "none";
+  /** Parameter list as written, e.g. [{ name: "id", type: "string" }]. */
+  parameters?: { name: string; type: string }[];
+  /** Declared or inferred return type text, when applicable. */
+  returnType?: string;
+  /** Full signature text, e.g. "foo(a: number): boolean". */
+  signature?: string;
+  /** JSDoc/TSDoc inner text, when present. */
+  documentation?: string;
+  /** True when the symbol is part of a package's public API (entry-point export chain). */
+  isPublicApi?: boolean;
 };
 
 export type OmittedRoute = { file: string; line: number; reason: string };

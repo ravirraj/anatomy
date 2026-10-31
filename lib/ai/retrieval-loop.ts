@@ -315,6 +315,8 @@ export async function retrieveWithCoverageLoop(
   const base = await retrieveGroundedContext(db, analysisId, rawQuery, retrievalBudget, conceptIndex);
   let windows: RetrievedWindow[] = [...base.windows];
   let totalCharacters = base.totalCharacters;
+  let symbolsState: RetrievalResult["symbols"] = base.symbols ?? [];
+  let symbolsStale = false;
 
   // Generic tokens for concept matching come from the plan.
   const genericTokens = new Set<string>(
@@ -378,6 +380,7 @@ export async function retrieveWithCoverageLoop(
         totalLines: first.totalLines,
       };
     }),
+    symbols: symbolsState,
     totalCharacters,
     insufficientEvidence: windows.length === 0,
   });
@@ -469,6 +472,7 @@ export async function retrieveWithCoverageLoop(
 
     windows = merged.windows;
     totalCharacters = merged.totalCharacters;
+    symbolsStale = true;
     coverage = evaluateCurrent(buildResult());
 
     if (missingCategories(coverage).length === 0) {
@@ -477,6 +481,40 @@ export async function retrieveWithCoverageLoop(
     }
     if (merged.added !== 0 && pass === config.maxPasses) {
       stoppedBecause = "max-passes";
+    }
+  }
+
+  if (symbolsStale) {
+    const ids = [...new Set(windows.map((w) => w.fileId))];
+    if (ids.length === 0) {
+      symbolsState = [];
+    } else {
+      const idSet = new Set(ids);
+      try {
+        const { data } = await (db as unknown as { from: (t: string) => { select: (c: string) => { eq: (k: string, v: string) => Promise<{ data: unknown; error: unknown }> } } })
+          .from("symbols")
+          .select("file_id, name, kind, line, end_line, exported, export_kind, signature, return_type, documentation")
+          .eq("analysis_id", analysisId);
+        const rows = (data ?? []) as Record<string, unknown>[];
+        const pathById = new Map(windows.map((w) => [w.fileId, w.path]));
+        symbolsState = rows
+          .filter((s) => idSet.has(s.file_id as string))
+          .map((s) => ({
+            fileId: s.file_id as string,
+            path: pathById.get(s.file_id as string) ?? "",
+            name: s.name as string,
+            kind: s.kind as string,
+            line: s.line as number,
+            ...(typeof s.end_line === "number" ? { endLine: s.end_line as number } : {}),
+            exported: s.exported as boolean,
+            ...(s.export_kind ? { exportKind: s.export_kind as string } : {}),
+            ...(s.signature ? { signature: s.signature as string } : {}),
+            ...(s.return_type ? { returnType: s.return_type as string } : {}),
+            ...(s.documentation ? { documentation: s.documentation as string } : {}),
+          }));
+      } catch {
+        symbolsState = base.symbols ?? [];
+      }
     }
   }
 

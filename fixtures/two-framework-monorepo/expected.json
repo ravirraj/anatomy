@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 5,
+  "schemaVersion": 6,
   "root": "<repo>",
   "projects": [
     {
@@ -110,28 +110,42 @@
       "name": "UsersController",
       "kind": "class",
       "line": 4,
+      "endLine": 17,
       "exported": true,
+      "exportKind": "named",
+      "signature": "@Controller(\"users\")",
       "file": "packages/api/src/users/users.controller.ts"
     },
     {
       "name": "UsersService",
       "kind": "class",
       "line": 3,
+      "endLine": 8,
       "exported": true,
+      "exportKind": "named",
+      "signature": "@Injectable()",
       "file": "packages/api/src/users/users.service.ts"
     },
     {
       "name": "default",
       "kind": "function",
       "line": 3,
+      "endLine": 5,
       "exported": true,
+      "exportKind": "default",
+      "parameters": [],
+      "returnType": "any",
+      "signature": "default(): any",
       "file": "packages/web/app/page.tsx"
     },
     {
       "name": "brand",
       "kind": "const",
       "line": 1,
+      "endLine": 1,
       "exported": true,
+      "exportKind": "named",
+      "signature": "brand = \"monorepo web\"",
       "file": "packages/web/lib/branding.ts"
     }
   ],
