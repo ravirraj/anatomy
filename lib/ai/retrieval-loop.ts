@@ -37,6 +37,9 @@ import {
   type RetrievalResult,
   type RetrievedWindow,
 } from "./retrieval.ts";
+import { buildConceptIndexForAnalysis } from "./concepts/loader.ts";
+import { matchConceptsForQuery } from "./concepts/mapping.ts";
+import type { ConceptIndex } from "./concepts/types.ts";
 
 export type RetrievalLoopBudget = RetrievalBudget & {
   /**
@@ -49,6 +52,16 @@ export type RetrievalLoopBudget = RetrievalBudget & {
    * stronger direct evidence when the file budget is contested.
    */
   scoreFloor?: number;
+  /**
+   * Use repository-derived concept discovery (buildConceptIndex) instead of
+   * the hardcoded CONCEPT_CATEGORIES vocabulary. Defaults to true in production.
+   * Tests of the lexical fallback path may set this to false.
+   */
+  adaptive?: boolean;
+  /**
+   * A pre-built ConceptIndex. When provided, the loop skips loading one.
+   */
+  conceptIndex?: ConceptIndex | null;
 };
 
 const DEFAULT_LOOP: Required<Pick<RetrievalLoopBudget, "maxPasses" | "scoreFloor">> = {
@@ -271,7 +284,8 @@ export async function retrieveWithCoverageLoop(
   budget: RetrievalLoopBudget = {},
 ): Promise<IterativeRetrievalResult> {
   const startedAt = performance.now();
-  const { maxPasses, scoreFloor, ...retrievalBudget } = budget;
+  const { maxPasses, scoreFloor, adaptive, conceptIndex: providedIndex, ...retrievalBudget } = budget;
+  const useAdaptive = adaptive !== false;
   const config = {
     maxPasses: maxPasses ?? DEFAULT_LOOP.maxPasses,
     scoreFloor: scoreFloor ?? DEFAULT_LOOP.scoreFloor,
@@ -283,11 +297,71 @@ export async function retrieveWithCoverageLoop(
     scoreFloor: config.scoreFloor,
   };
 
-  // Pass 0: the unchanged deterministic pipeline.
-  const base = await retrieveGroundedContext(db, analysisId, rawQuery, retrievalBudget);
+  // Build the repository-derived concept index once (Phase 1 integration).
+  let conceptIndex: ConceptIndex | null = null;
+  if (useAdaptive) {
+    if (providedIndex !== undefined) {
+      conceptIndex = providedIndex ?? null;
+    } else {
+      try {
+        conceptIndex = await buildConceptIndexForAnalysis(db, analysisId);
+      } catch {
+        conceptIndex = null;
+      }
+    }
+  }
+
+  // Pass 0: the unchanged deterministic pipeline, now concept-aware.
+  const base = await retrieveGroundedContext(db, analysisId, rawQuery, retrievalBudget, conceptIndex);
   let windows: RetrievedWindow[] = [...base.windows];
   let totalCharacters = base.totalCharacters;
-  let coverage = evaluateCoverage(base.plan, base);
+
+  // Generic tokens for concept matching come from the plan.
+  const genericTokens = new Set<string>(
+    (base.plan.unusedTokens ?? [])
+      .filter((u: { reason: string }) => u.reason === "generic-verb")
+      .map((u: { word: string }) => u.word),
+  );
+
+  const mapping = conceptIndex
+    ? matchConceptsForQuery(base.tokens, genericTokens, conceptIndex)
+    : null;
+
+  // Category -> file set for affiliation (adaptive only).
+  const categoryToFiles = new Map<string, Set<string>>();
+  const useAdaptiveCoverage = !!mapping && mapping.topConcepts.length > 0;
+  if (useAdaptiveCoverage && mapping) {
+    for (const c of mapping.topConcepts) {
+      for (const cat of c.discoveredCategories) {
+        const set = categoryToFiles.get(cat) ?? new Set<string>();
+        for (const fid of c.fileIds) set.add(fid);
+        categoryToFiles.set(cat, set);
+      }
+    }
+  }
+
+  function evaluateCurrent(result: RetrievalResult): CoverageEvaluation {
+    if (useAdaptiveCoverage && mapping && conceptIndex) {
+      return evaluateCoverageAdaptive(base.plan, result, mapping, conceptIndex);
+    }
+    return evaluateCoverage(base.plan, result);
+  }
+
+  function affiliate(win: { fileId: string; path: string; reason: string }, category: string): boolean {
+    if (useAdaptiveCoverage) {
+      if (categoryToFiles.get(category)?.has(win.fileId)) return true;
+      const roleMatch = ROLE_IN_REASON.exec(win.reason);
+      return roleMatch !== null && roleMatch[1] === category;
+    }
+    const aff = CATEGORY_AFFILIATION[category];
+    if (!aff) return false;
+    const segments = win.path.toLowerCase().split("/");
+    if (segments.some((segment) => aff.segments.includes(segment))) return true;
+    const roleMatch = ROLE_IN_REASON.exec(win.reason);
+    return roleMatch !== null && aff.roles.includes(roleMatch[1]!);
+  }
+
+  let coverage = evaluateCurrent(base);
 
   const buildResult = (): RetrievalResult => ({
     analysisId: base.analysisId,
@@ -312,7 +386,6 @@ export async function retrieveWithCoverageLoop(
   let stoppedBecause: IterativeRetrievalResult["stoppedBecause"] = "max-passes";
 
   if (missingCategories(coverage).length === 0) {
-    // Coverage already sufficient — direct behaviour, zero extra passes.
     return {
       result: buildResult(),
       coverage,
@@ -329,7 +402,6 @@ export async function retrieveWithCoverageLoop(
       break;
     }
 
-    // At most two focused retrievals per pass (priority: partial first).
     const pairs = missing.slice(0, 2);
     const passStartedAt = performance.now();
     const queries = pairs.map((pair) => focusedQuery(pair));
@@ -337,17 +409,25 @@ export async function retrieveWithCoverageLoop(
     const candidates: RetrievedWindow[] = [];
 
     for (const query of queries) {
-      const focused = await retrieveGroundedContext(db, analysisId, query, retrievalBudget);
+      const focused = await retrieveGroundedContext(db, analysisId, query, retrievalBudget, conceptIndex);
       for (const win of focused.windows) {
-        // Targeted retrieval must add evidence for the missing category,
-        // not more of what was already established.
-        if (wanted.has(windowAffiliation(win) ?? ""))
-          candidates.push(win);
+        let aff: string | null = null;
+        if (useAdaptiveCoverage) {
+          for (const cat of wanted) {
+            if (affiliate(win, cat)) { aff = cat; break; }
+          }
+        } else {
+          aff = windowAffiliation(win);
+        }
+        if (aff !== null && wanted.has(aff)) {
+          if (!candidates.some((c) => c.fileId === win.fileId && c.startLine === win.startLine && c.endLine === win.endLine)) {
+            candidates.push(win);
+          }
+        }
       }
     }
 
-    // Protected files: those contributing source-text to a currently verified
-    // category. They may never be displaced by targeted evidence.
+    // Protected files: source-text contributors to currently verified categories.
     const protectedFiles = new Set<string>();
     for (const concept of coverage.concepts) {
       for (const cat of concept.categories) {
@@ -359,10 +439,7 @@ export async function retrieveWithCoverageLoop(
         }
       }
     }
-    // Merge: dedupe, caps, char/file budget, provenance intact. Displacement
-    // is allowed only for strictly weaker, non-protected files, so stronger
-    // direct evidence is never displaced (Phase 6 rule) while a saturated
-    // budget can still admit strictly stronger targeted evidence.
+
     const merged = mergeIterationWindows(
       { windows, totalCharacters },
       candidates,
@@ -392,7 +469,7 @@ export async function retrieveWithCoverageLoop(
 
     windows = merged.windows;
     totalCharacters = merged.totalCharacters;
-    coverage = evaluateCoverage(base.plan, buildResult());
+    coverage = evaluateCurrent(buildResult());
 
     if (missingCategories(coverage).length === 0) {
       stoppedBecause = "sufficient-coverage";

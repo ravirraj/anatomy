@@ -27,3 +27,4 @@ export {
 } from "./discovery.ts";
 
 export { matchConceptsForQuery } from "./mapping.ts";
+export { buildConceptIndexForAnalysis } from "./loader.ts";

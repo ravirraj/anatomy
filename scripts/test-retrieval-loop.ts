@@ -386,7 +386,7 @@ console.log("=== 3. SDK scenario: routes/controllers partial improve through tar
       },
     ]);
 
-  const loop = await retrieveWithCoverageLoop(sdk.db as unknown as Db, "loop_sdk", "How does the developer SDK work in this project?");
+  const loop = await retrieveWithCoverageLoop(sdk.db as unknown as Db, "loop_sdk", "How does the developer SDK work in this project?", { adaptive: false });
   check(loop.stoppedBecause === "sufficient-coverage", "loop stops on sufficient coverage", `stop reason: ${loop.stoppedBecause}`);
   check(loop.passes.length === 1, "exactly one targeted pass was needed", `passes: ${loop.passes.length}`);
   check(loop.passes[0]!.addedWindows === 2, "targeted pass added one window per missing category", `added: ${loop.passes[0]!.addedWindows}`);
@@ -454,7 +454,7 @@ console.log("=== 4. Authentication scenario: already sufficient, zero passes ===
       },
     ]);
 
-  const loop = await retrieveWithCoverageLoop(auth.db as unknown as Db, "loop_auth", "How does authentication work in this project?");
+  const loop = await retrieveWithCoverageLoop(auth.db as unknown as Db, "loop_auth", "How does authentication work in this project?", { adaptive: false });
   check(loop.stoppedBecause === "sufficient-coverage", "loop stops immediately when the base package is sufficient", `stop: ${loop.stoppedBecause}`);
   check(loop.passes.length === 0, "zero additional passes for the all-found auth package", `passes: ${JSON.stringify(loop.passes)}`);
   check(auth.calls.symbols === 1, `single retrieval call (symbols queries: ${auth.calls.symbols})`, `symbol queries: ${auth.calls.symbols}`);
@@ -513,7 +513,7 @@ console.log("=== 5. Bounded iteration: stops at the iteration limit ===");
     ]);
 
   const query = "How does the file upload SDK work in this project?";
-  const loop = await retrieveWithCoverageLoop(maxPasses.db as unknown as Db, "loop_max", query);
+  const loop = await retrieveWithCoverageLoop(maxPasses.db as unknown as Db, "loop_max", query, { adaptive: false });
   check(loop.stoppedBecause === "max-passes", "stops at the iteration limit", `stop: ${loop.stoppedBecause}`);
   check(loop.passes.length === 3, `exactly ${3} additional passes ran (got ${loop.passes.length})`, `passes: ${loop.passes.length}`);
   check(loop.passes.every((p) => p.addedWindows > 0), "every pass still added fresh evidence", `added: ${JSON.stringify(loop.passes.map((p) => p.addedWindows))}`);
@@ -552,7 +552,7 @@ console.log("=== 6. File budget exhausted ===");
   });
   const budget = buildMock("loop_budget", spec);
 
-  const loop = await retrieveWithCoverageLoop(budget.db as unknown as Db, "loop_budget", "How does the file upload SDK work in this project?");
+  const loop = await retrieveWithCoverageLoop(budget.db as unknown as Db, "loop_budget", "How does the file upload SDK work in this project?", { adaptive: false });
   check(loop.stoppedBecause === "budget-exhausted", "stops when the file budget is exhausted", `stop: ${loop.stoppedBecause}`);
   check(loop.passes.length === 1, `stops after the first dry pass (got ${loop.passes.length})`, `passes: ${loop.passes.length}`);
   check(loop.result.files.length === 16, `file count pinned at 16 (got ${loop.result.files.length})`, `files: ${loop.result.files.length}`);
@@ -575,7 +575,7 @@ console.log("=== 7. No candidates remain ===");
   }));
   const dry = buildMock("loop_nocand", spec);
 
-  const loop = await retrieveWithCoverageLoop(dry.db as unknown as Db, "loop_nocand", "How does the file upload SDK work in this project?");
+  const loop = await retrieveWithCoverageLoop(dry.db as unknown as Db, "loop_nocand", "How does the file upload SDK work in this project?", { adaptive: false });
   check(loop.stoppedBecause === "no-candidates", "stops when no candidates remain", `stop: ${loop.stoppedBecause}`);
   check(loop.passes.length === 1 && loop.passes[0]!.addedWindows === 0, "the dry pass added nothing", `passes: ${JSON.stringify(loop.passes)}`);
   assertBudgetInvariants("no-candidates", loop.result);
@@ -598,7 +598,7 @@ console.log("=== 8. Provenance and hashes preserved through the loop ===");
     ],
     [{ source: "prov_svc", target: "prov_data", kind: "import" }]);
 
-  const loop = await retrieveWithCoverageLoop(prov.db as unknown as Db, "loop_prov", "Where is the record store used?");
+  const loop = await retrieveWithCoverageLoop(prov.db as unknown as Db, "loop_prov", "Where is the record store used?", { adaptive: false });
   check(loop.stoppedBecause === "no-candidates", "the unrelated-category drill finds nothing new (stops, never invents)", `stop: ${loop.stoppedBecause}`);
   check(loop.passes.length === 1, "one focused pass ran before the stop", `passes: ${loop.passes.length}`);
   const indexedWindow = loop.result.windows.find((w) => w.path === "src/data/archive.js");
@@ -615,6 +615,34 @@ console.log("=== 8. Provenance and hashes preserved through the loop ===");
   check(prov.calls.symbols === 2, `base plus one focused retrieval (symbols queries: ${prov.calls.symbols})`, `symbols: ${prov.calls.symbols}`);
   assertBudgetInvariants("prov", loop.result);
 }
+
+  // Section 9: adaptive concept discovery (Phase 1) on an unfamiliar repository.
+  console.log("");
+  console.log("=== 9. Adaptive concept discovery (unfamiliar repo, no hardcoded categories) ===");
+  {
+    const adaptive = buildMock("loop_adaptive", [
+      { id: "t_collector", path: "src/telemetry/collector.ts", role: "service", lines: 40, symbols: [["TelemetryCollector", 4, true]], text: (n) => (n === 4 ? "export class TelemetryCollector { record() {} }" : null) },
+      { id: "t_exporter", path: "src/telemetry/exporter.ts", role: "service", lines: 40, symbols: [["ExportTelemetryMetrics", 4, true]], text: (n) => (n === 4 ? "export function ExportTelemetryMetrics() { return null; }" : null) },
+      { id: "t_buffer", path: "src/telemetry/buffer.ts", role: "model", lines: 40, symbols: [["TelemetryBufferQueue", 4, true]], text: (n) => (n === 4 ? "export class TelemetryBufferQueue { enqueue() {} }" : null) },
+      { id: "s_coordinator", path: "src/sharding/coordinator.ts", role: "controller", lines: 40, symbols: [["ShardingCoordinator", 4, true]], text: (n) => (n === 4 ? "export class ShardingCoordinator { plan() {} }" : null) },
+      { id: "s_partition", path: "src/sharding/partition_map.ts", role: "model", lines: 40, symbols: [["PartitionMap", 4, true]], text: (n) => (n === 4 ? "export interface PartitionMap { shards: number }" : null) },
+      { id: "s_rebalancer", path: "src/sharding/rebalancer.ts", role: "service", lines: 40, symbols: [["RebalanceShards", 4, true]], text: (n) => (n === 4 ? "export function RebalanceShards() { return null; }" : null) },
+    ], [
+      { source: "t_collector", target: "t_exporter" },
+      { source: "t_collector", target: "t_buffer" },
+      { source: "s_coordinator", target: "s_partition" },
+      { source: "s_coordinator", target: "s_rebalancer" },
+    ]);
+
+    const loop = await retrieveWithCoverageLoop(adaptive.db as unknown as Db, "loop_adaptive", "How does telemetry collection work?");
+    check(loop.coverage.concepts.length > 0, "adaptive discovery produces repository-derived concepts", `concepts: ${loop.coverage.concepts.length}`);
+    // Categories should be derived (roles), not the hardcoded 7-layer vocabulary forced onto an unrelated repo.
+    const categories = loop.coverage.concepts.flatMap((c) => c.categories.map((cat) => cat.category));
+    check(categories.length > 0, "adaptive coverage emits categories from discovered roles", `categories: ${JSON.stringify(categories)}`);
+    check(loop.result.files.length > 0, "retrieval returns evidence for the unfamiliar concept", `files: ${loop.result.files.length}`);
+    check(loop.stoppedBecause !== undefined, "loop reports a stop reason", `stop: ${loop.stoppedBecause}`);
+    assertBudgetInvariants("adaptive", loop.result);
+  }
 
 // ---- Summary ----
 console.log("");

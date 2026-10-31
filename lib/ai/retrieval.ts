@@ -466,10 +466,11 @@ export async function retrieveGroundedContext(
   analysisId: string,
   rawQuery: string,
   budget: RetrievalBudget = {},
+  conceptIndex?: import("./concepts/index.ts").ConceptIndex | null,
 ): Promise<RetrievalResult> {
   const config = { ...DEFAULT_BUDGET, ...budget };
   const tokens = extractQueryTokens(rawQuery);
-  const plan = planQuestion(rawQuery);
+  const plan = planQuestion(rawQuery, conceptIndex ?? undefined);
   // The planner separates generic action verbs ("implement", "handle", …)
   // from concepts; retrieval keeps them eligible but demoted (§ stages).
   const genericTokens = new Set(
