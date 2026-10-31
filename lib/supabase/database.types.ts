@@ -190,6 +190,7 @@ export type Database = {
         Row: {
           content_hash: string
           created_at: string
+          last_referenced_at: string
           organization_id: string
           payload: string
           size: number
@@ -197,6 +198,7 @@ export type Database = {
         Insert: {
           content_hash: string
           created_at?: string
+          last_referenced_at?: string
           organization_id: string
           payload: string
           size: number
@@ -204,11 +206,20 @@ export type Database = {
         Update: {
           content_hash?: string
           created_at?: string
+          last_referenced_at?: string
           organization_id?: string
           payload?: string
           size?: number
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "file_contents_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       file_roles: {
         Row: {
@@ -516,6 +527,18 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      delete_orphaned_file_contents: {
+        Args: {
+          p_batch_size?: number
+          p_grace_period?: string
+          p_organization_id?: string
+        }
+        Returns: {
+          content_hash: string
+          organization_id: string
+          size: number
+        }[]
+      }
       insert_edges: {
         Args: { p_analysis_id: string; p_edges: Json }
         Returns: number

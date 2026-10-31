@@ -7,6 +7,18 @@ import type { Database } from "../supabase/database.types.ts";
 
 export type Db = SupabaseClient<Database>;
 
+/** One body offered for storage. Nothing else about it is trusted. */
+export type ContentWrite = { body: Uint8Array };
+
+/**
+ * What became of one body offered to the batched write, in the order the
+ * writes were given. A whole request's failure marks its writes failed with
+ * the database's own reason: requests are not transactions.
+ */
+export type ContentWriteResult =
+  | { stored: true; contentHash: string; size: number }
+  | { stored: false; reason: string };
+
 /** A fact about stored bytes: which organization holds them, what their identity is, how long they are. */
 export type ContentReference = {
   organizationId: string;
@@ -30,6 +42,20 @@ export class IntegrityError extends Error {
   }
 }
 
+/**
+ * The database contradicts itself about a file and its content: a `stored`
+ * file with no content row under its hash, a status the schema does not
+ * define, or bytes offered for storage that do not hash to the identity
+ * they were fetched for. Never silenced into a typed null — null means
+ * "genuinely absent", and a self-contradiction is not absence.
+ */
+export class ConsistencyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConsistencyError";
+  }
+}
+
 /** The store, in the shape callers use. Implemented in store.ts; the pipeline and the read path call it, both through lib/content. */
 export interface ContentStore {
   /**
@@ -37,6 +63,12 @@ export interface ContentStore {
    * again is a no-op, never an overwrite, and returns the same identity.
    */
   putContents(organizationId: string, content: Uint8Array): Promise<ContentReference>;
+
+  /**
+   * Store several bodies in one conflict-safe request, hashing them here and
+   * collapsing identical bodies to one row. The caller owns chunking.
+   */
+  putContentsBatch(organizationId: string, writes: readonly ContentWrite[]): Promise<ContentWriteResult[]>;
 
   /**
    * The exact bytes, verified against their hash and size before being
@@ -49,14 +81,8 @@ export interface ContentStore {
 }
 
 /**
- * The garbage collector's contract, to be implemented by a later phase
- * (TODO 3.4, "Garbage collection of orphaned content"). Nothing here calls
- * it yet, and this file deliberately contains no deletion code: removing a
- * row is correct only when no lives files row references its hash any more,
- * which needs the reverse-lookup read the migration's
- * files (organization_id, hash) index serves.
- *
- * <T> deleteOrphanedContents(db: Db): Promise<number>
- * — deletes file_contents rows of organizations whose hash no files row
- * references, returning how many it removed.
+ * The garbage collector's contract, implemented in `lib/content/gc.ts`.
+ * Deletes file_contents rows of organizations whose hash no files row
+ * references, with a grace period and atomic database-side check-and-delete.
  */
+export type { GcOptions, GcStats } from "./gc.ts";

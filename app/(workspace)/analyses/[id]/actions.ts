@@ -2,8 +2,12 @@
 
 import { createHash } from "node:crypto";
 import { tracingStatus, type TracingStatus } from "@/lib/ai/client";
-import { classifyFile, explainFile, explainFolder, type Cache } from "@/lib/ai/tasks";
+import { type ParsedCitation } from "@/lib/ai/citations";
+import { type QuestionInput } from "@/lib/ai/prompts";
+import { formatRetrievedContext, retrieveGroundedContext } from "@/lib/ai/retrieval";
+import { answerQuestion, classifyFile, explainFile, explainFolder, type Cache } from "@/lib/ai/tasks";
 import { loadFileInput, loadFolderInput } from "@/lib/analysis/context";
+import { getFileContent } from "@/lib/content/read";
 import { fetchFileAt, resolveHeadCommit } from "@/lib/pipeline/github";
 import type { ModelRole } from "@/lib/roles";
 import { createAdminSupabase } from "@/lib/supabase/admin";
@@ -23,6 +27,22 @@ export type ExplainResult =
     }
   | { ok: false; error: string };
 
+export type QAResult =
+  | {
+      ok: true;
+      body: string;
+      model: string;
+      cached: boolean;
+      tracing: TracingStatus;
+      citations: ParsedCitation[];
+      retrieval: {
+        totalCharacters: number;
+        files: { fileId: string; path: string; totalLines: number }[];
+        insufficientEvidence: boolean;
+      };
+    }
+  | { ok: false; error: string };
+
 export type HeadResult = { ok: true; head: string; analysed: string } | { ok: false; error: string };
 export type FileAtHead = { ok: true; state: "unchanged" | "changed" | "deleted" } | { ok: false; error: string };
 
@@ -36,7 +56,7 @@ export async function explainFileAction(analysisId: string, path: string): Promi
     const loaded = await loadFileInput(db, analysis.id, path);
     if (!loaded) return { ok: false, error: `${path} isn't a file in this analysis` };
     const cache = cacheFor(db, analysis.organizationId);
-    const source = sourceAtAnalysedCommit(analysis, path, loaded.file.hash);
+    const source = sourceForFile(db, loaded.file.id, path);
 
     // Labelling comes first so the explanation's question includes the role,
     // and asks the same question next time, when the role is read back stored.
@@ -74,6 +94,72 @@ export async function explainFolderAction(analysisId: string, dir: string): Prom
     return { ok: true, ...answer, tracing: tracingStatus(), labelled: null, labelError: null };
   } catch (error) {
     console.error(`Explaining folder ${dir} failed:`, error);
+    return { ok: false, error: messageOf(error) };
+  }
+}
+
+export async function askQuestionAction(analysisId: string, question: string): Promise<QAResult> {
+  const t0 = performance.now();
+  try {
+    const trimmed = question.trim();
+    if (!trimmed) {
+      return { ok: false, error: "Question cannot be empty" };
+    }
+
+    const db = await createServerSupabase();
+    const analysis = await readAnalysis(db, analysisId);
+
+    // 1. Multi-index deterministic retrieval & graph expansion
+    const retrieved = await retrieveGroundedContext(db, analysis.id, trimmed);
+    const tRetrieval = performance.now();
+    const contextText = formatRetrievedContext(retrieved);
+
+    // 2. Fetch all analysis files for verification context
+    const { data: allFilesData } = await db
+      .from("files")
+      .select("path")
+      .eq("analysis_id", analysis.id)
+      .is("skip_reason", null);
+    const allAnalysisFiles = new Set((allFilesData ?? []).map((f) => f.path));
+
+    // 3. Answer question using bounded grounded context
+    const questionInput: QuestionInput = {
+      question: trimmed,
+      contextText,
+      files: retrieved.files.map((f) => ({
+        path: f.path,
+        contentHash: f.contentHash,
+        totalLines: f.totalLines,
+      })),
+    };
+
+    const cache = cacheFor(db, analysis.organizationId);
+    const answer = await answerQuestion(questionInput, { cache, allAnalysisFiles });
+    const tTotal = performance.now();
+
+    console.log(
+      `[Q&A Timing] analysisId=${analysisId} retrievalMs=${Math.round(tRetrieval - t0)} totalMs=${Math.round(tTotal - t0)} retrievedFiles=${retrieved.files.length} insufficientEvidence=${retrieved.insufficientEvidence}`,
+    );
+
+    return {
+      ok: true,
+      body: answer.body,
+      model: answer.model,
+      cached: answer.cached,
+      tracing: tracingStatus(),
+      citations: answer.citations,
+      retrieval: {
+        totalCharacters: retrieved.totalCharacters,
+        files: retrieved.files.map((f) => ({
+          fileId: f.fileId,
+          path: f.path,
+          totalLines: f.totalLines,
+        })),
+        insufficientEvidence: retrieved.insufficientEvidence,
+      },
+    };
+  } catch (error) {
+    console.error(`Asking question on ${analysisId} failed:`, error);
     return { ok: false, error: messageOf(error) };
   }
 }
@@ -155,14 +241,15 @@ async function storeModelRole(organizationId: string, fileId: string, role: Mode
 // Fetched at most once per request, and only if a cache miss needs it. The
 // bytes must be the ones the parser read; if GitHub's copy hashes differently,
 // explaining it would describe code that isn't on the map.
-function sourceAtAnalysedCommit(analysis: Analysis, path: string, hash: string): () => Promise<string> {
+function sourceForFile(db: Db, fileId: string, path: string): () => Promise<string> {
   let pending: Promise<string> | null = null;
   return () => {
     pending ??= (async () => {
-      const bytes = await fetchFileAt(analysis.repository, analysis.commitSha, path);
-      if (bytes === null) throw new Error(`GitHub has no ${path} at ${analysis.commitSha.slice(0, 7)}, the commit that was analysed`);
-      if (sha256(bytes) !== hash) throw new Error(`GitHub's copy of ${path} at ${analysis.commitSha.slice(0, 7)} isn't what was parsed`);
-      return bytes.toString("utf8");
+      const text = await getFileContent(db, fileId);
+      if (text === null) {
+        throw new Error(`Content for ${path} is unavailable in this analysis`);
+      }
+      return text;
     })();
     return pending;
   };

@@ -52,6 +52,12 @@ export type ClassifyInput = {
   importedBy: { path: string; role: string | null }[];
 };
 
+export type QuestionInput = {
+  question: string;
+  contextText: string;
+  files: { path: string; contentHash: string; totalLines: number }[];
+};
+
 // The pane is narrow: headings would cut a few short paragraphs into labelled
 // fragments. Forbidding formatting outright doesn't hold, so a small subset is
 // permitted and the pane renders exactly that subset.
@@ -76,6 +82,30 @@ ${HONESTY}
 ${FORMAT}`;
 
 export const CLASSIFY_SYSTEM = `You label one file of a TypeScript or JavaScript repository that no framework convention identified. Choose the single role that best describes it from: ${MODEL_ROLES.join(", ")}. Answer "none" if none of them clearly fits. Use its path, the names it exports, its source, and the roles of the files around it. Answer only with the JSON the schema asks for.`;
+
+export const QUESTION_SYSTEM = `You answer questions about an analysed codebase strictly grounded in the provided code snippets.
+
+Grounding and Anti-Hallucination Rules:
+1. Grounding: Base your factual code claims ONLY on the provided code snippets and their file paths and line numbers. Clearly distinguish high-level general explanations from source-backed claims.
+2. Citation Format: When citing source code, cite the exact file path and line numbers in backticks: \`path/to/file.ts#L<start>-L<end>\` (e.g. \`lib/auth.ts#L10-L25\`) or \`path/to/file.ts#L<line>\`.
+3. Valid Citations Only: NEVER cite a file path or line number that is not present in the provided code snippets. Never invent or hallucinate file names.
+4. Negative Citation Rules:
+   - NEVER cite directories (e.g. never cite \`src/components/\` as a code citation).
+   - NEVER cite npm packages as repository file paths (e.g. do not format \`@testing-library/react\` as a code citation).
+   - NEVER use placeholder or template paths in citations (e.g. never use \`<component>\` or \`*\`).
+   - NEVER cite HTTP or REST endpoint paths as file citations (e.g. \`/api/login\`, \`/sdk/register\` name routes, not files). Describe endpoints in plain text or bold; a code-cited path is always a real file with an extension plus \`#L\` line numbers, exactly as it appears in the snippets.
+5. Repository Onboarding & Architecture Questions:
+   When answering broad repository or onboarding questions, structure your answer to cover:
+   - Project Purpose & Tech Stack
+   - Repository Structure & Main Entry Points
+   - Core Modules & Execution Flow
+   - Testing & Development Workflow
+   - Getting Started & Contributor Starting Points
+   Explicitly cite the provided entry point snippets for concrete claims, and note where evidence is incomplete rather than fabricating details.
+6. Insufficient Evidence: If the provided snippets do not contain enough evidence to answer a question with certainty, state clearly what is known from the snippets and what is missing. Never fabricate references.
+7. Usage & Integration Questions: When the question asks how a developer uses or integrates something in this repository, teach the public interface in the order a new user would apply it — initialization/config first, then the main flow, then helpers — naming the exported functions, components, routes and options exactly as the snippets define them. Include short fenced-code usage examples assembled strictly from the snippet lines. If part of the interface is not in the snippets, say what is unknown there rather than guessing; the snippets may only show one side (e.g. the server side of an SDK).
+
+${FORMAT}`;
 
 export function explainFileMessage(input: FileInput, source: string): string {
   return [
@@ -135,6 +165,20 @@ export function classifyMessage(input: ClassifyInput, excerpt: string): string {
     "<<<",
     excerpt,
     ">>>",
+  ].join("\n");
+}
+
+export function questionMessage(input: QuestionInput): string {
+  return [
+    `Question: ${input.question.trim()}`,
+    "",
+    "Retrieved Code Snippets from Repository:",
+    "<<<",
+    input.contextText.trim(),
+    ">>>",
+    "",
+    "Provide a clear, direct answer grounded strictly in the snippets above.",
+    "Cite every relevant file and line range using backticks, like `path/to/file.ts#L10-L25`.",
   ].join("\n");
 }
 

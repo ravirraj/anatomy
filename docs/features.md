@@ -583,7 +583,7 @@ variable that an earlier revision of the environment template mentioned is
 gone, because nothing reads it.
 
 **What it would take.** Repository-wide retrieval, a question interface, and
-citations. Designed in [docs/ai-system.md](ai-system.md#9-proposed-repository-wide-question-answering).
+citations. Implemented in [docs/ai-system.md](ai-system.md#9-implemented-repository-wide-question-answering-phase-5).
 
 ### A call graph
 

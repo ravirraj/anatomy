@@ -66,7 +66,12 @@ export function moduleOf(relativePath: string): string {
   return dir === "" ? "." : dir;
 }
 
-function countLines(content: string): number {
+// The parser's line numbering, the one files.lines uses. Every line-number
+// consumer in the repository (the read service among them) counts this way,
+// so there is exactly one convention to keep in step with. An empty file
+// has no lines; a final newline ends the last line rather than beginning an
+// empty one.
+export function countLines(content: string): number {
   if (content.length === 0) return 0;
   const breaks = content.split("\n").length;
   return content.endsWith("\n") ? breaks - 1 : breaks;

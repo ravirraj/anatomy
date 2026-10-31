@@ -1,8 +1,10 @@
 # Source-file content storage — feasibility and architecture
 
-Status: **Designed, and the storage foundations are implemented — see §14.**
-This document was written before any storage code existed. It records what
-was verified in the code as of `SCHEMA_VERSION = 5`, defines the
+Status: **Designed; the storage foundations are implemented (§14), the pipeline
+writes content during indexing (§15), the read side with lazy backfill is
+implemented (§16), and the in-process LRU cache and safe garbage collection are
+implemented (§17).** This document was written before any storage code existed.
+It records what was verified in the code as of `SCHEMA_VERSION = 5`, defines the
 requirements, compares the alternatives, and settles the design that
 [ADR-0001](decisions/0001-source-content-storage.md) records as the decision.
 [TODO.md](../../TODO.md) §3.4 carries the implementation tasks.
@@ -222,9 +224,9 @@ flowchart LR
   end
   FILES -->|"hash = content reference"| FC
   subgraph Answer time
-    SVC[lib/content/read.ts<br/>getFileContent(fileId)<br/>getFileLines(fileId, start, end)] --> CACHE["bounded LRU<br/>key: file_id + hash<br/>budget 32 MB, entry ≤ 1 MB"]
-    CACHE --> FC
-    SVC --> CIT["citation / Q&A paths"]
+    SVC[lib/content/read.ts<br/>getFileContent(fileId)<br/>getFileLines(fileId, start, end)] --> FC[("file_contents<br/>org_id · hash PK<br/>payload bytea (compressed by TOAST)<br/>size · created_at, RLS by org")]
+    SVC -.->|"on a 'absent' file: fetchFileAt<br/>at the analysed commit, hash-verified,<br/>then stored and flagged (§16)"| GH[("raw.githubusercontent.com<br/>at the analysed commit only")]
+    SVC --> CIT["citation / Q&A paths (later)"]
   end
 ```
 
@@ -347,7 +349,6 @@ What the parser already refuses (`walk.ts`):
 | Declaration files | skipped as `declaration-file` | **not stored** — types only, no runtime import graph, no citation target |
 | Readable-would-fail at read time (perms) | skipped as `unreadable` with the OS's message | **not stored** |
 | Files inside excluded directories (`node_modules`, `.next`, nestjs `dist`) | never walked | **not stored** — never *saw* them |
-
 The recommendation is therefore simply: **`file_contents` holds exactly and
 only the payloads of files that `ParseResult.files` contains**, and nothing
 the parser skipped, ever.
@@ -492,10 +493,37 @@ export interface ContentStore {
 
 ```ts
 // lib/content/read.ts — read-side, called from server actions and future API routes
-export interface FileContentService {
-  getFileContent(fileId: string): Promise<string | null>;               // whole file, utf8-decoded
-  getFileLines(fileId: string, startLine: number, endLine: number): Promise<string | null>;  // 1-based, inclusive, indexing matches ParseResult line numbers
-}
+// Implemented as of Phase 3 (see §16).
+export type BackfillDeps = {
+  /** The writer client for content and metadata; defaults to the admin client
+   *  (createAdminSupabase) — members have no write grant on files/file_contents. */
+  writer?: Db;
+  /** One file's bytes at one commit; injectable for tests, defaults to the
+   *  pipeline's commit-pinned fetchFileAt. */
+  fetchFile?: typeof fetchFileAt;
+};
+
+export async function getFileContent(
+  db: Db,
+  fileId: string,
+  deps?: BackfillDeps,
+): Promise<string | null>;  // whole file, utf8-decoded exactly as the parser read it
+
+export async function getFileLines(
+  db: Db,
+  fileId: string,
+  startLine: number,
+  endLine: number,
+  deps?: BackfillDeps,
+): Promise<string | null>;  // 1-based, inclusive, parser-coincident line numbers
+
+export type FileSource = {
+  fileId: string;
+  path: string;
+  contentHash: string;
+  text: string;
+  lineCount: number;   // the parser's countLines, shared with lib/parser/walk.ts
+};
 ```
 
 Rationale for the shape:
@@ -507,10 +535,12 @@ Rationale for the shape:
   wants windows), and surfacing `getFileLines` at this layer keeps the
   *line-numbering contract* (1-based, parser-coincident) in one place for the
   next consumer to inherit rather than re-derive.
-- The spec's `getFileLines(fileId, startLine, endLine)` and the exact
-  `ContentStore` calls above are deliberately minimal; **no** `Stream` API is
-  proposed — payloads celestially ≤ 1 MB, so streaming to the web response is
-  a later trade-off, not a need.
+- **No answer-path cache this phase.** `lib/content/read.ts` reads the
+  database every time; §7's bounded LRU stays proposed, not implemented. The
+  `getFileLines(fileId, startLine, endLine)` and `ContentStore` calls above
+  are deliberately minimal; **no** `Stream` API is proposed — payloads are
+  celestially ≤ 1 MB, so streaming to the web response is a later trade-off,
+  not a need.
 
 ---
 
@@ -702,12 +732,17 @@ guarantee, and isolation is a row-policy guarantee.
 - **`organization_id` is `text`, not `uuid`** — the Organizations table is
   Clerk ids, and every other table keys them as text. The ADR's uuid came
   from the original proposal; the convention here won.
-- **`putContents` is not chunked** — this document's §8 sketches
-  `putContents(organizationId, readonly ContentPut[])` for the pipeline's
-  store phase. The implemented primitive is one body per call
-  (`putContents(db, organizationId, content)`); the chunked, many-files-per-
-  call shape belongs to the pipeline-writer task that has a chunking
-  discipline to fit it into (the `files` insert already chunks).
+- **`putContents` was not chunked until the pipeline writer arrived** —
+  this document's §8 sketches `putContents(organizationId, readonly ContentPut[])`
+  for the pipeline's store phase. The Phase-1 implemented primitive was one
+  body per call (`putContents(db, organizationId, content)`); Phase 2 added
+  the batched form the pipeline actually drives — `putContentsBatch`, several
+  bodies in one conflict-safe request — and the singular function is now a
+  one-body delegation to it, so the hashing/validation/upsert logic exists
+  exactly once. The chunk *policy* lives with the pipeline's chunking
+  discipline (`CONTENT_CHUNK_FILES` / `CONTENT_CHUNK_BYTES` in
+  `lib/pipeline/store.ts`), because that is where every other chunk constant
+  lives.
 - **`deleteOrphaned` is a contract, not a function** — its signature and
   conditions are written into `lib/content/types.ts` and nothing calls it;
   the migration's trigger blocks *updates only*, so a future GC can delete
@@ -716,12 +751,184 @@ guarantee, and isolation is a row-policy guarantee.
   (`preserve_file_contents`), not just by the application's upsert
   discipline, as §5.2 argues it must be.
 
+## 16. Phase 3 — the read side and lazy backfill, as implemented (October 2026)
+
+`lib/content/read.ts` exists and TODO §3.4's read-side tasks are done:
+`getFileContent(db, fileId)` and `getFileLines(db, fileId, startLine, endLine)`,
+both hash-verified, organization-scoped through the file row's own
+`organization_id` (never accepted from a caller), with lazy backfill through
+the existing `fetchFileAt` path — no new GitHub fetching, no new PR.
+
+### 16.1 API
+
+```ts
+export type BackfillDeps = {
+  writer?: Db;          // defaults to createAdminSupabase lazily
+  fetchFile?: ...;      // defaults to lib/pipeline/github.ts's fetchFileAt
+};
+
+export async function getFileContent(db: Db, fileId: string, deps?: BackfillDeps): Promise<string | null>;
+export async function getFileLines(db: Db, fileId: string, startLine: number, endLine: number, deps?: BackfillDeps): Promise<string | null>;
+export type FileSource = { fileId, path, contentHash, text, lineCount };
+export { ConsistencyError, IntegrityError };  // from lib/content/types.ts
+```
+
+`db` is the caller's client — server actions pass the member client, so RLS
+holds; scripts pass fakes or the admin client. Both functions share one
+internal load (`loadSource` → `FileSource`), so content is fetched at most
+once per call and never fetched twice after a successful backfill.
+
+### 16.2 Read rules
+
+1. **Resolve the file row under the caller's policies** — nested select
+   `files → analysis:analyses(commit_sha, project:projects(repo_owner,
+   repo_name))`, `.eq("id", fileId).maybeSingle()`. Missing row ⇒ `null`;
+   `hash === null` (a file the parser skipped) ⇒ `null`. Another
+   organization's file is not there at all — the row itself was filtered by
+   RLS before its `organization_id` was ever trusted.
+2. **`content_status === 'stored'`** ⇒ `getContent(organization_id, hash)`
+   verifies hash and size. Missing row ⇒ `ConsistencyError` (a database that
+   contradicts itself is not smoothed into a null). Corrupted payload or bad
+   size ⇒ `IntegrityError` from the store.
+3. **Unknown `content_status`** ⇒ `ConsistencyError` — the schema permits
+   only `absent`/`stored`; anything else is a contract failure, loud.
+4. **`content_status === 'absent'`** ⇒ first check the content table anyway:
+   a backfill that wrote content but died before flipping status leaves this
+   exact state, and a concurrent backfill may have landed. Verified bytes are
+   served, the flip is retried, and a failed flip warns (`console.warn`) and
+   serves — bookkeeping failure never rejects a verified read.
+5. **Absent and nothing stored** ⇒ lazy backfill:
+   - the repository and `commit_sha` come from the row's own analysis +
+     project embed; missing either ⇒ `null` — truthfully unavailable, **never
+     a default-branch or HEAD fetch** (commit pinning).
+   - GitHub's bytes are sha256-compared to `files.hash` *before* anything is
+     written; mismatch ⇒ `ConsistencyError`, nothing stored, nothing served
+     (a stale substitute is the failure this phase exists to prevent).
+   - `putContents(writer, organization_id, bytes)` — idempotent,
+     `ON CONFLICT DO NOTHING`, the same call the pipeline uses — then
+     `existsContent` confirms the write landed.
+   - the metadata update is conditional:
+     `.update({ content_status: "stored" }).eq("id").eq("organization_id")
+     .eq("hash").eq("content_status", "absent")`. Zero rows touched ⇒ re-read
+     the row: gone ⇒ `null` (the identity moved — re-index replaced it); hash
+     changed ⇒ `null` (stale identity; its verified bytes stay stored,
+     addressed harmlessly, GC later); otherwise ⇒ already stored, serve.
+6. **Decode:** `Buffer.from(bytes).toString("utf8")` — the parser's own
+   decode (same as `walk.ts`'s `readCandidate`), so line N here is line N
+   there. Exact bytes: CRLF kept, trailing whitespace kept, no truncation,
+   empty file returns `""`, never `null`.
+
+### 16.3 Line numbering (`getFileLines`)
+
+- 1-based, inclusive, matching `files.lines` exactly — `countLines` is
+  exported from `lib/parser/walk.ts` and reused; no second convention exists.
+- `sliceLines(content, startLine, endLine)` is exported for tests: split on
+  `\n`, the trailing `""` a final newline leaves is not a line (the
+  `countLines` adjustment), a per-line trailing `\r` is stripped (the
+  ts-morph line-text view for CRLF files), lines join with `\n`.
+- **Strict bounds:** `startLine` or `endLine` past the last line ⇒ `null`,
+  never a clamped prefix and never silent truncation. Empty file ⇒ `null`
+  for any range (it has no lines).
+- **Rejected loudly** (`RangeError`): non-integers, zero or negative
+  numbers, `startLine > endLine` — caller bugs, validated before any
+  database work.
+- Caveat, documented: a lone `\r` (old Mac line endings) is not a break in
+  this convention, same as the parser's `countLines`; exotic files' line
+  numbers can disagree with ts-morph's scanner — the read side follows
+  `files.lines`, the parser's own.
+
+### 16.4 Concurrency and idempotency
+
+- Content writes are `ON CONFLICT DO NOTHING`; concurrent backfills both
+  fetch (documented race — no distributed lock this phase), both write the
+  same hash once, and the conditional metadata update is idempotent: one flip
+  lands, the other matches nothing, and both serve their verified bytes.
+- A row whose identity moved mid-backfill is never stamped `stored` by a
+  stale backfill, and never serves stale bytes.
+- Two simultaneous reads of the same absent file fetch twice and converge on
+  one stored row; after a successful backfill, reads never fetch again.
+
+### 16.5 What Phase 3 deliberately does not do (spec)
+
+- No LRU cache (§7 stays proposed), no garbage collection
+  (`deleteOrphaned` remains a contract, not a function), no full-text search,
+  no retrieval/Q&A, no citation hash-binding, no object-storage backend, no
+  background backfill jobs, no prefetching.
+- `app/(workspace)/analyses/[id]/actions.ts` is **not** rewired: it keeps its
+  own `sourceAtAnalysedCommit` (fetch at analysed commit, hash-verified,
+  throws on mismatch, stores nothing) — deliberate, because storage belongs
+  to the read path now and citation hash-binding is a later task.
+
+### 16.6 Tests
+
+- **`node scripts/test-content-read.ts`** (in `pnpm test`) — 66 checks
+  against a fake of exactly the calls the read path makes: stored read with
+  exact bytes and CRLF kept; missing file and skipped (hash-less) file ⇒
+  `null`; empty file ⇒ `""`; org isolation through the row; corrupted
+  payload ⇒ `IntegrityError`; stored-without-row ⇒ `ConsistencyError`;
+  unknown status ⇒ `ConsistencyError`; absent-but-content heals and re-flips;
+  line tests for first/last/single/multi/empty/CRLF/LF/trailing-newline/
+  no-trailing-newline/invalid numbers/beyond-EOF; backfill happy path
+  (analysed commit + exact repository + path, hash-verified, conflict-safe
+  write, conditional metadata guard, second read refetches nothing); remote
+  deleted ⇒ `null`; rate limit / network ⇒ transport error propagated;
+  storage write failure ⇒ error, nothing flipped; unconfirmed write ⇒ error,
+  retry heals; hash mismatch ⇒ `ConsistencyError`, nothing stored; two
+  simultaneous backfills (documented race, one row, both served); row
+  identity moved mid-backfill ⇒ `null`, new identity unstamped; row vanished
+  mid-backfill ⇒ `null`; concurrent winner's flip stands; parser-agreement
+  round-trip: a real fixture parsed by the real parser, its routes/symbols/
+  edges read back at their recorded line numbers, and `files.lines` proven as
+  the exact EOF boundary. Fakes prove nothing about RLS — that is the live
+  suites' business.
+- **`node --env-file=.env.local scripts/test-content-read-db.ts`** — the live
+  linked project: happy backfill flagged `stored`, exact bytes back, second
+  read refetches nothing, an outdated `'absent'` heals on read, a re-index
+  racing the backfill yields `null` with nothing stamped, hash mismatch is
+  refused as `ConsistencyError`, a path missing at the analysed commit is
+  `null`. Seeds one throwaway organization plus its project, analysis, and
+  file row; deletes the organization at the end and verifies zero content,
+  files, and analyses rows with the test prefix remain. Deliberately not part
+  of `pnpm test` (it touches the linked database).
+- **`scripts/test-content-rls.ts`** and **`scripts/test-content-pipeline-db.ts`**
+  — unchanged, both still green (member isolation and the batched bytea wire
+  behavior respectively).
+- Existing suites unchanged: `test-fixtures`, `test-provider`,
+  `test-explanation-store`, `test-citations`, `test-symbols`, `test-search`,
+  `test-content-store`, `test-content-pipeline`, plus `accuracy` — all pass.
+
+### 16.7 Failure handling summary
+
+| Situation | Behaviour |
+|---|---|
+| Missing file row / skipped file | `null` |
+| `stored` row, nothing behind it | `ConsistencyError`, never `null` |
+| Corrupted payload / wrong size | `IntegrityError` |
+| `content_status` the schema does not define | `ConsistencyError` |
+| Content present but status `'absent'` | verified bytes served, flip retried |
+| Flip's metadata update fails | warned, bytes served, next read retries |
+| GitHub has nothing at the analysed commit | `null` |
+| GitHub's bytes hash elsewhere | `ConsistencyError`, nothing stored |
+| Rate limit / network down | transport error propagated |
+| Content write refused | error, nothing flipped |
+| Write confirmed-missing afterwards | error, retry heals to `stored` |
+| Row identity moves mid-backfill | `null`, stale identity unstamped, old content stays |
+| Backfill race (two readers, two writers) | one stored row, both served, no lock |
+
+Now, per [content-pipeline-integration.md](content-pipeline-integration.md)
+Phase 2's record, §16 is this phase's record; together they are the
+source-content storage feature's documentation, one PR (#2), one branch
+(`ravi`), no merge until approved.
+
 ### 14.3 The module
 
 ```text
-lib/content/types.ts   ContentReference, ContentKey, IntegrityError, ContentStore, Db + the GC contract
-lib/content/store.ts   putContents, getContent, existsContent
-                       + MAX_CONTENT_BYTES (= MAX_FILE_BYTES from lib/parser/walk.ts), sha256, isContentHash
+lib/content/types.ts   ContentReference, ContentKey, IntegrityError, ContentWrite,
+                       ContentWriteResult, ContentStore, Db + the GC contract
+lib/content/store.ts   putContents (one body; delegates), putContentsBatch
+                       (the pipeline's driver), getContent, existsContent
+                       + MAX_CONTENT_BYTES (= MAX_FILE_BYTES from lib/parser/walk.ts),
+                       sha256, isContentHash
 ```
 
 - **Write:** hash is computed from the exact bytes, never accepted from the
@@ -785,8 +992,31 @@ no policy for members at all; the pipeline's writer uses the service role.
   driver verifies the database came out with zero content rows and zero
   test organizations. Deliberately **not** part of `pnpm test`, which must
   run without a connected database.
-- `lib/supabase/database.types.ts` was regenerated from the live schema
-  after the migrations, per its own header instruction.
+- **`lib/supabase/database.types.ts` was regenerated from the live schema
+  after the migrations, per its own header instruction.**
+- **`node scripts/test-content-pipeline.ts`** (in `pnpm test`) — the
+  pipeline's content write against a real parser and a fake client, over a
+  temporary fixture directory parsed for each scenario. Proves: every
+  indexed file ends `stored` with content_status set only after its body is
+  confirmed in `file_contents`; the stored bytes hash to the `files` row's
+  hash and are byte-for-byte the bytes on disk; skipped files get no claim;
+  chunked requests respect `CONTENT_CHUNK_FILES` and `CONTENT_CHUNK_BYTES`;
+  duplicate bodies within a batch and across runs collapse with the stats
+  counting the collapse; a refused content request fails only its own
+  chunk's files (absent, counted), not the run; a metadata failure fails the
+  run loudly while the content already written stays; a retried run repeats
+  nothing and creates no second row; text that is not the round trip of the
+  bytes (a file with a byte UTF-8 cannot express) is stored via the exact
+  re-read fallback; a tampered/missing candidate text is verified-then-
+  refused, never stored under an identity its body does not hash to.
+- **`node --env-file=.env.local scripts/test-content-pipeline-db.ts`** —
+  the wire behavior no fake can prove, against the live linked project: a
+  batched bytea write (hex `\x` encoding over PostgREST) accepted, duplicate
+  bodies collapsing inside one bulk request, byte-for-byte reads back,
+  a no-write second batch, per-organization scoping. Cleans up by deleting
+  its throwaway test organizations — the content follows them out by the
+  foreign key's cascade — and verifies no row with a test organization id
+  remains. Deliberately not part of `pnpm test`.
 
 ### 14.6 Failure handling summary
 
@@ -799,3 +1029,189 @@ no policy for members at all; the pipeline's writer uses the service role.
 | Payload does not hash to its identity | `IntegrityError`, never partial content |
 | Size agrees differently | `IntegrityError` |
 | Member writes by any path | Refused by grants/policy (and by nothing granted to change) |
+
+---
+
+## 15. Phase 2 — the pipeline write, as implemented (October 2026)
+
+The indexing pipeline now preserves what it used to discard. The questions
+the design left to the implementer, and how the code answers them, is
+recorded in full in
+[content-pipeline-integration.md](content-pipeline-integration.md); what
+this section records is the shape, so this document stands alone.
+
+### 15.1 Where the bytes come from
+
+`run.ts` holds `selection` — the walk's candidates — when it calls
+`storeResult`, and passes their texts keyed by path. `storeResult` treats
+them as an *argument to verify, not bytes to trust*:
+
+1. `Buffer.from(candidate.content, "utf8")` is hashed with the store's
+   `sha256` and compared to the parser's `file.hash` (the walk's raw-bytes
+   hash). Equal ⇒ the bytes are byte-for-byte the walk's originals — storing
+   them cannot mismatch without a sha256 collision. No second read happens.
+2. Not equal ⇒ the text was not the round trip of the bytes (a file with a
+   byte UTF-8 cannot express): one exact `readFileSync` from the still-alive
+   workdir, hashed and compared again.
+3. Still not equal ⇒ the file changed under the run: nothing is written
+   under the stale identity; the file stays `absent` and the run continues.
+
+The candidate strings were already in memory (the parser holds them); the
+map references them, so this adds no repository-sized copy.
+
+### 15.2 The write
+
+- Batching is `putContentsBatch(db, organizationId, writes)`: one
+  conflict-safe bulk upsert per call (`ignoreDuplicates: true`, so an
+  existing body is never rewritten), bodies hashed inside the store,
+  duplicates inside a batch collapsed to one row. The singular
+  `putContents` delegates to it.
+- Chunking is the pipeline's, with the other chunk constants:
+  `CONTENT_CHUNK_FILES = 25`, `CONTENT_CHUNK_BYTES = 4 MiB` (raw; hex wire
+  ≈ 8 MB worst case). Requests are independent, *not* one transaction —
+  same as every other chunked write in this file's pipeline.
+- Sequence: clear this analysis's old `files` rows → write all content
+  chunks → insert `files` rows with `content_status = 'stored'` only when
+  the content row for that hash was confirmed during *this* run. The
+  content-then-metadata order makes the §3 invariant hold by construction.
+- Idempotent retries: content rows are `ON CONFLICT DO NOTHING`; a re-run
+  repeats nothing, and a hash whose request failed is retried by the next
+  chunk that carries it (a later batch of the same run), or by a whole
+  re-run.
+- A batch failure is *not* a run failure: the files of that chunk end
+  `absent`, the rest land, the run completes and reports both counts. A
+  metadata (`files`) failure still fails the run loudly, leaving content
+  rows written but unreferenced — the documented pre-GC state.
+
+### 15.3 Observability
+
+`storeResult` returns `ContentStorageStats`:
+
+| Field | Meaning |
+|---|---|
+| `eligible` | files the parser indexed (all were candidates for storing) |
+| `stored` | of those, files whose content is confirmed in `file_contents` |
+| `bytes` | raw bytes sent in confirmed writes (each distinct body once) |
+| `deduplicated` | writes skipped because the body was confirmed earlier this run or collapsed within its request |
+| `absent` | eligible files left `'absent'` |
+| `failed` | of the absent: a database request was refused, or no text arrived for the path |
+| `changed` | of the absent: neither the text nor a fresh read hashed to the parsed identity |
+| `unreadable` | of the absent: the fallback re-read itself failed |
+
+`run.ts` folds them into the final stage message — e.g. *"…; content stored
+for 1,024 files, 3 files without content"* — beside a `console.warn` per
+refused chunk (rate: per batch, never per file, and never any source text).
+
+### 15.4 What Phase 2 does not do (historical note)
+
+Lazy backfill was delivered in Phase 3 (§16); LRU cache and GC were delivered in
+Phase 4 (§17); full-text search, retrieval/Q&A, citation hash-binding, object
+storage, and background cron jobs remain deferred, as the tasks list says.
+
+---
+
+## 17. Phase 4 — bounded in-process LRU cache and safe garbage collection, as implemented (October 2026)
+
+Phase 4 delivers the bounded in-process LRU cache (`lib/content/cache.ts`) and
+safe orphan-content garbage collection (`lib/content/gc.ts`,
+`supabase/migrations/20261030050000_gc_function.sql`), fulfilling TODO §3.4's
+Phase 4 goals.
+
+### 17.1 In-process LRU cache (`lib/content/cache.ts`)
+
+- **Organization-scoped keys:** Keys are formatted strictly as
+  `${organizationId}:${contentHash}`. Content is never shared across
+  organizations, preventing cross-tenant data leakage. Identical content hashes
+  in different organizations exist as separate cache entries.
+- **Strict bounds:** Default configuration allocates `maxBytes = 32 MB` and
+  `maxEntries = 256` items. Evictions occur immediately whenever an insertion
+  would exceed either the byte budget or entry count.
+- **LRU promotion and eviction:** Every cache hit promotes the accessed entry
+  using a strictly monotonic access counter, ensuring deterministic LRU
+  ordering regardless of system timer resolution.
+- **Buffer immutability:** Both input buffers (on `set`) and returned buffers
+  (on `get`) are defensively cloned (`new Uint8Array(entry.data)`), ensuring
+  external mutations never corrupt cached content.
+- **Read-path integration:** `lib/content/read.ts` integrates with the cache via
+  `BackfillDeps.cache`. When `content_status === 'stored'`, reads check the cache
+  first before falling back to `getContent(db)`. Verified bytes fetched from
+  the database or newly backfilled from GitHub populate the cache. When
+  `content_status === 'absent'`, the read path inspects the database content
+  table directly to ensure proper transactional healing. Passing `cache: null`
+  explicitly bypasses caching.
+- **Observability:** `getStats()` provides real-time metrics: `hits`, `misses`,
+  `evictions`, `currentSize` (bytes), and `currentEntries`.
+
+### 17.2 Safe orphan-content garbage collection (`lib/content/gc.ts`)
+
+Indexing pipelines write content before inserting files metadata rows. Therefore,
+an unreferenced content row can legitimately be in-flight indexing data. Phase 4
+implements database-enforced safety guarantees:
+
+- **Configurable grace period:** Only content rows older than `gracePeriodMs`
+  (default 24 hours) are eligible for collection. Newly written content is
+  immune, safely protecting active pipeline runs (which complete within a 5-minute
+  hard timeout).
+- **Atomic database RPC with reference rechecking:** The database function
+  `public.delete_orphaned_file_contents(p_organization_id, p_grace_period, p_batch_size)`
+  uses a Common Table Expression with `FOR UPDATE SKIP LOCKED` on candidate
+  `file_contents` rows. In the same atomic statement, it re-verifies that no
+  referencing `files` row was inserted before issuing the `DELETE`.
+- **Dry-run by default:** Destructive deletion requires explicit `execute: true`
+  and `dryRun: false`. By default, candidate rows are scanned and reported
+  without deletion.
+- **Bounded batches:** Executed in bounded batches (`batchSize: 500`, `maxBatches: 10`)
+  to prevent database lock exhaustion and long-running transactions.
+- **Organization isolation:** The optional `organizationId` parameter scopes
+  collection to a single organization, or operates system-wide under the service role.
+- **Cache invalidation:** Upon successful database deletion, deleted content hashes
+  are evicted from the in-process `ContentCache`.
+
+#### Concurrency guarantees and hardening
+
+1. **In-flight indexing & atomic touch (`last_referenced_at`):** A new file write
+   generates a `created_at` timestamp of `now()`. When an indexing run reuses an existing
+   content hash (even one orphaned >24 hours ago), `putContentsBatch` performs an atomic
+   `ON CONFLICT (organization_id, content_hash) DO UPDATE SET last_referenced_at = excluded.last_referenced_at`.
+   This refreshes `last_referenced_at` to the current time without mutating the immutable
+   content payload, size, or identity.
+2. **Lock ordering safety:**
+   - *Indexing arrives first:* `last_referenced_at` is set to `now()`. The concurrent GC
+     candidate filter evaluates `fc.last_referenced_at < clock_timestamp() - grace_period`, which
+     is false. GC skips the row completely, giving indexing the full grace period to insert file references.
+   - *GC arrives first:* GC locks the candidate row with `FOR UPDATE SKIP LOCKED`. If indexing concurrently
+     attempts to upsert the row, PostgreSQL blocks the insert on the row lock.
+     If GC deletes the row and commits, PostgreSQL's `ON CONFLICT DO UPDATE` detects the deletion and
+     automatically converts to an `INSERT`, safely resurrecting the content row with fresh timestamps.
+     If GC aborts or skips deletion, indexing updates `last_referenced_at` and proceeds cleanly.
+3. **Dual reference re-checking:** In `delete_orphaned_file_contents`, candidate rows are
+   re-verified inside the `DELETE ... USING candidates` CTE under the row lock to confirm that both
+   `last_referenced_at < clock_timestamp() - grace_period` and `not exists (select 1 from files ...)`
+   still hold immediately before deletion.
+4. **Multi-instance caching:** In multi-pod deployments, each instance maintains its own bounded
+   cache. Invalidation on GC is process-local; stale entries in other pods will miss on the next
+   re-index or evict naturally via LRU without data corruption.
+
+### 17.3 Verification and test coverage
+
+- **`node scripts/test-content-cache.ts`** (in `pnpm test`): 54 deterministic
+  checks covering get/set, cache hit/miss, entry limit eviction, byte budget
+  eviction, LRU promotion, buffer immutability, org isolation, identical hashes
+  across orgs, `cachedGetContent` verification, singleton reset, and
+  `getFileContent`/`getFileLines` cache integration.
+- **`node scripts/test-content-gc.ts`** (in `pnpm test`): 26 unit checks with a
+  fake database verifying grace period retention, reference protection,
+  cross-org isolation, dry-run safety, bounded batching, idempotency, cache
+  invalidation, and error recovery.
+- **`node --env-file=.env.local scripts/test-content-gc-db.ts`**: 19 live
+  checks against PostgreSQL on Supabase testing `delete_orphaned_file_contents`,
+  grace period, live `files` reference protection, cross-org isolation, bounded
+  batches, live cache invalidation, and concurrent workers operating under
+  `FOR UPDATE SKIP LOCKED`.
+- **`node --env-file=.env.local scripts/test-content-gc-concurrency.ts`**: 26 live
+  concurrency checks against PostgreSQL on Supabase testing both lock orderings
+  (indexing-first vs GC-first), row-level lock blocking, deletion resurrection,
+  immutability trigger enforcement, and multi-worker stress concurrency.
+- **`node scripts/test-content-read.ts`** and **`node --env-file=.env.local scripts/test-content-read-db.ts`**:
+  All 66 fake and 16 live checks pass, validating that cache integration
+  preserves all existing contracts and racing behaviors.

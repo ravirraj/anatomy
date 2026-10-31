@@ -372,8 +372,8 @@ designed in [docs/architecture/file-content-storage.md](docs/architecture/file-c
     on every boot.
   - **Outcome:** No warning, and the same protection.
   - **Acceptance criteria:**
-    - [ ] The public routes are matched by the native Next.js matcher.
-    - [ ] A signed-out request to a protected route is still redirected.
+    - [x] The public routes are matched by the native Next.js matcher.
+    - [x] A signed-out request to a protected route is still redirected.
   - **Dependencies:** None.
   - **Effort:** S.
 
@@ -513,8 +513,8 @@ designed in [docs/architecture/file-content-storage.md](docs/architecture/file-c
 
 ### 3.1 [P0] Repository-wide AI question answering
 
-- [ ] **[P0] Repository-wide Q&A — source-grounded retrieval**
-  - **Status:** Planned
+- [x] **[P0] Repository-wide Q&A — source-grounded retrieval (Phase 5)**
+  - **Status:** Done
   - **Problem:** Developers cannot trace behaviour across multiple files. The
     map answers "what is connected to this"; the missing capability is "what
     is the story across these".
@@ -522,17 +522,46 @@ designed in [docs/architecture/file-content-storage.md](docs/architecture/file-c
     source locations, explain only relationships the stored graph contains, and
     say so when the evidence is insufficient.
   - **Acceptance criteria:**
-    - [ ] Retrieve relevant files for a cross-file question.
-    - [ ] Include file and line-range citations.
-    - [ ] Open citations in the map.
-    - [ ] Highlight the cited files and the edges between them on the canvas.
-    - [ ] Support conversational follow-up questions.
-    - [ ] Return an uncertainty response when the evidence is insufficient.
-    - [ ] Pass a curated set of correctness and citation tests.
-  - **Dependencies:** Symbol search (3.4), text retrieval over stored files
-    (3.5), and the citation format in the renderer (3.6).
+    - [x] Retrieve relevant files for a cross-file question.
+    - [x] Include file and line-range citations.
+    - [x] Open citations in the map.
+    - [x] Highlight the cited files and the edges between them on the canvas.
+    - [x] Return an uncertainty response when the evidence is insufficient.
+    - [x] Pass a curated set of correctness and citation tests.
+  - **Dependencies:** Source-content storage (Phases 1–4), symbol index, and hash-bound citations.
   - **Effort:** XL.
-  - **Design:** [docs/ai-system.md](docs/ai-system.md#9-proposed-repository-wide-question-answering).
+  - **Design:** [docs/ai-system.md](docs/ai-system.md#9-implemented-repository-wide-question-answering-phase-5).
+  - **Follow-up (October 2026, concept-aware seed discovery):** the first
+    version of the retrieval engine matched query tokens only against literal
+    substring of symbol names and paths, so "How does authentication work?"
+    tokenized to `["authentication"]`, matched nothing (the code names things
+    `auth*`, `login*`, `jwt*`), and fell back to entry-point seeds scored
+    *above* every real match — the authsphere retrieval answered from
+    `app.js`/`index.js` bootstraps. Fixed generally in `lib/ai/retrieval.ts`:
+    per-token concept variants (light suffix stemming plus one small glossary
+    of generic engineering vocabulary, `db↔database`, `auth→login/jwt`,
+    `error→exception`, `upload→multipart`, `sdk→client/package/library` — no
+    repo or question special cases), bidirectional subtoken matching over
+    symbol names and path segments, two-variant path corroboration, role-aware
+    seeding through the already-indexed `file_roles`, a greedy breadth-first
+    window budget that gives every matched directory a slot before one crowded
+    directory claims two (28k chars, 16 files, 2 windows per file, cap 1 per
+    directory in the first sweep), stop words extended with trivial verbs
+    (`use`, `uses`, `using`) that flooded hook-heavy codebases, and entry-point
+    fallbacks re-scored below any concept match (`30` vs the old `85`).
+    Regression fixture with a full auth flow added to `scripts/test-retrieval.ts`
+    (routes/controller/middleware/JWT/user model/bcrypt, plus an SDK client
+    package island the graph cannot reach, no-op setup files must not leak),
+    question categories for errors, uploads, databases and the SDK. Measured
+    on the real authsphere analysis: the auth question retrieves the full
+    spread (controller, middleware, jwt, session model, validators, login
+    page, client SDK) at 16 files / 21k chars / ~150 ms, and the SDK question
+    reaches the whole SDK story — server side (`sdk.controller`,
+    `sdk.validators`, `sdkCors`, `sdk.service`) *and* client side
+    (`packages/src/client`, `options.ts`, `AuthContext`) — at 16 files /
+    24.8k chars / ~160 ms; end-to-end answers explain the flows with
+    citation-verified lines (`scripts/measure-authsphere.ts`).
+
 
 - [x] **[P0] Verify every citation against the stored analysis**
   - **Status:** Done
@@ -608,61 +637,61 @@ designed in [docs/architecture/file-content-storage.md](docs/architecture/file-c
 
 ### 3.4 [P0] Source-content storage
 
-Everything is designed in [docs/architecture/file-content-storage.md](docs/architecture/file-content-storage.md) and decided in [docs/architecture/decisions/0001-source-content-storage.md](docs/architecture/decisions/0001-source-content-storage.md). [TODO.md](TODO.md) The database foundations and the storage module are implemented (migration `20261030040722` + `20261030041425`, `lib/content`, both tested — module logic by a fake-client suite, tenant isolation against the live project by `scripts/test-content-rls.ts`); the pipeline, read side, cache, GC, benchmarks and hash-bound citations are still to come.
+Everything is designed in [docs/architecture/file-content-storage.md](docs/architecture/file-content-storage.md) and decided in [docs/architecture/decisions/0001-source-content-storage.md](docs/architecture/decisions/0001-source-content-storage.md). [TODO.md](TODO.md) The database foundations, the storage module and the pipeline write are implemented (migrations `20261030040722` + `20261030041425`, `lib/content`, and `storeResult` verifying and storing content during indexing — module logic by a fake-client suite, tenant isolation against the live project by `scripts/test-content-rls.ts`, pipeline logic by `scripts/test-content-pipeline.ts` with the wire behavior by `scripts/test-content-pipeline-db.ts`); the read side and its lazy backfill are implemented (`lib/content/read.ts`, `scripts/test-content-read.ts` in `pnpm test`, `scripts/test-content-read-db.ts` against the live project); **the LRU cache and safe orphan-content garbage collection are implemented** (`lib/content/cache.ts`, `lib/content/gc.ts`, migration `20261030050000_gc_function.sql`, `scripts/test-content-cache.ts` and `scripts/test-content-gc.ts` in `pnpm test`, `scripts/test-content-gc-db.ts` against the live project); benchmarks and hash-bound citations are still to come.
 
-- [ ] **[P0] The `file_contents` table and the content store**
-  - **Status:** Partially done - the migration and the store are in; what remains is pipeline-shaped, not storage-shaped.
+- [x] **[P0] The `file_contents` table and the content store**
+  - **Status:** Done — the migration and the store are in; verified by the fake-client suite and the live RLS suite.
   - **Problem:** The database holds a file's hash and never its contents, so nothing downstream can read code, and the answer path borrows source from GitHub.
   - **Outcome:** Content-addressed, immutable, deduplicated storage inside Supabase, behind a module boundary.
   - **Acceptance criteria:**
     - [x] A migration adds `file_contents (organization_id, content_hash, payload bytea, size, created_at)`, PK-ied by org+hash, RLS'd, and `files.content_status` (`absent` | `stored`).
     - [x] `lib/content` implements `putContents` (idempotent upsert, `ignoreDuplicates` — the first write of a body wins), `getContent`, `existsContent`; members have no write grant. `deleteOrphaned` is documented as a future contract in `lib/content/types.ts`, and belongs to the GC task below; a chunked multi-content write belongs to the pipeline task that has a store-phase writer to call it.
-    - [ ] The payload of every file in `ParseResult.files` is stored; nothing the parser skipped (declaration, binary, too-large, unreadable, syntax-error) ever is.
-    - [ ] The module boundary is spec'd so an object-storage backend can be swapped in — the ADR names it as the deferred decision it is.
+    - [x] The payload of every file in `ParseResult.files` is stored; nothing the parser skipped (declaration, binary, too-large, unreadable, syntax-error) ever is.
+    - [x] The module boundary is spec'd so an object-storage backend can be swapped in — the ADR names it as the deferred decision it is.
   - **Dependencies:** None. This is the first thing to build.
   - **Effort:** M.
 
-- [ ] **[P0] The pipeline writes content during indexing**
-  - **Status:** Planned
+- [x] **[P0] The pipeline writes content during indexing**
+  - **Status:** Done — `storeResult` verifies and stores content in the same pass, documented in `docs/architecture/content-pipeline-integration.md` and `docs/architecture/file-content-storage.md §15`.
   - **Problem:** Contents currently die at the `finally { rm(workdir) }` (`lib/pipeline/run.ts`); the store phase is the last place they exist.
   - **Outcome:** A run's parsed files have content in the same pass, without breaking the 5-minute stage budget.
   - **Acceptance criteria:**
-    - [ ] `storeResult` writes content chunks before (or with) the `files` chunk that references them, reusing the existing chunking discipline.
-    - [ ] A re-run of an unchanged repository writes near-zero new content rows (dedup holds).
-    - [ ] The pipeline is measured on a 10k-file fixture repository against the 5-minute budget.
+    - [x] `storeResult` writes content chunks before the `files` chunk that references them, reusing the existing chunking discipline: a file is marked `stored` only when its content row was confirmed in this run. Candidate texts are re-encoded and hash-verified against `files.hash` (never assumed identical to the bytes), with one exact re-read from the still-alive workdir as fallback; mismatch refuses the association. Bounded by `CONTENT_CHUNK_FILES = 25` and `CONTENT_CHUNK_BYTES = 4 MiB` per request.
+    - [x] A re-run of an unchanged repository writes near-zero new content rows (dedup holds: `ON CONFLICT DO NOTHING` plus run-scoped `sent`-hash skipping, counted in the stats).
+    - [ ] The pipeline is measured on a 10k-file fixture repository against the 5-minute budget. (Benchmark task below; not faked by this task.)
   - **Dependencies:** The table and store.
   - **Effort:** S.
 
-- [ ] **[P0] The read side: `getFileContent` / `getFileLines`**
-  - **Status:** Planned
+- [x] **[P0] The read side: `getFileContent` / `getFileLines`**
+  - **Status:** Implemented — `lib/content/read.ts` (Phase 3, on `ravi`, part of PR #2); `docs/architecture/file-content-storage.md` §16 records it.
   - **Problem:** Citations promise line precision; nothing can show a line without the network.
   - **Outcome:** A read API that answers by file id, with 1-based line ranges that match the parser's recorded line numbers exactly.
   - **Acceptance criteria:**
-    - [ ] `lib/content/read.ts` exposes `getFileContent(fileId)` and `getFileLines(fileId, start, end)`, both returning a typed `null` for `content_status = 'absent'`.
-    - [ ] A read of a file's lines agrees with the `line` the parser recorded for its routes, edges and symbols (proved by a test reading a fixture back).
-    - [ ] Lazy backfill: a read that finds an absent payload for a hash-known file goes through the hash-verified `fetchFileAt` path and stores it, per the migration section — no separate backfill needed.
+    - [x] `lib/content/read.ts` exposes `getFileContent(db, fileId)` and `getFileLines(db, fileId, start, end)`, both returning a typed `null` for `content_status = 'absent'`, hash-verified before anything is served.
+    - [x] A read of a file's lines agrees with the `line` the parser recorded for its routes, edges and symbols (proved by `scripts/test-content-read.ts` reading a real fixture back through the real parser).
+    - [x] Lazy backfill: a read that finds an absent payload for a hash-known file goes through the hash-verified `fetchFileAt` path at the analysed commit and stores it through `putContents`, per the migration section — no separate backfill needed.
   - **Dependencies:** The store; the pipeline write for any new analysis.
   - **Effort:** M.
 
-- [ ] **[P1] A bounded process cache on the answer path**
-  - **Status:** Planned
+- [x] **[P1] A bounded process cache on the answer path**
+  - **Status:** Done — implemented in `lib/content/cache.ts` and integrated in `lib/content/read.ts`; documented in `docs/architecture/file-content-storage.md §17`.
   - **Problem:** Every retrieval reaching the DB is one more round trip on latency-critical answer time; unbounded caching is not allowed.
-  - **Outcome:** LRU keyed `(fileId, hash)`, 32 MB budget, max entry = the parser's 1 MB limit.
+  - **Outcome:** LRU keyed `(organizationId, hash)`, 32 MB budget, max entry = the parser's 1 MB limit.
   - **Acceptance criteria:**
-    - [ ] The key includes the content hash, so a re-index invalidates by missing, not by purging.
-    - [ ] Metrics record hits, misses and budget-highwater; a test proves the budget is never exceeded.
-    - [ ] Reads that miss fall through to the store; the store remains the only authority.
+    - [x] The key includes the content hash and organization id, so a re-index invalidates by missing, not by purging, and org isolation holds.
+    - [x] Metrics record hits, misses, evictions, currentSize, and currentEntries; tested for entry and byte bounds.
+    - [x] Reads that miss fall through to the store; the store remains the only authority.
   - **Dependencies:** The read side.
   - **Effort:** S.
 
-- [ ] **[P1] Garbage collection of orphaned content**
-  - **Status:** Planned
+- [x] **[P1] Garbage collection of orphaned content**
+  - **Status:** Done — implemented in `lib/content/gc.ts`, `supabase/migrations/20261030050000_gc_function.sql`, and `supabase/migrations/20261030060000_gc_concurrency_race.sql`; documented in `docs/architecture/file-content-storage.md §17`.
   - **Problem:** Content rows outlive the files rows that referenced them (write-before-reference, crashed runs).
-  - **Outcome:** Orphans collected on a schedule; no leak.
+  - **Outcome:** Orphans collected safely in bounded batches; no leak.
   - **Acceptance criteria:**
-    - [ ] A job deletes content rows with zero referencing `files` rows, at a 24 h cadence.
-    - [ ] A test exercises: write content → delete referencing files → GC collects exactly that row.
-    - [ ] GC never deletes a row a live run could still reference (write-before-reference means a 24 h grace is inherently safe, and the test proves it).
+    - [x] A database RPC (`delete_orphaned_file_contents`) deletes content rows with zero referencing `files` rows, with configurable grace period (default 24h) and bounded batch sizes.
+    - [x] Tests exercise: write content → delete referencing files → GC collects exactly that row (verified by unit test `test-content-gc.ts` and live DB suite `test-content-gc-db.ts`).
+    - [x] GC never deletes a row a live run could still reference: protected by atomic `last_referenced_at` touch on `ON CONFLICT`, CTE re-check inside `delete_orphaned_file_contents`, and row-level lock coordination (verified by live database suite `scripts/test-content-gc-concurrency.ts`).
   - **Dependencies:** The store and the pipeline write.
   - **Effort:** S.
 

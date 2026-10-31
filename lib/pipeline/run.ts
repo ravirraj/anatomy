@@ -53,21 +53,24 @@ export async function continueRun(db: Db, claimed: ClaimedRun): Promise<void> {
     await enter(db, claimed, "parse", `Parsing ${count(candidates.length, "file")}${skipped.length ? `, ${skipped.length} skipped` : ""}`);
     const result = parseSelection(selection);
 
+    // What content storage will need: the text each candidate still holds,
+    // keyed the way the parsed files name themselves. Referenced, not copied.
+    const contents = new Map<string, string>(candidates.map((c) => [c.path, c.content]));
+
     await enter(
       db,
       claimed,
       "store",
       `Storing ${count(result.coverage.files.found, "file")}, ${count(result.edges.length, "edge")} and ${count(result.routes.length, "route")}`,
     );
-    await storeResult(db, { id: analysisId, organizationId }, result);
-
+    const contentStats = await storeResult(db, { id: analysisId, organizationId }, result, contents);
     await update(db, claimed, {
       status: "complete",
       finished_at: new Date().toISOString(),
       coverage: storedCoverage(result.coverage),
       detected_projects: result.projects,
       schema_version: SCHEMA_VERSION,
-      stage_message: `Mapped ${count(result.files.length, "file")} and ${count(result.edges.length, "edge")}`,
+      stage_message: `Mapped ${count(result.files.length, "file")} and ${count(result.edges.length, "edge")}; content stored for ${count(contentStats.stored, "file")}${contentStats.absent > 0 ? `, ${count(contentStats.absent, "file")} without content` : ""}`,
     });
   } catch (error) {
     // A newer run owns the row now; its outcome is the one to record.

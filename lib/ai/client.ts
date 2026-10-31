@@ -7,12 +7,36 @@ import { wrapOpenAI } from "langsmith/wrappers/openai";
 // Exact snapshots, never a moving alias: an alias changes the model under a
 // cached answer without changing its key. Each model is part of its own
 // tasks' cache keys, so re-pinning one invalidates only its own answers.
-const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY?.trim();
 
-// Unset means OpenAI's own API. Set, it's any OpenAI-compatible endpoint:
-// Google's compatibility layer for Gemini, or OpenRouter.
-const BASE_URL = process.env.AI_BASE_URL?.trim() || (OPENROUTER_KEY ? "https://openrouter.ai/api/v1" : undefined);
-const isOpenRouter = Boolean(OPENROUTER_KEY || BASE_URL?.includes("openrouter.ai"));
+/**
+ * Detects whether the effective base URL points to OpenRouter by inspecting its hostname.
+ */
+export function isOpenRouterBaseUrl(baseUrl: string | undefined): boolean {
+  if (!baseUrl) return false;
+  try {
+    const url = new URL(baseUrl);
+    return url.hostname === "openrouter.ai" || url.hostname.endsWith(".openrouter.ai");
+  } catch {
+    return baseUrl.includes("openrouter.ai");
+  }
+}
+
+/**
+ * Resolves the effective base URL from environment variables.
+ * If AI_BASE_URL is set, it always takes priority.
+ * If unset and OPENROUTER_API_KEY is present, it defaults to OpenRouter's endpoint.
+ * Otherwise undefined means OpenAI's own API.
+ */
+export function resolveBaseUrl(env: Record<string, string | undefined> = process.env): string | undefined {
+  const custom = env.AI_BASE_URL?.trim();
+  if (custom) return custom;
+  const openRouterKey = env.OPENROUTER_API_KEY?.trim();
+  if (openRouterKey) return "https://openrouter.ai/api/v1";
+  return undefined;
+}
+
+const BASE_URL = resolveBaseUrl(process.env);
+export const isOpenRouter = isOpenRouterBaseUrl(BASE_URL);
 
 // The defaults are OpenAI's, or OpenRouter's when using OpenRouter. Any OpenAI-compatible
 // endpoint works by setting AI_BASE_URL and these two names. The model is still pinned,
@@ -21,6 +45,7 @@ const isOpenRouter = Boolean(OPENROUTER_KEY || BASE_URL?.includes("openrouter.ai
 export const MODELS = {
   explain: process.env.AI_MODEL_EXPLAIN?.trim() || (isOpenRouter ? "openai/gpt-4o-mini" : "gpt-5.5-2026-04-23"),
   classify: process.env.AI_MODEL_CLASSIFY?.trim() || (isOpenRouter ? "openai/gpt-4o-mini" : "gpt-5.4-mini-2026-03-17"),
+  question: process.env.AI_MODEL_QUESTION?.trim() || process.env.AI_MODEL_EXPLAIN?.trim() || (isOpenRouter ? "openai/gpt-4o-mini" : "gpt-5.5-2026-04-23"),
 } as const;
 
 export type TracingStatus = { on: true; project: string } | { on: false; reason: string };
