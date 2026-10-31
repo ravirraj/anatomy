@@ -48,6 +48,8 @@ pins down.
 | `two-framework-monorepo` | Two workspace packages, each detected by its own framework (`NestJS`, `Next.js`) independently of the other; roles per project; routes from a controller's decorators; no edge crossing a package boundary. |
 | `base-url` | `tsconfig` `baseUrl` resolution of a bare specifier, a first-segment miss reported as unresolved (`file-not-found` against `baseUrl`), and an unmatchable bare name reported as an external package. |
 | `export-import-equals` | `export =` of an object and of an identifier (`module.exports` whole-module naming), `import x = require()` read once as a declaration, and CommonJS `require()` landing on a `.ts` module. |
+| `polyglot-manifests` | Six manifest formats in one repository (`package.json`, `pnpm-workspace.yaml`, `Cargo.toml`, `go.mod`, `requirements.txt`, `pyproject.toml`), every dependency kind, a multi-line TOML array, `process.env` / `import.meta.env` / bracket access, `.env.example` keys, and declared entries that do not resolve (`not-indexed` for Rust sources, `not-found` for unbuilt output). |
+| `declared-entries` | Declared entries that *do* resolve (`main`, `bin`, `exports`), a re-export chain two levels deep, an `exports` target that names nothing (`not-found`), one package declared as both runtime and dev, a manifest with invalid JSON, and a package with no declared entry at all. |
 | `unlinked-workspaces` | A workspace package a `package.json` of the repository declares but no `node_modules` links (`workspace-package-not-linked`), an undeclared name as an external package, and unlinked packages producing no projects and no fabricated edges. |
 
 ## How accurate is the parser

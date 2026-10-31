@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 6,
+  "schemaVersion": 7,
   "root": "<repo>",
   "projects": [
     {
@@ -68,6 +68,30 @@
       "exportKind": "none",
       "signature": "fs = require(\"fs\")",
       "file": "index.js"
+    }
+  ],
+  "manifests": [
+    {
+      "path": "package.json",
+      "dir": ".",
+      "project": ".",
+      "ecosystem": "npm",
+      "name": "commonjs",
+      "workspaces": [],
+      "scripts": [],
+      "problems": []
+    }
+  ],
+  "dependencies": [],
+  "configReferences": [],
+  "envDeclarations": [],
+  "entryPoints": [
+    {
+      "path": "index.js",
+      "kind": "inferred",
+      "source": "package root module",
+      "manifest": null,
+      "resolved": true
     }
   ],
   "coverage": {

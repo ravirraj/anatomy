@@ -3,7 +3,7 @@
 
 import type { Role } from "../roles.ts";
 
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 export type EdgeKind = "import" | "re-export" | "dynamic-import" | "require" | "call";
 
@@ -223,6 +223,160 @@ export type ConfigReport = {
   errors: string[];
 };
 
+// ---- Packaging, configuration and entry points (Phase 4) ----
+//
+// Everything below is read from a manifest, a source file or a convention file.
+// The distinction the rest of the app depends on: a *declared* fact is written
+// down in the repository; an *inferred* one is a structural convention the
+// parser recognised. Neither is ever a claim that something is installed,
+// running or used — that would need evidence this parser does not have.
+
+export type DependencyKind = "runtime" | "dev" | "optional" | "peer" | "build" | "indirect";
+
+export const DEPENDENCY_KINDS: readonly DependencyKind[] = ["runtime", "dev", "optional", "peer", "build", "indirect"];
+
+/**
+ * One dependency as declared in one manifest. A dependency is a *declaration*:
+ * its presence says the manifest asks for it, never that it is installed or
+ * that any code imports it.
+ */
+export type Dependency = {
+  /** Package name as declared. */
+  name: string;
+  /** Version or constraint exactly as declared; null when the manifest names none. */
+  version: string | null;
+  kind: DependencyKind;
+  /** Repository-relative manifest that declares it. */
+  manifest: string;
+  /** Repository-relative directory of that manifest (the package it belongs to). */
+  dir: string;
+  /** The parser project the manifest sits in. */
+  project: string;
+  /**
+   * How many parsed files import this package by bare specifier. Evidence that
+   * the dependency is reached from indexed source — never proof it is
+   * installed, and a zero never proves it is unused (a CLI, a config file or a
+   * file the parser skipped could still use it).
+   */
+  importedBy: number;
+};
+
+export type ConfigReferenceKind =
+  | "process.env"
+  | "import.meta.env"
+  | "env-bracket"
+  | "env-example"
+  | "config-object";
+
+export const CONFIG_REFERENCE_KINDS: readonly ConfigReferenceKind[] = [
+  "process.env",
+  "import.meta.env",
+  "env-bracket",
+  "env-example",
+  "config-object",
+];
+
+/**
+ * A reference to a configuration value. Only the *name* is ever recorded: no
+ * value from a source file, an environment declaration or a config object is
+ * read into this type, so a secret cannot reach the store through it.
+ */
+export type ConfigReference = {
+  /** Repository-relative file the reference sits in. */
+  file: string;
+  /** Variable or configuration key name. Never a value. */
+  variable: string;
+  /** 1-based line; 0 for a declaration file whose lines are not indexed. */
+  line: number;
+  kind: ConfigReferenceKind;
+  /** Provenance detail: the declaring object for "config-object", the group for "env-example". */
+  detail?: string;
+};
+
+export type EntryPointKind = "declared" | "inferred";
+
+/**
+ * Why a declared entry did not resolve to an indexed file. The two cases are
+ * different facts and are never collapsed:
+ *  - "not-indexed": the file is on disk but is not a code file this parser
+ *    indexes (a Rust source, a Python module, a build output the walk skipped).
+ *  - "not-found": nothing is at that path at all — the declaration points at
+ *    something that has not been built, or is simply wrong.
+ */
+export type EntryUnresolvedReason = "not-indexed" | "not-found";
+
+/**
+ * A place execution or consumption starts. "declared" means a manifest names
+ * it; "inferred" means a structural convention does. The two are never merged:
+ * a reader is entitled to know which one they are looking at.
+ */
+export type EntryPoint = {
+  /** Repository-relative file path, as declared or as found. */
+  path: string;
+  kind: EntryPointKind;
+  /** What named it: "package.json main", "Cargo.toml [lib]", "framework route", "index file". */
+  source: string;
+  /** Repository-relative manifest that declared it; null for inferred entries. */
+  manifest: string | null;
+  /** Sub-path, bin name or other qualifier the declaration carried. */
+  detail?: string;
+  /**
+   * True when `path` is one of the files this parse actually indexed. A
+   * declared entry that does not resolve stays listed and stays false — it is
+   * not silently dropped.
+   */
+  resolved: boolean;
+  /** Set only when resolved is false, and only for a declared entry. */
+  unresolvedReason?: EntryUnresolvedReason;
+  /**
+   * Files reachable from this entry by re-export edges alone, in breadth-first
+   * order. This is what a package actually exposes beyond its entry file.
+   */
+  via?: string[];
+};
+
+export type ManifestEcosystem =
+  | "npm"
+  | "pnpm-workspace"
+  | "cargo"
+  | "go"
+  | "python-requirements"
+  | "python-project";
+
+export const MANIFEST_ECOSYSTEMS: readonly ManifestEcosystem[] = [
+  "npm",
+  "pnpm-workspace",
+  "cargo",
+  "go",
+  "python-requirements",
+  "python-project",
+];
+
+/** A command a manifest declares, e.g. a package.json script. */
+export type ManifestScript = { name: string; command: string };
+
+/** One manifest found in the repository, with the facts only it can state. */
+export type Manifest = {
+  /** Repository-relative manifest path. */
+  path: string;
+  /** Repository-relative directory it sits in; "." for the repository root. */
+  dir: string;
+  /** The parser project it belongs to. */
+  project: string;
+  ecosystem: ManifestEcosystem;
+  /** The package/module name the manifest declares, when it declares one. */
+  name: string | null;
+  /** Workspace globs the manifest declares. */
+  workspaces: string[];
+  /** Commands it declares. */
+  scripts: ManifestScript[];
+  /** What could not be read, by field. A manifest that half-parses says so. */
+  problems: string[];
+};
+
+/** Keys declared by an environment template file (.env.example and friends). */
+export type EnvDeclaration = { path: string; keys: string[] };
+
 export type ParseResult = {
   schemaVersion: typeof SCHEMA_VERSION;
   /** Absolute path the parser was pointed at. */
@@ -235,6 +389,16 @@ export type ParseResult = {
   routes: Route[];
   /** Sorted by file, then line. */
   symbols: ParsedSymbol[];
+  /** Every manifest found, with its own declared facts. */
+  manifests: Manifest[];
+  /** Every dependency every manifest declares. Declarations, not installations. */
+  dependencies: Dependency[];
+  /** Configuration and environment references. Names only, never values. */
+  configReferences: ConfigReference[];
+  /** Environment template files and the keys they declare. */
+  envDeclarations: EnvDeclaration[];
+  /** Entry points, declared and inferred, sorted by path then source. */
+  entryPoints: EntryPoint[];
   coverage: Coverage;
   configs: ConfigReport[];
 };

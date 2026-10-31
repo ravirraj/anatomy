@@ -1,0 +1,488 @@
+{
+  "schemaVersion": 7,
+  "root": "<repo>",
+  "projects": [
+    {
+      "path": ".",
+      "adapter": "React"
+    }
+  ],
+  "files": [
+    {
+      "path": "packages/broken/src/index.ts",
+      "module": "packages/broken/src",
+      "lines": 1,
+      "bytes": 24,
+      "hash": "ad5abda1e1f8bfb618e985a13fbe07068662681d75f2c253244ec898a773c120",
+      "fanIn": 0,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "ok"
+      ]
+    },
+    {
+      "path": "packages/plain/index.ts",
+      "module": "packages/plain",
+      "lines": 1,
+      "bytes": 24,
+      "hash": "385b0313dd8e351bb6202e64cbf6f55d257b30ec8daf84cd7e7ec481eb4f2054",
+      "fanIn": 0,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "plain"
+      ]
+    },
+    {
+      "path": "src/button.ts",
+      "module": "src",
+      "lines": 3,
+      "bytes": 88,
+      "hash": "e1191f39b3dcfbe2c94ec334b2b17170932f3f24fcffabcd61da3ceea7e378a8",
+      "fanIn": 1,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "button"
+      ]
+    },
+    {
+      "path": "src/cli.ts",
+      "module": "src",
+      "lines": 7,
+      "bytes": 177,
+      "hash": "75520401cc7120050691d085e9ff2d7cf745fd4b275e559c7441719251d2abf7",
+      "fanIn": 0,
+      "fanOut": 1,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "main"
+      ]
+    },
+    {
+      "path": "src/index.ts",
+      "module": "src",
+      "lines": 3,
+      "bytes": 115,
+      "hash": "dfcb4879b0e0a7e0bb5b7231934c6d154615edc331fcbe89557b62b00509d645",
+      "fanIn": 1,
+      "fanOut": 3,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "button",
+        "textInput"
+      ]
+    },
+    {
+      "path": "src/input.ts",
+      "module": "src",
+      "lines": 3,
+      "bytes": 88,
+      "hash": "e1c326fca83f3f67c6d46251582d97e99102ce1a0a1dbc8fb59a08f162f8433b",
+      "fanIn": 1,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "input"
+      ]
+    },
+    {
+      "path": "src/palette.ts",
+      "module": "src",
+      "lines": 1,
+      "bytes": 44,
+      "hash": "21bc084bd2d9c6473bf6e3bdcac89880d3829d04a720ad8081545759f54d7f0c",
+      "fanIn": 1,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "palette"
+      ]
+    },
+    {
+      "path": "src/theme.ts",
+      "module": "src",
+      "lines": 2,
+      "bytes": 73,
+      "hash": "7f7054ff0e56af26c6e4e6f65a4a26d4074861d4b04c4fb9e66ede8becba3caf",
+      "fanIn": 1,
+      "fanOut": 1,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "palette",
+        "themeName"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source": "src/cli.ts",
+      "target": "src/index.ts",
+      "kind": "call",
+      "typeOnly": false,
+      "specifier": "button",
+      "line": 6
+    },
+    {
+      "source": "src/cli.ts",
+      "target": "src/index.ts",
+      "kind": "import",
+      "typeOnly": false,
+      "specifier": "./index.ts",
+      "line": 1
+    },
+    {
+      "source": "src/index.ts",
+      "target": "src/button.ts",
+      "kind": "re-export",
+      "typeOnly": false,
+      "specifier": "./button.ts",
+      "line": 2
+    },
+    {
+      "source": "src/index.ts",
+      "target": "src/input.ts",
+      "kind": "re-export",
+      "typeOnly": false,
+      "specifier": "./input.ts",
+      "line": 3
+    },
+    {
+      "source": "src/index.ts",
+      "target": "src/theme.ts",
+      "kind": "re-export",
+      "typeOnly": false,
+      "specifier": "./theme.ts",
+      "line": 1
+    },
+    {
+      "source": "src/theme.ts",
+      "target": "src/palette.ts",
+      "kind": "re-export",
+      "typeOnly": false,
+      "specifier": "./palette.ts",
+      "line": 1
+    }
+  ],
+  "routes": [],
+  "symbols": [
+    {
+      "name": "ok",
+      "kind": "const",
+      "line": 1,
+      "endLine": 1,
+      "exported": true,
+      "exportKind": "named",
+      "signature": "ok = true",
+      "file": "packages/broken/src/index.ts"
+    },
+    {
+      "name": "plain",
+      "kind": "const",
+      "line": 1,
+      "endLine": 1,
+      "exported": true,
+      "exportKind": "named",
+      "signature": "plain = 1",
+      "file": "packages/plain/index.ts"
+    },
+    {
+      "name": "button",
+      "kind": "function",
+      "line": 1,
+      "endLine": 3,
+      "exported": true,
+      "exportKind": "named",
+      "parameters": [
+        {
+          "name": "label",
+          "type": "string"
+        }
+      ],
+      "returnType": "string",
+      "signature": "button(label: string): string",
+      "file": "src/button.ts"
+    },
+    {
+      "name": "token",
+      "kind": "const",
+      "line": 3,
+      "endLine": 3,
+      "exported": false,
+      "exportKind": "none",
+      "signature": "token = process.env.ACME_TOKEN",
+      "file": "src/cli.ts"
+    },
+    {
+      "name": "main",
+      "kind": "function",
+      "line": 5,
+      "endLine": 7,
+      "exported": true,
+      "exportKind": "named",
+      "parameters": [],
+      "returnType": "string",
+      "signature": "main(): string",
+      "file": "src/cli.ts"
+    },
+    {
+      "name": "input",
+      "kind": "function",
+      "line": 1,
+      "endLine": 3,
+      "exported": true,
+      "exportKind": "named",
+      "parameters": [
+        {
+          "name": "value",
+          "type": "string"
+        }
+      ],
+      "returnType": "string",
+      "signature": "input(value: string): string",
+      "file": "src/input.ts"
+    },
+    {
+      "name": "palette",
+      "kind": "const",
+      "line": 1,
+      "endLine": 1,
+      "exported": true,
+      "exportKind": "named",
+      "signature": "palette = { primary: \"#000\" }",
+      "file": "src/palette.ts"
+    },
+    {
+      "name": "themeName",
+      "kind": "const",
+      "line": 2,
+      "endLine": 2,
+      "exported": true,
+      "exportKind": "named",
+      "signature": "themeName = \"acme\"",
+      "file": "src/theme.ts"
+    }
+  ],
+  "manifests": [
+    {
+      "path": "package.json",
+      "dir": ".",
+      "project": ".",
+      "ecosystem": "npm",
+      "name": "@acme/widgets",
+      "workspaces": [],
+      "scripts": [],
+      "problems": []
+    },
+    {
+      "path": "packages/broken/package.json",
+      "dir": "packages/broken",
+      "project": ".",
+      "ecosystem": "npm",
+      "name": null,
+      "workspaces": [],
+      "scripts": [],
+      "problems": [
+        "invalid JSON: Expected double-quoted property name in JSON at position 79 (line 5 column 3)"
+      ]
+    },
+    {
+      "path": "packages/plain/package.json",
+      "dir": "packages/plain",
+      "project": ".",
+      "ecosystem": "npm",
+      "name": "no-manifest-here",
+      "workspaces": [],
+      "scripts": [],
+      "problems": []
+    }
+  ],
+  "dependencies": [
+    {
+      "name": "react",
+      "version": "^19.0.0",
+      "kind": "runtime",
+      "manifest": "package.json",
+      "dir": ".",
+      "project": ".",
+      "importedBy": 0
+    },
+    {
+      "name": "react",
+      "version": "^19.0.0",
+      "kind": "dev",
+      "manifest": "package.json",
+      "dir": ".",
+      "project": ".",
+      "importedBy": 0
+    }
+  ],
+  "configReferences": [
+    {
+      "file": "src/cli.ts",
+      "variable": "ACME_TOKEN",
+      "line": 3,
+      "kind": "process.env"
+    },
+    {
+      "file": "src/cli.ts",
+      "variable": "ACME_LABEL",
+      "line": 6,
+      "kind": "process.env"
+    }
+  ],
+  "envDeclarations": [],
+  "entryPoints": [
+    {
+      "path": "packages/plain/index.ts",
+      "kind": "inferred",
+      "source": "package root module",
+      "manifest": null,
+      "resolved": true
+    },
+    {
+      "path": "src/cli.ts",
+      "kind": "declared",
+      "source": "package.json bin",
+      "manifest": "package.json",
+      "resolved": true
+    },
+    {
+      "path": "src/does-not-exist.ts",
+      "kind": "declared",
+      "source": "package.json exports",
+      "manifest": "package.json",
+      "detail": "./missing",
+      "resolved": false,
+      "unresolvedReason": "not-found"
+    },
+    {
+      "path": "src/index.ts",
+      "kind": "declared",
+      "source": "package.json exports",
+      "manifest": "package.json",
+      "detail": ".",
+      "resolved": true,
+      "via": [
+        "src/button.ts",
+        "src/input.ts",
+        "src/theme.ts",
+        "src/palette.ts"
+      ]
+    },
+    {
+      "path": "src/index.ts",
+      "kind": "declared",
+      "source": "package.json main",
+      "manifest": "package.json",
+      "resolved": true,
+      "via": [
+        "src/button.ts",
+        "src/input.ts",
+        "src/theme.ts",
+        "src/palette.ts"
+      ]
+    },
+    {
+      "path": "src/theme.ts",
+      "kind": "declared",
+      "source": "package.json exports",
+      "manifest": "package.json",
+      "detail": "./theme",
+      "resolved": true,
+      "via": [
+        "src/palette.ts"
+      ]
+    }
+  ],
+  "coverage": {
+    "files": {
+      "found": 8,
+      "parsed": 8,
+      "skipped": 0,
+      "skippedFiles": [],
+      "excludedDirectories": []
+    },
+    "imports": {
+      "total": {
+        "seen": 5,
+        "internal": 5,
+        "external": 0,
+        "excluded": 0,
+        "unresolved": 0
+      },
+      "byKind": {
+        "import": {
+          "seen": 1,
+          "internal": 1,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "re-export": {
+          "seen": 4,
+          "internal": 4,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "dynamic-import": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "require": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "call": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        }
+      },
+      "external": {
+        "package": 0,
+        "builtin": 0,
+        "outside-root": 0
+      },
+      "excluded": {},
+      "unresolvedByReason": {},
+      "unresolved": []
+    },
+    "routes": {
+      "omitted": [],
+      "withheld": []
+    },
+    "calls": {
+      "total": 2,
+      "resolved": 1,
+      "unresolved": 1,
+      "unresolvedCalls": [
+        {
+          "from": "src/cli.ts",
+          "callee": "String",
+          "line": 6,
+          "reason": "unresolved-call"
+        }
+      ]
+    }
+  },
+  "configs": []
+}

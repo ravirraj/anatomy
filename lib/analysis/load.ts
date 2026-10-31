@@ -48,6 +48,51 @@ export async function loadStoredAnalysis(
     db.from("symbols").select("file_id, name, kind, line, exported").eq("analysis_id", analysis.id).order("id").range(from, to),
   );
 
+  // Phase 4. Manifests and entry points are standalone; dependencies and
+  // configuration references resolve their file by path here, the same way
+  // they were stored.
+  const manifests = await readAll((from, to) =>
+    db
+      .from("manifests")
+      .select("path, dir, project, ecosystem, name, workspaces, scripts, problems")
+      .eq("analysis_id", analysis.id)
+      .order("path")
+      .range(from, to),
+  );
+  const dependencies = await readAll((from, to) =>
+    db
+      .from("dependencies")
+      .select("manifest_path, dir, name, version, kind, imported_by")
+      .eq("analysis_id", analysis.id)
+      .order("id")
+      .range(from, to),
+  );
+  const configReferences = await readAll((from, to) =>
+    db
+      .from("config_references")
+      .select("file_path, variable, line, kind, detail")
+      .eq("analysis_id", analysis.id)
+      .order("id")
+      .range(from, to),
+  );
+  const entryPoints = await readAll((from, to) =>
+    db
+      .from("entry_points")
+      .select("path, kind, source, manifest_path, detail, resolved, unresolved_reason, via")
+      .eq("analysis_id", analysis.id)
+      .order("id")
+      .range(from, to),
+  );
+  const envDeclarations = await readAll((from, to) =>
+    db
+      .from("config_references")
+      .select("file_path, variable")
+      .eq("analysis_id", analysis.id)
+      .eq("kind", "env-example")
+      .order("id")
+      .range(from, to),
+  );
+
   const pathOf = new Map(files.map((f) => [f.id, f.path]));
   const parsed = files.filter((f) => f.skip_reason === null);
   const skipped = files.filter((f) => f.skip_reason !== null);
@@ -95,6 +140,46 @@ export async function loadStoredAnalysis(
     symbols: symbols
       .map((s) => ({ file: pathOf.get(s.file_id), name: s.name, kind: s.kind, line: s.line, exported: s.exported }))
       .sort((a, b) => (a.file ?? "").localeCompare(b.file ?? "") || a.line - b.line),
+    manifests: manifests.map((m) => ({
+      path: m.path,
+      dir: m.dir,
+      project: m.project,
+      ecosystem: m.ecosystem,
+      name: m.name,
+      workspaces: m.workspaces,
+      scripts: m.scripts,
+      problems: m.problems,
+    })),
+    dependencies: dependencies.map((d) => ({
+      name: d.name,
+      version: d.version,
+      kind: d.kind,
+      manifest: d.manifest_path,
+      dir: d.dir,
+      project: manifests.find((m) => m.path === d.manifest_path)?.project ?? ".",
+      importedBy: d.imported_by,
+    })),
+    configReferences: configReferences.map((r) => ({
+      file: r.file_path,
+      variable: r.variable,
+      line: r.line,
+      kind: r.kind,
+      ...(r.detail === null ? {} : { detail: r.detail }),
+    })),
+    envDeclarations: [...new Set(envDeclarations.map((r) => r.file_path))].sort().map((path) => ({
+      path,
+      keys: envDeclarations.filter((r) => r.file_path === path).map((r) => r.variable).sort(),
+    })),
+    entryPoints: entryPoints.map((e) => ({
+      path: e.path,
+      kind: e.kind,
+      source: e.source,
+      manifest: e.manifest_path,
+      ...(e.detail === null ? {} : { detail: e.detail }),
+      resolved: e.resolved,
+      ...(e.unresolved_reason === null ? {} : { unresolvedReason: e.unresolved_reason }),
+      ...(Array.isArray(e.via) && e.via.length > 0 ? { via: e.via } : {}),
+    })),
     coverage: {
       ...coverage,
       files: {

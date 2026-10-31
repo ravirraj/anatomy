@@ -1,0 +1,10 @@
+# Runtime dependencies for the worker
+flask==3.0.3
+requests>=2.31,<3
+celery[redis]~=5.4
+
+# A local editable install names no version
+-e .
+
+# An option line names no package
+--index-url https://pypi.org/simple

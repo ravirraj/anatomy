@@ -257,6 +257,17 @@ class MockDb {
         }),
       };
     }
+    if (table === "manifests" || table === "dependencies" || table === "config_references" || table === "entry_points") {
+      // This fixture repository declares no packaging metadata, which is the
+      // common case for an analysis stored before Phase 4. Returning an empty
+      // set is what the real client does for such an analysis, and it
+      // exercises the path where the packaging blocks are simply absent.
+      return {
+        select: () => ({
+          eq: () => Promise.resolve({ data: [], error: null }),
+        }),
+      };
+    }
     throw new Error(`Unexpected table ${table}`);
   }
 }
@@ -683,6 +694,17 @@ class FixtureDb {
               },
             }),
           }),
+        }),
+      };
+    }
+    if (table === "manifests" || table === "dependencies" || table === "config_references" || table === "entry_points") {
+      // This fixture repository declares no packaging metadata, which is the
+      // common case for an analysis stored before Phase 4. Returning an empty
+      // set is what the real client does for such an analysis, and it
+      // exercises the path where the packaging blocks are simply absent.
+      return {
+        select: () => ({
+          eq: () => Promise.resolve({ data: [], error: null }),
         }),
       };
     }

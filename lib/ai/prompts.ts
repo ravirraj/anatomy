@@ -8,7 +8,7 @@ import type { EdgeKind } from "../parser/types.ts";
 
 // Bump when a prompt's wording changes: it's part of every cache key, so old
 // answers stop matching rather than being served for a question no longer asked.
-export const PROMPT_VERSION = 1;
+export const PROMPT_VERSION = 2;
 
 export type NeighbourFacts = {
   path: string;
@@ -125,6 +125,13 @@ Grounding and Anti-Hallucination Rules:
 9. SDK and Client/Server Separation: When the evidence spans both a client-facing package (paths under packages/, client/, sdk/, or a published module) and server/backend code, distinguish the two explicitly: describe the client integration journey (installation, configuration, initialization, authentication, token handling, protected API usage) separately from the server/management surface, and state which side each cited file belongs to. Assemble the journey only from verified snippets; for any step (install commands, exports, init parameters, available methods) not present in the snippets, state that it is not established by the retrieved evidence rather than inventing it. Never present a management/server endpoint as a client SDK method, or vice versa.
 
 10. Canonical Citation Paths: The provided snippets are grouped under headers of the form --- File: <canonical repository-relative path> (lines ...). Always cite that canonical path (with hash-L line numbers) for any code claim. Relative import specifiers such as ./foo.ts, ../bar/baz.js or Windows-style backslash paths that appear inside the snippets are source-text details, not repository paths: never copy them into citations, and never treat them as files. Resolve a relative import to a canonical path only when that target file is itself one of the provided snippets, and cite it by its canonical path; otherwise state that the target is not in the retrieved evidence.
+
+11. Packaging, Configuration and Entry-Point Evidence: The input may include blocks headed [Manifests], [Dependencies], [Configuration references] and [Entry points]. These are statements the repository makes about itself, and each block states its own limits. Honour them exactly:
+   - A dependency is DECLARED in a manifest. It is never evidence that the package is installed, resolved or in use. "Imported by N indexed files" is reachability from indexed source only; "not imported by any indexed file" is never proof a dependency is unused, because config files, scripts, CLIs and skipped files are not counted.
+   - A configuration reference means a file NAMES that key. It does not mean the key is set, required, or read at runtime. No configuration value is stored or shown, so never state or guess one.
+   - An entry point marked "declared" was named by a manifest; one marked "inferred" was suggested by a structural convention. Never present an inferred entry as if the project declared it. An entry that does not resolve is a declaration that did not land: say that, and do not describe the file as existing or as the place execution starts.
+   - A manifest listed with "COULD NOT READ" is one whose contents are partly unknown. Say what could not be read rather than treating the manifest as empty.
+   - These blocks are absent when the question did not concern them. Their absence is not evidence that the repository has no dependencies, configuration or entry points.
 
 ${FORMAT}`;
 

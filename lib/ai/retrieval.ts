@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getFileLines } from "../content/read.ts";
 import type { Database } from "../supabase/database.types.ts";
 import { planQuestion, type QuestionPlan } from "./planner.ts";
+import { formatPackagingEvidence, loadPackagingEvidence } from "./packaging.ts";
 
 export type Db = SupabaseClient<Database>;
 
@@ -200,6 +201,13 @@ export type RetrievalResult = {
   }[];
   totalCharacters: number;
   insufficientEvidence: boolean;
+  /**
+   * Packaging, configuration and entry-point evidence, rendered for the model.
+   * Additive and optional: it is present only when the query touched packaging
+   * vocabulary and the analysis has such facts stored. Its absence means "not
+   * asked about", never "the repository has none".
+   */
+  packaging?: string;
 };
 
 // Common English question words and stop-words to exclude from seed token matching
@@ -1232,6 +1240,12 @@ export async function retrieveGroundedContext(
     }
   }
 
+  // Packaging facts ride alongside the code windows. They are loaded only when
+  // the query touched packaging vocabulary, and their absence is reported as
+  // absence of relevance, never as absence of facts.
+  const packagingEvidence = await loadPackagingEvidence(db, analysisId, rawQuery);
+  const packagingText = formatPackagingEvidence(packagingEvidence);
+
   return {
     analysisId,
     query: rawQuery,
@@ -1241,7 +1255,8 @@ export async function retrieveGroundedContext(
     files: [...includedFilesMap.values()],
     symbols: retrievedSymbols,
     totalCharacters: currentCharacters,
-    insufficientEvidence: retrievedWindows.length === 0,
+    insufficientEvidence: retrievedWindows.length === 0 && packagingText === "",
+    ...(packagingText ? { packaging: packagingText } : {}),
   };
 }
 
@@ -1314,11 +1329,15 @@ export function mergeCandidateWindows(windows: TargetWindow[]): TargetWindow[] {
  * Formats retrieved code windows into structured markdown context for the prompt.
  */
 export function formatRetrievedContext(result: RetrievalResult): string {
-  if (result.windows.length === 0) {
+  if (result.windows.length === 0 && !result.packaging) {
     return "No relevant code snippets were found in the stored analysis for this query.";
   }
 
   const sections: string[] = [];
+  // Packaging facts come first: they are statements the repository makes about
+  // itself, and a code window is easier to read once you know what the project
+  // declares it depends on and where it starts.
+  if (result.packaging) sections.push(result.packaging);
   // Group symbols by file for an API-surface appendix (Phase 2 enrichment).
   const symbolsByFile = new Map<string, NonNullable<RetrievalResult["symbols"]>>();
   for (const sym of result.symbols ?? []) {

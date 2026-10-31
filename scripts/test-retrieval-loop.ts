@@ -315,7 +315,15 @@ function buildMock(
             }),
           };
         }
-        throw new Error(`Unexpected table ${table}`);
+    if (table === "manifests" || table === "dependencies" || table === "config_references" || table === "entry_points") {
+      // No packaging metadata in this fixture: the blocks are simply absent.
+      return {
+        select: () => ({
+          eq: () => Promise.resolve({ data: [], error: null }),
+        }),
+      };
+    }
+    throw new Error(`Unexpected table ${table}`);
       },
     },
     calls,

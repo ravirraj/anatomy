@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 6,
+  "schemaVersion": 7,
   "root": "<repo>",
   "projects": [
     {
@@ -147,6 +147,59 @@
       "returnType": "number",
       "signature": "area(radius: number): number",
       "file": "packages/geometry/index.ts"
+    }
+  ],
+  "manifests": [
+    {
+      "path": "package.json",
+      "dir": ".",
+      "project": ".",
+      "ecosystem": "npm",
+      "name": "unlinked-workspaces",
+      "workspaces": [
+        "packages/*"
+      ],
+      "scripts": [],
+      "problems": []
+    },
+    {
+      "path": "packages/calc/package.json",
+      "dir": "packages/calc",
+      "project": ".",
+      "ecosystem": "npm",
+      "name": "@unlinked/calc",
+      "workspaces": [],
+      "scripts": [],
+      "problems": []
+    },
+    {
+      "path": "packages/geometry/package.json",
+      "dir": "packages/geometry",
+      "project": ".",
+      "ecosystem": "npm",
+      "name": "@unlinked/geometry",
+      "workspaces": [],
+      "scripts": [],
+      "problems": []
+    }
+  ],
+  "dependencies": [],
+  "configReferences": [],
+  "envDeclarations": [],
+  "entryPoints": [
+    {
+      "path": "packages/calc/main.ts",
+      "kind": "inferred",
+      "source": "package root module",
+      "manifest": null,
+      "resolved": true
+    },
+    {
+      "path": "packages/geometry/index.ts",
+      "kind": "inferred",
+      "source": "package root module",
+      "manifest": null,
+      "resolved": true
     }
   ],
   "coverage": {

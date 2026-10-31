@@ -4,9 +4,12 @@ import { Project, ts } from "ts-morph";
 import { extractCalls, extractExports, extractImportBindings, extractImports, extractSymbols } from "./extract.ts";
 import { dedupeEdges, fanCounts } from "./graph.ts";
 import { createResolver } from "./resolve.ts";
+import { dedupeConfigReferences, scanConfigObjects, scanEnvTemplates, scanSourceConfig } from "./config.ts";
+import { discoverEntryPoints, resolveDeclaredEntries } from "./entries.ts";
 import {
   SCHEMA_VERSION,
   type Coverage,
+  type Dependency,
   type Edge,
   type ImportStatus,
   type ParseResult,
@@ -257,7 +260,40 @@ export function parseSelection({ root, walk }: Selection): ParseResult {
   const edges = dedupeEdges(rawEdges);
   const paths = parsed.map((entry) => entry.candidate.path);
   const fan = fanCounts(paths, edges);
+
+  // ---- Phase 4: packaging, configuration and entry points ----
+  // Everything below is read from what the walk already collected plus the
+  // parsed text. No second filesystem pass, no question text, no model.
   const conventions = applyAdapters(walk, parsed, skipped);
+
+  const manifests = walk.manifests.map((m) => m.manifest);
+  const dependencies = countDependencyImports(
+    walk.manifests.flatMap((m) => m.dependencies),
+    bareSpecifiersByFile(parsed, resolver),
+    walk.projectOf,
+  );
+
+  const declaredEntries = walk.manifests.flatMap((m) => resolveDeclaredEntries(m.manifest, m.declared));
+  const textOf = new Map(parsed.map(({ candidate, sourceFile }) => [candidate.path, sourceFile.getFullText()]));
+  const entryPoints = discoverEntryPoints({
+    declared: declaredEntries,
+    files: paths,
+    otherFiles: walk.otherFiles,
+    textOf,
+    routes: conventions.routes,
+    edges,
+    packageDirs: walk.manifestDirs,
+  });
+
+  const configReferences = dedupeConfigReferences([
+    ...parsed.flatMap(({ candidate, sourceFile }) => {
+      const text = sourceFile.getFullText();
+      return [...scanSourceConfig(candidate.path, text), ...scanConfigObjects(candidate.path, text)];
+    }),
+    ...scanEnvTemplates(root).references,
+  ]);
+  const envDeclarations = scanEnvTemplates(root).declarations;
+
   const symbols = paths
     .flatMap((file) => (symbolsOf.get(file) ?? []).map((s) => ({ ...s, file })))
     .sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
@@ -288,6 +324,11 @@ export function parseSelection({ root, walk }: Selection): ParseResult {
     edges,
     routes: conventions.routes,
     symbols,
+    manifests,
+    dependencies,
+    configReferences,
+    envDeclarations,
+    entryPoints,
     coverage: {
       files: {
         found: walk.found,
@@ -302,6 +343,74 @@ export function parseSelection({ root, walk }: Selection): ParseResult {
     },
     configs: resolver.configs(),
   };
+}
+
+/**
+ * Bare package specifiers each parsed file imports, keyed by file path. Built
+ * from the resolver's own classification so a specifier counts as a package
+ * only when the resolver said it was one: a relative path, an alias, a
+ * workspace link and a Node builtin are all excluded by construction.
+ */
+function bareSpecifiersByFile(
+  parsed: readonly { candidate: { path: string; absolutePath: string }; sourceFile: AdapterFile["source"] }[],
+  resolver: ReturnType<typeof createResolver>,
+): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const { candidate, sourceFile } of parsed) {
+    const packages = new Set<string>();
+    for (const found of extractImports(sourceFile)) {
+      if (!found.literal) continue;
+      const outcome = resolver.resolve(candidate.absolutePath, found.specifier, found.kind);
+      if (outcome.status !== "external" || outcome.external !== "package") continue;
+      const name = packageNameOf(found.specifier);
+      if (name) packages.add(name);
+    }
+    if (packages.size > 0) out.set(candidate.path, packages);
+  }
+  return out;
+}
+
+/**
+ * The package a bare specifier names: "@scope/pkg/sub/path" -> "@scope/pkg",
+ * "pkg/sub" -> "pkg". A specifier that names no package (an empty string, a
+ * bare "@scope") yields null rather than a guess.
+ */
+export function packageNameOf(specifier: string): string | null {
+  const clean = specifier.split("?")[0]!.trim();
+  if (!clean || clean.startsWith(".") || clean.startsWith("/")) return null;
+  const parts = clean.split("/");
+  if (clean.startsWith("@")) {
+    return parts.length >= 2 && parts[0] && parts[1] ? `${parts[0]}/${parts[1]}` : null;
+  }
+  return parts[0] || null;
+}
+
+/**
+ * Records, for each declared dependency, how many parsed files import that
+ * package by bare specifier. This is reachability from indexed source, not
+ * usage proof: a dependency nothing imports may still be used by a config
+ * file, a CLI, a script or a file the parser skipped.
+ *
+ * Counts are per project, so a monorepo's two packages never borrow each
+ * other's imports: a dependency declared by packages/web is counted against
+ * packages/web's files only.
+ */
+function countDependencyImports(
+  dependencies: readonly Dependency[],
+  importsByFile: ReadonlyMap<string, Set<string>>,
+  projectOfFile: ReadonlyMap<string, string>,
+): Dependency[] {
+  const byProject = new Map<string, Map<string, number>>();
+  for (const [file, packages] of importsByFile) {
+    const project = projectOfFile.get(file) ?? ".";
+    const forProject = byProject.get(project) ?? new Map<string, number>();
+    for (const pkg of packages) forProject.set(pkg, (forProject.get(pkg) ?? 0) + 1);
+    byProject.set(project, forProject);
+  }
+  return dependencies.map((d) => ({
+    ...d,
+    importedBy: byProject.get(d.project)?.get(d.name) ?? 0,
+  }));
 }
 
 // Each project's adapter is asked about its own files, by project-relative

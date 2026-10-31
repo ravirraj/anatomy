@@ -382,7 +382,10 @@ export async function retrieveWithCoverageLoop(
     }),
     symbols: symbolsState,
     totalCharacters,
-    insufficientEvidence: windows.length === 0,
+    insufficientEvidence: windows.length === 0 && !base.packaging,
+    // Packaging evidence is query-level, not window-level: it does not change
+    // as the loop adds windows, so it is carried through unchanged.
+    ...(base.packaging ? { packaging: base.packaging } : {}),
   });
 
   const passes: IterationPass[] = [];

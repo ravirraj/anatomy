@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 6,
+  "schemaVersion": 7,
   "root": "<repo>",
   "projects": [
     {
@@ -289,6 +289,49 @@
       "returnType": "{ id: string }",
       "signature": "user(id: string): { id: string }",
       "file": "lib/store.ts"
+    }
+  ],
+  "manifests": [
+    {
+      "path": "package.json",
+      "dir": ".",
+      "project": ".",
+      "ecosystem": "npm",
+      "name": "nextjs-app-router",
+      "workspaces": [],
+      "scripts": [],
+      "problems": []
+    }
+  ],
+  "dependencies": [
+    {
+      "name": "next",
+      "version": "16.0.0",
+      "kind": "runtime",
+      "manifest": "package.json",
+      "dir": ".",
+      "project": ".",
+      "importedBy": 0
+    }
+  ],
+  "configReferences": [],
+  "envDeclarations": [],
+  "entryPoints": [
+    {
+      "path": "app/api/users/[id]/route.ts",
+      "kind": "inferred",
+      "source": "framework route",
+      "manifest": null,
+      "detail": "DELETE /api/users/[id]",
+      "resolved": true
+    },
+    {
+      "path": "app/api/users/route.ts",
+      "kind": "inferred",
+      "source": "framework route",
+      "manifest": null,
+      "detail": "GET /api/users",
+      "resolved": true
     }
   ],
   "coverage": {

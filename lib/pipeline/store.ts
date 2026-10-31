@@ -15,6 +15,10 @@ const EDGE_CHUNK = 2000;
 const ROLE_CHUNK = 2000;
 const ROUTE_CHUNK = 2000;
 const SYMBOL_CHUNK = 2000;
+const MANIFEST_CHUNK = 500;
+const DEPENDENCY_CHUNK = 2000;
+const CONFIG_CHUNK = 2000;
+const ENTRY_CHUNK = 1000;
 
 // Contents are weightier than rows: at most these many source files, or this
 // many of their bytes, in one request. Payloads travel hex-encoded on the
@@ -131,6 +135,25 @@ export async function storeResult(db: Db, analysis: { id: string; organizationId
   for (let i = 0; i < result.symbols.length; i += SYMBOL_CHUNK) {
     const { error } = await db.rpc("insert_symbols", { p_analysis_id: analysis.id, p_symbols: result.symbols.slice(i, i + SYMBOL_CHUNK) });
     if (error) throw new Error(`Storing symbols failed: ${error.message}`);
+  }
+
+  // Phase 4: manifests first, because dependencies reference them by path;
+  // then the two tables that resolve against stored files.
+  for (let i = 0; i < result.manifests.length; i += MANIFEST_CHUNK) {
+    const { error } = await db.rpc("insert_manifests", { p_analysis_id: analysis.id, p_manifests: result.manifests.slice(i, i + MANIFEST_CHUNK) });
+    if (error) throw new Error(`Storing manifests failed: ${error.message}`);
+  }
+  for (let i = 0; i < result.dependencies.length; i += DEPENDENCY_CHUNK) {
+    const { error } = await db.rpc("insert_dependencies", { p_analysis_id: analysis.id, p_dependencies: result.dependencies.slice(i, i + DEPENDENCY_CHUNK) });
+    if (error) throw new Error(`Storing dependencies failed: ${error.message}`);
+  }
+  for (let i = 0; i < result.configReferences.length; i += CONFIG_CHUNK) {
+    const { error } = await db.rpc("insert_config_references", { p_analysis_id: analysis.id, p_references: result.configReferences.slice(i, i + CONFIG_CHUNK) });
+    if (error) throw new Error(`Storing configuration references failed: ${error.message}`);
+  }
+  for (let i = 0; i < result.entryPoints.length; i += ENTRY_CHUNK) {
+    const { error } = await db.rpc("insert_entry_points", { p_analysis_id: analysis.id, p_entries: result.entryPoints.slice(i, i + ENTRY_CHUNK) });
+    if (error) throw new Error(`Storing entry points failed: ${error.message}`);
   }
 
   return stats;

@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 6,
+  "schemaVersion": 7,
   "root": "<repo>",
   "projects": [
     {
@@ -147,6 +147,90 @@
       "exportKind": "named",
       "signature": "brand = \"monorepo web\"",
       "file": "packages/web/lib/branding.ts"
+    }
+  ],
+  "manifests": [
+    {
+      "path": "package.json",
+      "dir": ".",
+      "project": ".",
+      "ecosystem": "npm",
+      "name": "two-framework-monorepo",
+      "workspaces": [
+        "packages/*"
+      ],
+      "scripts": [],
+      "problems": []
+    },
+    {
+      "path": "packages/api/package.json",
+      "dir": "packages/api",
+      "project": "packages/api",
+      "ecosystem": "npm",
+      "name": "@monorepo/api",
+      "workspaces": [],
+      "scripts": [],
+      "problems": []
+    },
+    {
+      "path": "packages/web/package.json",
+      "dir": "packages/web",
+      "project": "packages/web",
+      "ecosystem": "npm",
+      "name": "@monorepo/web",
+      "workspaces": [],
+      "scripts": [],
+      "problems": []
+    }
+  ],
+  "dependencies": [
+    {
+      "name": "@nestjs/core",
+      "version": "11.0.0",
+      "kind": "runtime",
+      "manifest": "packages/api/package.json",
+      "dir": "packages/api",
+      "project": "packages/api",
+      "importedBy": 0
+    },
+    {
+      "name": "@nestjs/common",
+      "version": "11.0.0",
+      "kind": "runtime",
+      "manifest": "packages/api/package.json",
+      "dir": "packages/api",
+      "project": "packages/api",
+      "importedBy": 2
+    },
+    {
+      "name": "next",
+      "version": "16.0.0",
+      "kind": "runtime",
+      "manifest": "packages/web/package.json",
+      "dir": "packages/web",
+      "project": "packages/web",
+      "importedBy": 0
+    },
+    {
+      "name": "react",
+      "version": "19.0.0",
+      "kind": "runtime",
+      "manifest": "packages/web/package.json",
+      "dir": "packages/web",
+      "project": "packages/web",
+      "importedBy": 0
+    }
+  ],
+  "configReferences": [],
+  "envDeclarations": [],
+  "entryPoints": [
+    {
+      "path": "packages/api/src/users/users.controller.ts",
+      "kind": "inferred",
+      "source": "framework route",
+      "manifest": null,
+      "detail": "GET /users",
+      "resolved": true
     }
   ],
   "coverage": {

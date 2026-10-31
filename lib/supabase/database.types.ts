@@ -467,6 +467,191 @@ export type Database = {
           },
         ]
       }
+      manifests: {
+        Row: {
+          analysis_id: string
+          dir: string
+          ecosystem: string
+          id: string
+          name: string | null
+          organization_id: string
+          path: string
+          problems: Json
+          project: string
+          scripts: Json
+          workspaces: Json
+        }
+        Insert: {
+          analysis_id: string
+          dir: string
+          ecosystem: string
+          id?: string
+          name?: string | null
+          organization_id: string
+          path: string
+          problems?: Json
+          project: string
+          scripts?: Json
+          workspaces?: Json
+        }
+        Update: {
+          analysis_id?: string
+          dir?: string
+          ecosystem?: string
+          id?: string
+          name?: string | null
+          organization_id?: string
+          path?: string
+          problems?: Json
+          project?: string
+          scripts?: Json
+          workspaces?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "manifests_analysis_id_organization_id_fkey"
+            columns: ["analysis_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "analyses"
+            referencedColumns: ["id", "organization_id"]
+          },
+        ]
+      }
+      dependencies: {
+        Row: {
+          analysis_id: string
+          dir: string
+          id: string
+          imported_by: number
+          kind: string
+          manifest_path: string
+          name: string
+          organization_id: string
+          version: string | null
+        }
+        Insert: {
+          analysis_id: string
+          dir: string
+          id?: string
+          imported_by?: number
+          kind: string
+          manifest_path: string
+          name: string
+          organization_id: string
+          version?: string | null
+        }
+        Update: {
+          analysis_id?: string
+          dir?: string
+          id?: string
+          imported_by?: number
+          kind?: string
+          manifest_path?: string
+          name?: string
+          organization_id?: string
+          version?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "dependencies_analysis_id_organization_id_fkey"
+            columns: ["analysis_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "analyses"
+            referencedColumns: ["id", "organization_id"]
+          },
+        ]
+      }
+      config_references: {
+        Row: {
+          analysis_id: string
+          detail: string | null
+          file_path: string
+          id: string
+          kind: string
+          line: number
+          organization_id: string
+          variable: string
+        }
+        Insert: {
+          analysis_id: string
+          detail?: string | null
+          file_path: string
+          id?: string
+          kind: string
+          line: number
+          organization_id: string
+          variable: string
+        }
+        Update: {
+          analysis_id?: string
+          detail?: string | null
+          file_path?: string
+          id?: string
+          kind?: string
+          line?: number
+          organization_id?: string
+          variable?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "config_references_analysis_id_organization_id_fkey"
+            columns: ["analysis_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "analyses"
+            referencedColumns: ["id", "organization_id"]
+          },
+        ]
+      }
+      entry_points: {
+        Row: {
+          analysis_id: string
+          detail: string | null
+          id: string
+          kind: string
+          manifest_path: string | null
+          organization_id: string
+          path: string
+          resolved: boolean
+          source: string
+          unresolved_reason: string | null
+          via: Json
+        }
+        Insert: {
+          analysis_id: string
+          detail?: string | null
+          id?: string
+          kind: string
+          manifest_path?: string | null
+          organization_id: string
+          path: string
+          resolved: boolean
+          source: string
+          unresolved_reason?: string | null
+          via?: Json
+        }
+        Update: {
+          analysis_id?: string
+          detail?: string | null
+          id?: string
+          kind?: string
+          manifest_path?: string | null
+          organization_id?: string
+          path?: string
+          resolved?: boolean
+          source?: string
+          unresolved_reason?: string | null
+          via?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "entry_points_analysis_id_organization_id_fkey"
+            columns: ["analysis_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "analyses"
+            referencedColumns: ["id", "organization_id"]
+          },
+        ]
+      }
       symbols: {
         Row: {
           analysis_id: string
@@ -553,6 +738,22 @@ export type Database = {
       }
       insert_symbols: {
         Args: { p_analysis_id: string; p_symbols: Json }
+        Returns: number
+      }
+      insert_manifests: {
+        Args: { p_analysis_id: string; p_manifests: Json }
+        Returns: number
+      }
+      insert_dependencies: {
+        Args: { p_analysis_id: string; p_dependencies: Json }
+        Returns: number
+      }
+      insert_config_references: {
+        Args: { p_analysis_id: string; p_references: Json }
+        Returns: number
+      }
+      insert_entry_points: {
+        Args: { p_analysis_id: string; p_entries: Json }
         Returns: number
       }
     }

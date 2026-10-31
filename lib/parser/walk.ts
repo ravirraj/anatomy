@@ -3,6 +3,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fallbackAdapter } from "./adapters/fallback.ts";
 import { selectAdapter, type FrameworkAdapter } from "./adapters/index.ts";
+import { manifestEcosystemOf, readManifest, type ManifestRead } from "./manifests.ts";
 import type { ExcludedDirectory, Project, SkippedFile } from "./types.ts";
 
 export const CODE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
@@ -11,6 +12,14 @@ const DECLARATION = /\.d\.(ts|mts|cts)$|\.d\.[^/.]+\.ts$/;
 // Generated bundles and vendored blobs run past this; hand-written modules don't.
 // A file over it is skipped and counted, never partially read.
 export const MAX_FILE_BYTES = 1024 * 1024;
+
+// Extensions a manifest can plausibly declare as an entry point but this
+// parser does not index. Recording that these files exist is what lets an
+// unresolved entry point say "not indexed" instead of "not found".
+const DECLARABLE_EXTENSIONS = new Set([
+  ".rs", ".go", ".py", ".rb", ".java", ".kt", ".cs", ".php", ".swift", ".c", ".cc", ".cpp", ".h", ".hpp",
+  ".json", ".yaml", ".yml", ".toml", ".md", ".html", ".css", ".sh", ".ps1",
+]);
 
 export type CandidateFile = {
   path: string;
@@ -38,6 +47,17 @@ export type WalkResult = {
   adapters: Map<string, FrameworkAdapter>;
   /** The project of every file found, parsed or skipped. */
   projectOf: Map<string, string>;
+  /** Every manifest read during the walk, with the facts only it can state. */
+  manifests: ManifestRead[];
+  /** Repository-relative directories that hold at least one manifest. */
+  manifestDirs: string[];
+  /**
+   * Repository-relative paths of files the walk saw but did not index because
+   * they are not a code file this parser reads (a Rust source, a Python
+   * module, a build output). Bounded: only files whose extension a manifest
+   * ecosystem could plausibly declare are recorded, so this stays a small set.
+   */
+  otherFiles: Set<string>;
 };
 
 type CurrentProject = { path: string; adapter: FrameworkAdapter };
@@ -93,6 +113,9 @@ export function walkRepository(root: string): WalkResult {
     projects: [],
     adapters: new Map(),
     projectOf: new Map(),
+    manifests: [],
+    manifestDirs: [],
+    otherFiles: new Set(),
   };
 
   const within = (project: CurrentProject, relativePath: string) => withinProject(project.path, relativePath);
@@ -118,6 +141,19 @@ export function walkRepository(root: string): WalkResult {
       }
     }
     if (!project) throw new Error(`No project for ${absoluteDir}`);
+
+    // Every manifest this directory holds, whatever ecosystem it belongs to.
+    // Read here rather than in a second pass so a manifest is read exactly
+    // once, by the same walk that decides which directories are excluded.
+    const dirPath = toPosix(path.relative(root, absoluteDir)) || ".";
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      const ecosystem = manifestEcosystemOf(entry.name);
+      if (ecosystem === null) continue;
+      const manifestPath = toPosix(path.relative(root, path.join(absoluteDir, entry.name)));
+      result.manifests.push(readManifest(path.join(absoluteDir, entry.name), manifestPath, dirPath, project.path, ecosystem));
+      if (!result.manifestDirs.includes(dirPath)) result.manifestDirs.push(dirPath);
+    }
 
     for (const entry of entries) {
       const absolutePath = path.join(absoluteDir, entry.name);
@@ -146,7 +182,15 @@ export function walkRepository(root: string): WalkResult {
         continue;
       }
 
-      if (!entry.isFile() || !isCodeFile(entry.name)) continue;
+      if (!entry.isFile() || !isCodeFile(entry.name)) {
+        // A file a manifest could name but this parser does not index is
+        // remembered, so an entry point that points at it can say "not
+        // indexed" rather than "not found". Those are different facts.
+        if (entry.isFile() && DECLARABLE_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
+          result.otherFiles.add(relativePath);
+        }
+        continue;
+      }
       result.found++;
       result.projectOf.set(relativePath, project.path);
 
