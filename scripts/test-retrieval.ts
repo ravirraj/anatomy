@@ -669,6 +669,72 @@ const fxSdk = await fixtureAsk("How does the SDK work, and how does a developer 
   }
 }
 
+// Phase 3 — planner wiring: generic verbs, cross-strategy corroboration,
+// plan attachment, first-window relevance, unrelated-question behaviour.
+{
+  const generic = await fixtureAsk("How do you implement and handle errors properly in this project?");
+  const first = generic.files[0]?.path ?? "";
+  if (first.includes("error")) {
+    pass(`generic-verb question ranks the concept file first (${first})`);
+  } else {
+    fail(`generic-verb question ranked "${first}" first — concept evidence did not outrank verb evidence`);
+  }
+  const errPaths = new Set(generic.files.map((f) => f.path));
+  const errNeeded = errPaths.has("src/middlewares/errorMiddleware.js") || errPaths.has("src/utils/AppError.js");
+  if (errNeeded) {
+    pass("generic-verb question still satisfies error-handling category coverage");
+  } else {
+    fail(`generic-verb question missed both error files: ${[...errPaths].join(", ")}`);
+  }
+  const serverFirst = generic.files.slice(0, 3).map((f) => f.path);
+  if (!serverFirst.some((p) => UNRELATED.has(p))) {
+    pass("generic setup files stay out of the top 3 for a generic-verb question");
+  } else {
+    fail(`setup files in top 3: ${serverFirst.join(", ")}`);
+  }
+
+  const withVerb = await fixtureAsk("How do you handle authentication in this project?");
+  const verbPaths = withVerb.files.map((f) => f.path);
+  const authNeeded = ["src/controllers/authController.js", "src/middlewares/authMiddleware.js"];
+  if (authNeeded.every((p) => verbPaths.includes(p))) {
+    pass("generic verb in the question does not displace authentication concept files");
+  } else {
+    fail(`handle+auth missed core files: ${verbPaths.join(", ")}`);
+  }
+
+  const unrelated = await fixtureAsk("What color is the sky?");
+  if (unrelated.insufficientEvidence && unrelated.windows.length === 0 && unrelated.files.length === 0) {
+    pass("unrelated question short-circuits to insufficient evidence");
+  } else {
+    fail(`unrelated question retrieved ${unrelated.files.length} files: ${unrelated.files.map((f) => f.path).join(", ")}`);
+  }
+
+  if (fxAuth.plan.intent === "explain-subsystem" && fxAuth.plan.concepts[0]?.token === "authentication") {
+    pass("retrieval result carries the explainable planner plan");
+  } else {
+    fail(`plan not attached correctly: ${fxAuth.plan.intent}, ${JSON.stringify(fxAuth.plan.concepts.map((c) => c.token))}`);
+  }
+
+  const multiStrategy = mergeCandidateWindows([
+    { fileId: "s1", path: "src/service.ts", contentHash: "h", totalLines: 100, startLine: 10, endLine: 40, score: 95, reason: "symbol hit", strategies: ["symbol"] },
+    { fileId: "s1", path: "src/service.ts", contentHash: "h", totalLines: 100, startLine: 20, endLine: 45, score: 80, reason: "path hit", strategies: ["path"] },
+  ]);
+  if (multiStrategy.length === 1 && multiStrategy[0].score === 99 && multiStrategy[0].strategies?.length === 2) {
+    pass("merged window corroborates two strategies (+4: 95 -> 99)");
+  } else {
+    fail(`strategy corroboration wrong: score=${multiStrategy[0]?.score}, strategies=${JSON.stringify(multiStrategy[0]?.strategies)}`);
+  }
+  const singleStrategy = mergeCandidateWindows([
+    { fileId: "s2", path: "src/other.ts", contentHash: "h", totalLines: 100, startLine: 10, endLine: 40, score: 95, reason: "symbol hit", strategies: ["symbol"] },
+    { fileId: "s2", path: "src/other.ts", contentHash: "h", totalLines: 100, startLine: 20, endLine: 45, score: 80, reason: "symbol hit", strategies: ["symbol"] },
+  ]);
+  if (singleStrategy.length === 1 && singleStrategy[0].score === 95 && singleStrategy[0].strategies?.length === 1) {
+    pass("single-strategy merge keeps the plain max score (no bonus)");
+  } else {
+    fail(`single-strategy merge wrong: score=${singleStrategy[0]?.score}, strategies=${JSON.stringify(singleStrategy[0]?.strategies)}`);
+  }
+}
+
 // Concept-expansion unit checks: plain vocabulary, no repo knowledge.
 {
   const t = tokenVariants("authentication");

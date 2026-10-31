@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getFileLines } from "../content/read.ts";
 import type { Database } from "../supabase/database.types.ts";
+import { planQuestion, type QuestionPlan } from "./planner.ts";
 
 export type Db = SupabaseClient<Database>;
 
@@ -36,7 +37,22 @@ export type TargetWindow = {
   endLine: number;
   score: number;
   reason: string;
+  /**
+   * Which retrieval strategies produced this window ("symbol", "route",
+   * "path", "role", "entry", "expansion"). Set individually by every seed
+   * stage and unioned when windows merge: evidence a file earned through
+   * two independent strategies outranks single-strategy evidence.
+   */
+  strategies?: string[];
 };
+
+/**
+ * Generic action verbs from the planner ("implement", "handle", …) name what
+ * the asker wants done, not something to find evidence about. They still
+ * match code, but a window that matched *only* through a generic verb pays
+ * this demotion so verb-named files can never outrank concept evidence.
+ */
+const GENERIC_PENALTY = 25;
 
 export type RetrievedWindow = {
   fileId: string;
@@ -54,6 +70,8 @@ export type RetrievalResult = {
   analysisId: string;
   query: string;
   tokens: string[];
+  /** The deterministic planner output behind this retrieval (explainable). */
+  plan: QuestionPlan;
   windows: RetrievedWindow[];
   files: { fileId: string; path: string; contentHash: string; totalLines: number }[];
   totalCharacters: number;
@@ -344,12 +362,21 @@ export async function retrieveGroundedContext(
 ): Promise<RetrievalResult> {
   const config = { ...DEFAULT_BUDGET, ...budget };
   const tokens = extractQueryTokens(rawQuery);
+  const plan = planQuestion(rawQuery);
+  // The planner separates generic action verbs ("implement", "handle", …)
+  // from concepts; retrieval keeps them eligible but demoted (§ stages).
+  const genericTokens = new Set(
+    plan.unusedTokens
+      .filter((u) => u.reason === "generic-verb")
+      .map((u) => u.word),
+  );
 
   if (tokens.length === 0) {
     return {
       analysisId,
       query: rawQuery,
       tokens: [],
+      plan,
       windows: [],
       files: [],
       totalCharacters: 0,
@@ -397,6 +424,7 @@ export async function retrieveGroundedContext(
       analysisId,
       query: rawQuery,
       tokens,
+      plan,
       windows: [],
       files: [],
       totalCharacters: 0,
@@ -422,10 +450,12 @@ export async function retrieveGroundedContext(
 
       const nameLower = sym.name.toLowerCase();
       const subtokens = identifierSubtokens(sym.name);
-      let bestScore = 0;
+      let bestConcept = 0;
+      let bestGeneric = 0;
       let matchedToken = "";
 
       for (const token of tokens) {
+        const generic = genericTokens.has(token);
         for (const { text: variant, kind } of tokenVariants(token)) {
           const penalty = KIND_PENALTY[kind];
           let score = 0;
@@ -444,12 +474,23 @@ export async function retrieveGroundedContext(
             else if (sub) score = 55;
             else if (variant.length >= 5 && nameLower.includes(variant)) score = 40;
           }
-          if (score - penalty > bestScore) {
-            bestScore = score - penalty;
+          const scored = score - penalty;
+          // Concept evidence always outranks generic-verb evidence.
+          if (generic) {
+            if (scored > bestGeneric) {
+              bestGeneric = scored;
+              matchedToken = token;
+            }
+          } else if (scored > bestConcept) {
+            bestConcept = scored;
             matchedToken = token;
           }
         }
       }
+      // A window matched only through generic verbs ("implement", "handle"…)
+      // is demoted so verb-named code cannot drown concept-named code.
+      const genericOnly = bestConcept === 0 && bestGeneric > 0;
+      let bestScore = genericOnly ? bestGeneric - GENERIC_PENALTY : bestConcept;
 
       if (bestScore > 0) {
         if (sym.exported) bestScore += 5;
@@ -463,7 +504,8 @@ export async function retrieveGroundedContext(
           startLine,
           endLine,
           score: bestScore,
-          reason: `symbol "${sym.name}" (${sym.kind}) matches token "${matchedToken}"`,
+          strategies: ["symbol"],
+          reason: `symbol "${sym.name}" (${sym.kind}) matches token "${matchedToken}"${genericOnly ? " (generic verb only, demoted)" : ""}`,
         });
       }
     }
@@ -483,21 +525,32 @@ export async function retrieveGroundedContext(
       const routeLower = route.path.toLowerCase();
       const methodLower = route.method.toLowerCase();
       const segments = routeLower.split(/[^a-z0-9]+/).filter(Boolean);
-      let bestScore = 0;
+      let bestConcept = 0;
+      let bestGeneric = 0;
       let matchedToken = "";
 
       for (const token of tokens) {
+        const generic = genericTokens.has(token);
         for (const { text: variant, kind } of tokenVariants(token)) {
           const penalty = KIND_PENALTY[kind];
+          let score = 0;
           if (segments.some((s) => s === variant)) {
-            if (100 - penalty > bestScore) { bestScore = 100 - penalty; matchedToken = token; }
+            score = 100;
           } else if (variant.length >= 3 && routeLower.includes(variant)) {
-            if (65 - penalty > bestScore) { bestScore = 65 - penalty; matchedToken = token; }
+            score = 65;
           } else if (methodLower === variant) {
-            if (50 - penalty > bestScore) { bestScore = 50 - penalty; matchedToken = token; }
+            score = 50;
+          } else continue;
+          const scored = score - penalty;
+          if (generic) {
+            if (scored > bestGeneric) { bestGeneric = scored; matchedToken = token; }
+          } else if (scored > bestConcept) {
+            bestConcept = scored; matchedToken = token;
           }
         }
       }
+      const genericOnly = bestConcept === 0 && bestGeneric > 0;
+      const bestScore = genericOnly ? bestGeneric - GENERIC_PENALTY : bestConcept;
 
       if (bestScore > 0) {
         const startLine = Math.max(1, route.line - 10);
@@ -510,7 +563,8 @@ export async function retrieveGroundedContext(
           startLine,
           endLine,
           score: bestScore,
-          reason: `route "${route.method} ${route.path}" matches token "${matchedToken}"`,
+          strategies: ["route"],
+          reason: `route "${route.method} ${route.path}" matches token "${matchedToken}"${genericOnly ? " (generic verb only, demoted)" : ""}`,
         });
       }
     }
@@ -529,10 +583,13 @@ export async function retrieveGroundedContext(
     ];
     const filenameParts = new Set(identifierSubtokens(filename));
     const matchedVariants = new Set<string>();
-    let bestScore = 0;
+    let bestConcept = 0;
+    let bestGeneric = 0;
     let matchedToken = "";
+    let genericOnly = false;
 
     for (const token of tokens) {
+      const generic = genericTokens.has(token);
       for (const { text: variant, kind } of tokenVariants(token)) {
         const penalty = KIND_PENALTY[kind];
         let score = 0;
@@ -543,13 +600,20 @@ export async function retrieveGroundedContext(
         } else if (variant.length >= 5 && pathLower.includes(variant)) {
           score = 45;
         }
-        if (score - penalty > bestScore) {
-          bestScore = score - penalty;
+        const scored = score - penalty;
+        if (scored > (generic ? bestGeneric : bestConcept)) {
+          if (generic) bestGeneric = scored;
+          else {
+            bestConcept = scored;
+            genericOnly = false;
+          }
           matchedToken = token;
         }
         if (score > 0) matchedVariants.add(variant);
       }
+      genericOnly = bestConcept === 0 && bestGeneric > 0;
     }
+    let bestScore = genericOnly ? bestGeneric - GENERIC_PENALTY : bestConcept;
     // Corroboration: two distinct concept variants in one path (e.g. an SDK
     // client package matching both "packages" and "client") confirm the same
     // idea from different segments — a single segment hit alone does not.
@@ -568,7 +632,8 @@ export async function retrieveGroundedContext(
         startLine: 1,
         endLine,
         score: bestScore,
-        reason: `file path matches token "${matchedToken}"`,
+        strategies: ["path"],
+        reason: `file path matches token "${matchedToken}"${genericOnly ? " (generic verb only, demoted)" : ""}`,
       });
     }
   }
@@ -595,37 +660,43 @@ export async function retrieveGroundedContext(
         startLine: 1,
         endLine,
         score: 55,
+        strategies: ["role"],
         reason: `file holds the "${hint.role}" role, which the question's topic names`,
       });
     }
   }
 
   // D. For broad repository or onboarding queries, prioritize foundational
-  // entry points and hubs. These are *generic* seeds — a question's concept
-  // evidence always outranks them, so an unrelated bootstrap file can never
-  // displace real matches (and only fire when concept seeding found little).
+  // entry points and hubs. These are *generic* seeds — they never displace
+  // real concept matches. A specific question that matches no concept
+  // vocabulary instead short-circuits to insufficient evidence rather than
+  // being papered over with bootstrap files.
   const broadQuery = isOnboardingQuery(rawQuery);
-  if (broadQuery || seedWindows.length < 2) {
+  if (broadQuery) {
     type FileRecord = { id: string; path: string; hash: string; lines: number; role: string | null };
-    const scoredFiles: { file: FileRecord; score: number; reason: string }[] = [];
+    const scoredFiles: { file: FileRecord; score: number; reason: string; strategy: string }[] = [];
     for (const file of fileMap.values()) {
       let score = 0;
       let reason = "";
+      let strategy = "entry";
 
       const isEntry = ENTRY_POINT_PATTERNS.some((p) => p.test(file.path));
       if (isEntry) {
         score = 30;
+        strategy = "entry";
         reason = "primary application entry point / core module";
       } else if (file.role === "route" || file.role === "entry") {
         score = 28;
+        strategy = "entry";
         reason = `core role "${file.role}"`;
       } else if (file.path.split("/").length <= 2) {
         score = 24;
+        strategy = "entry";
         reason = "shallow repository structure file";
       }
 
       if (score > 0) {
-        scoredFiles.push({ file, score, reason });
+        scoredFiles.push({ file, score, reason, strategy });
       }
     }
 
@@ -642,6 +713,7 @@ export async function retrieveGroundedContext(
         startLine: 1,
         endLine,
         score: item.score,
+        strategies: [item.strategy],
         reason: item.reason,
       });
     }
@@ -653,6 +725,7 @@ export async function retrieveGroundedContext(
       analysisId,
       query: rawQuery,
       tokens,
+      plan,
       windows: [],
       files: [],
       totalCharacters: 0,
@@ -713,6 +786,7 @@ export async function retrieveGroundedContext(
           startLine: 1,
           endLine,
           score: decayScore,
+          strategies: ["expansion"],
           reason: `1-hop dependency connected to seed "${seedFile.path}"`,
         });
       }
@@ -870,6 +944,7 @@ export async function retrieveGroundedContext(
     analysisId,
     query: rawQuery,
     tokens,
+    plan,
     windows: retrievedWindows,
     files: [...includedFilesMap.values()],
     totalCharacters: currentCharacters,
@@ -878,7 +953,12 @@ export async function retrieveGroundedContext(
 }
 
 /**
- * Merges overlapping or close line windows on the same file.
+ * Merges overlapping or close line windows on the same file. The merged
+ * window keeps the strongest score and unions the retrieval strategies that
+ * produced it — evidence confirmed by two independent strategies (say, a
+ * symbol match *and* a path match) gets a small corroboration bonus, which
+ * is what lifts cross strategy-confirmed files above generic setup files
+ * at comparable scores.
  */
 export function mergeCandidateWindows(windows: TargetWindow[]): TargetWindow[] {
   const byFile = new Map<string, TargetWindow[]>();
@@ -900,6 +980,8 @@ export function mergeCandidateWindows(windows: TargetWindow[]): TargetWindow[] {
       const next = list[i]!;
       // If windows overlap or are within 5 lines of each other, merge them
       if (next.startLine <= current.endLine + 5) {
+        const strategies = [...new Set([...(current.strategies ?? []), ...(next.strategies ?? [])])];
+        const corroboration = Math.min(8, Math.max(0, strategies.length - 1) * 4);
         current = {
           fileId: current.fileId,
           path: current.path,
@@ -907,8 +989,13 @@ export function mergeCandidateWindows(windows: TargetWindow[]): TargetWindow[] {
           totalLines: current.totalLines,
           startLine: Math.min(current.startLine, next.startLine),
           endLine: Math.max(current.endLine, next.endLine),
-          score: Math.max(current.score, next.score),
-          reason: `${current.reason}; ${next.reason}`,
+          score: Math.max(current.score, next.score) + corroboration,
+          strategies,
+          reason: next.reason === current.reason
+            ? current.reason
+            : corroboration > 0
+              ? `${current.reason}; ${next.reason} (+${corroboration} from ${strategies.length} strategies)`
+              : `${current.reason}; ${next.reason}`,
         };
       } else {
         merged.push(current);
