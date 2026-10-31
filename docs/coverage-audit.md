@@ -115,3 +115,47 @@ controllers/middleware/jwt/session model/validators/login page/client SDK.
   and the answer cache are all existing infrastructure to reuse as-is.
 - The retrieval budget already has configuration seams (`RetrievalBudget`);
   Phase 5 reuses them instead of adding a parallel budget system.
+
+## 8. Phase 6 - Bounded iterative retrieval (results, this branch)
+
+`lib/ai/retrieval-loop.ts` (`retrieveWithCoverageLoop`) runs the unchanged
+Phase 3/4 pipeline as pass 0, evaluates coverage (`lib/ai/coverage.ts`),
+and while a category is partial/unknown issues at most two focused
+retrievals per pass (`concept token + category vocabulary`), merges their
+windows append-only, and re-evaluates. No LLM, no ingestion changes.
+
+Merge and stop rules (all tested in `scripts/test-retrieval-loop.ts`):
+- append-only: an exact/overlapping window (retrieval's own 5-line merge
+  gap counts as overlap) is never re-served; per-file window cap and the
+  16-file / 28k-character budget hold across every pass; a new file needs
+  a candidate score >= 50, so relationship-only skips and weak hops never
+  pad or displace stronger direct evidence; provenance and content hashes
+  flow through verbatim (indexed/derived/direct tested).
+- stop reasons: `sufficient-coverage`, `no-candidates`, `budget-exhausted`,
+  `max-passes` (<= 3 additional passes). `unknown` never blocks as proof of
+  nonexistence - it only feeds the next targeted pass, and the fixed
+  unknown-note still ships with every evaluation.
+
+Before/after against the live authsphere analysis
+(`2af1dcb5-31a0-4f99-a8b6-8e6c98d54bf2`; provider quota 429 still blocks
+final answer runs, so the report stays at the retrieval/coverage level):
+
+| Query | Before (Phase 5 single pass) | After (coverage-loop) |
+|---|---|---|
+| "How does authentication work in this repository?" | found 4 / partial 0 / unknown 0, one retrieval | same coverage, 0 extra passes, loop stops `sufficient-coverage` immediately, no regression (loop ms ~296, single call) |
+| "How does the developer SDK work?" | found 1 (frontend) / partial 2 (routes, controllers) / unknown 0 | same coverage, 1 pass (ms ~185) issuing 2 focused queries (`sdk route router endpoint`, `sdk controller handler`), 0 windows added -> loop stops `budget-exhausted`; loop ms ~376; package stays 16 files / ~26.3k chars |
+
+Interpretation of the SDK after-state: the targeted retrievals DO surface
+strong evidence the base package missed - `backend/src/routes/sdk.routes.js`
+(1-50, indexed, score 94, `sdk` controllers/validator imports in text) and
+`backend/src/controllers/sdk.controller.js` (score 116) - but the question's
+own package already pins all 16 file slots, so the loop honestly refuses to
+displace them and reports `budget-exhausted` instead of inventing space.
+Coverage therefore did not regress, and the improvement mechanics are
+demonstrated end-to-end on the fixture suites (routes flips
+partial -> found and controllers partial -> found through a route-table and a
+header-window drill; two-pass exhaustion, no-candidate and
+max-passes stops are each pinned by tests). Candidate displacement of
+weaker evidence is deliberately out of Phase 6 scope and recorded for a
+later phase. `node scripts/test-retrieval-loop.ts` is wired into `pnpm test`
+after the Phase 5 suite.
