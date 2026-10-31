@@ -105,6 +105,22 @@ export function isCitationCandidate(
   if (isNpmPackage(raw)) return false;
   if (isPlaceholderPath(raw)) return false;
 
+  // Relative import specifiers (./, ../, and Windows-style .\\ / ..\\) are
+  // never repository paths on their own: their meaning depends on the importing
+  // file's directory, which a citation does not carry. They must not be treated
+  // as citations, otherwise the model's quoting of an import line becomes a
+  // verification failure. The answer cites the canonical path named in the
+  // `--- File:` header of the snippet instead.
+  const strippedForRel = stripLineSuffix(raw);
+  if (
+    strippedForRel.startsWith("./") ||
+    strippedForRel.startsWith("../") ||
+    strippedForRel.startsWith(".\\") ||
+    strippedForRel.startsWith("..\\")
+  ) {
+    return false;
+  }
+
   if (isDirectoryReference(raw)) {
     // In code spans under legacy Set-based checking (explainFolder / explainFile),
     // directories are validated against the allowed set. In Q&A or prose, they are
@@ -283,7 +299,16 @@ export function findMatchingPath(
   checker: (p: string) => boolean,
   allFiles?: Set<string>,
 ): string | null {
+  const raw = path.trim();
+  const isRelative = raw.startsWith("./") || raw.startsWith("../") || raw.startsWith(".\\") || raw.startsWith("..\\");
   const norm = normalize(path);
+  // Relative specifiers are never resolved against the global file set: their
+  // identity depends on the importing file's directory, which this verifier
+  // does not have. Resolving them by suffix would silently convert an import
+  // specifier into a possibly-unrelated canonical path.
+  if (isRelative) {
+    return checker(norm) ? norm : null;
+  }
   if (checker(norm)) return norm;
 
   // Candidate path variants to check

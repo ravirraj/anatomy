@@ -10,6 +10,7 @@ import {
   parseCitation,
   extractCitations,
   isRouteStylePath,
+  findMatchingPath,
   type FileEvidence,
 } from "../lib/ai/citations.ts";
 import { explainFile } from "../lib/ai/tasks.ts";
@@ -449,6 +450,54 @@ console.log("=== route paths are not file citations ===");
     fail(`isRouteStylePath wrong on: ${JSON.stringify(wrong)}`);
   }
 }
+
+  // Relative import specifiers must never be treated as citations: the model
+  // quoting an import line must not turn into a verification failure, and an
+  // unknown relative path must never be silently resolved to a canonical file.
+  {
+    const cases: [string, string][] = [
+      ["`../services/auth/discord.service.js`", "../services/auth/discord.service.js"],
+      ["`./auth.middleware.js`", "./auth.middleware.js"],
+      ["`../../utils/helpers.ts`", "../../utils/helpers.ts"],
+      ["`..\\services\\auth\\discord.service.js`", "..\\services\\auth\\discord.service.js"],
+      ["`.\\auth.middleware.js`", ".\\auth.middleware.js"],
+    ];
+    let allOk = true;
+    for (const [mention, specifier] of cases) {
+      const tokens = pathTokens(`See ${mention}.`);
+      if (tokens.includes(specifier)) { allOk = false; break; }
+    }
+    if (allOk) pass("relative import specifiers are excluded from citation candidates");
+    else fail("a relative import specifier leaked into citation candidates");
+  }
+
+  // Cross-directory relative imports are excluded too.
+  {
+    const tokens = pathTokens("Imports `../shared/lib/foo.ts` and `./bar/baz.js`.");
+    if (tokens.length === 0) pass("cross-directory relative imports excluded");
+    else fail(`cross-directory relative leaked: ${JSON.stringify(tokens)}`);
+  }
+
+  // Valid canonical paths still verify normally.
+  {
+    const bad = verifyCitations("See `lib/ai/tasks.ts#L10-L25` and `components/explanation-text.tsx`.", allowed);
+    if (bad.paths.length === 0) pass("valid canonical paths still verify");
+    else fail(`valid canonical paths flagged: ${JSON.stringify(bad.paths)}`);
+  }
+
+  // Unknown relative paths are not silently converted to a valid canonical path.
+  {
+    const resolved = findMatchingPath("../services/auth/discord.service.js", (p) => allowed.has(p), allowed);
+    if (resolved === null) pass("unknown relative path is not silently resolved");
+    else fail(`relative path silently resolved to ${resolved}`);
+  }
+
+  // findMatchingPath still resolves legitimate canonical-ish suffixes.
+  {
+    const resolved = findMatchingPath("lib/ai/tasks.ts", (p) => allowed.has(p), allowed);
+    if (resolved === "lib/ai/tasks.ts") pass("canonical path resolves exactly");
+    else fail(`canonical path resolution broken: ${resolved}`);
+  }
 
 console.log("");
 for (const line of results) console.log(line);

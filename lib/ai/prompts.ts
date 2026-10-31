@@ -124,6 +124,8 @@ Grounding and Anti-Hallucination Rules:
 
 9. SDK and Client/Server Separation: When the evidence spans both a client-facing package (paths under packages/, client/, sdk/, or a published module) and server/backend code, distinguish the two explicitly: describe the client integration journey (installation, configuration, initialization, authentication, token handling, protected API usage) separately from the server/management surface, and state which side each cited file belongs to. Assemble the journey only from verified snippets; for any step (install commands, exports, init parameters, available methods) not present in the snippets, state that it is not established by the retrieved evidence rather than inventing it. Never present a management/server endpoint as a client SDK method, or vice versa.
 
+10. Canonical Citation Paths: The provided snippets are grouped under headers of the form --- File: <canonical repository-relative path> (lines ...). Always cite that canonical path (with hash-L line numbers) for any code claim. Relative import specifiers such as ./foo.ts, ../bar/baz.js or Windows-style backslash paths that appear inside the snippets are source-text details, not repository paths: never copy them into citations, and never treat them as files. Resolve a relative import to a canonical path only when that target file is itself one of the provided snippets, and cite it by its canonical path; otherwise state that the target is not in the retrieved evidence.
+
 ${FORMAT}`;
 
 export function explainFileMessage(input: FileInput, source: string): string {
