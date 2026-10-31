@@ -4,7 +4,8 @@ import { createHash } from "node:crypto";
 import { tracingStatus, type TracingStatus } from "@/lib/ai/client";
 import { type ParsedCitation } from "@/lib/ai/citations";
 import { type QuestionInput } from "@/lib/ai/prompts";
-import { formatRetrievedContext, retrieveGroundedContext } from "@/lib/ai/retrieval";
+import { formatRetrievedContext } from "@/lib/ai/retrieval";
+import { retrieveWithCoverageLoop, type IterativeRetrievalResult } from "@/lib/ai/retrieval-loop";
 import { answerQuestion, classifyFile, explainFile, explainFolder, type Cache } from "@/lib/ai/tasks";
 import { loadFileInput, loadFolderInput } from "@/lib/analysis/context";
 import { getFileContent } from "@/lib/content/read";
@@ -39,6 +40,11 @@ export type QAResult =
         totalCharacters: number;
         files: { fileId: string; path: string; totalLines: number }[];
         insufficientEvidence: boolean;
+        /** Category counts from the coverage evaluation of the final package. */
+        coverage: { found: number; partial: number; unknown: number };
+        /** Why the bounded retrieval loop stopped. */
+        stoppedBecause: IterativeRetrievalResult["stoppedBecause"];
+        passes: number;
       };
     }
   | { ok: false; error: string };
@@ -109,10 +115,26 @@ export async function askQuestionAction(analysisId: string, question: string): P
     const db = await createServerSupabase();
     const analysis = await readAnalysis(db, analysisId);
 
-    // 1. Multi-index deterministic retrieval & graph expansion
-    const retrieved = await retrieveGroundedContext(db, analysis.id, trimmed);
+    // 1. Deterministic retrieval, then bounded targeted passes for any
+    //    category the coverage evaluation could not establish. No model call.
+    const loop = await retrieveWithCoverageLoop(db, analysis.id, trimmed);
+    const retrieved = loop.result;
     const tRetrieval = performance.now();
     const contextText = formatRetrievedContext(retrieved);
+
+    // Coverage -> synthesis-friendly layer lists (concept-agnostic union).
+    const coverageLayers = { verified: new Set<string>(), partial: new Set<string>(), unknown: new Set<string>() };
+    for (const concept of loop.coverage.concepts) {
+      for (const cat of concept.categories) {
+        if (cat.status === "found") coverageLayers.verified.add(cat.category);
+        else if (cat.status === "partial") coverageLayers.partial.add(cat.category);
+        else coverageLayers.unknown.add(cat.category);
+      }
+    }
+    // A layer is only "unknown" if no concept verified or partially found it.
+    for (const layer of coverageLayers.verified) coverageLayers.partial.delete(layer);
+    for (const layer of coverageLayers.verified) coverageLayers.unknown.delete(layer);
+    for (const layer of coverageLayers.partial) coverageLayers.unknown.delete(layer);
 
     // 2. Fetch all analysis files for verification context
     const { data: allFilesData } = await db
@@ -131,14 +153,22 @@ export async function askQuestionAction(analysisId: string, question: string): P
         contentHash: f.contentHash,
         totalLines: f.totalLines,
       })),
+      coverage: {
+        verified: [...coverageLayers.verified].sort(),
+        partial: [...coverageLayers.partial].sort(),
+        unknown: [...coverageLayers.unknown].sort(),
+        unknownNote: loop.coverage.unknownNote,
+      },
     };
 
     const cache = cacheFor(db, analysis.organizationId);
+    const tLlm = performance.now();
     const answer = await answerQuestion(questionInput, { cache, allAnalysisFiles });
+    const tLlmEnd = performance.now();
     const tTotal = performance.now();
 
     console.log(
-      `[Q&A Timing] analysisId=${analysisId} retrievalMs=${Math.round(tRetrieval - t0)} totalMs=${Math.round(tTotal - t0)} retrievedFiles=${retrieved.files.length} insufficientEvidence=${retrieved.insufficientEvidence}`,
+      `[Q&A Timing] analysisId=${analysisId} retrievalMs=${Math.round(tRetrieval - t0)} llmMs=${Math.round(tLlmEnd - tLlm)} totalMs=${Math.round(tTotal - t0)} retrievedFiles=${retrieved.files.length} insufficientEvidence=${retrieved.insufficientEvidence} passes=${loop.passes.length} stop=${loop.stoppedBecause}`,
     );
 
     return {
@@ -156,6 +186,9 @@ export async function askQuestionAction(analysisId: string, question: string): P
           totalLines: f.totalLines,
         })),
         insufficientEvidence: retrieved.insufficientEvidence,
+        coverage: loop.coverage.summary,
+        stoppedBecause: loop.stoppedBecause,
+        passes: loop.passes.length,
       },
     };
   } catch (error) {

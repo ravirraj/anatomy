@@ -56,6 +56,17 @@ export type QuestionInput = {
   question: string;
   contextText: string;
   files: { path: string; contentHash: string; totalLines: number }[];
+  /**
+   * Coverage evaluation of the final retrieved evidence package: which layers
+   * of the question's concepts are verified (source text), partially
+   * established, or unknown. `unknown` is never proof of absence.
+   */
+  coverage?: {
+    verified: string[];
+    partial: string[];
+    unknown: string[];
+    unknownNote: string;
+  };
 };
 
 // The pane is narrow: headings would cut a few short paragraphs into labelled
@@ -103,7 +114,13 @@ Grounding and Anti-Hallucination Rules:
    - Getting Started & Contributor Starting Points
    Explicitly cite the provided entry point snippets for concrete claims, and note where evidence is incomplete rather than fabricating details.
 6. Insufficient Evidence: If the provided snippets do not contain enough evidence to answer a question with certainty, state clearly what is known from the snippets and what is missing. Never fabricate references.
-7. Usage & Integration Questions: When the question asks how a developer uses or integrates something in this repository, teach the public interface in the order a new user would apply it — initialization/config first, then the main flow, then helpers — naming the exported functions, components, routes and options exactly as the snippets define them. Include short fenced-code usage examples assembled strictly from the snippet lines. If part of the interface is not in the snippets, say what is unknown there rather than guessing; the snippets may only show one side (e.g. the server side of an SDK).
+7. Usage & Integration Questions: When the question asks how a developer uses or integrates something in this repository, teach the public interface in the order a new user would apply it - initialization/config first, then the main flow, then helpers - naming the exported functions, components, routes and options exactly as the snippets define them. Include short fenced-code usage examples assembled strictly from the snippet lines. If part of the interface is not in the snippets, say what is unknown there rather than guessing; the snippets may only show one side (e.g. the server side of an SDK).
+
+8. Evidence Coverage: The input may include a coverage summary naming layers that are Verified (source text establishes them), Partial (affiliated files exist but the retrieved text does not establish them) and Unknown (no affiliated evidence was retrieved). Treat this as a guide to confidence, never as a fact about existence:
+   - Verified layers: describe with confidence and cite them.
+   - Partial layers: describe only what the snippets establish and say the rest is not established by the retrieved evidence.
+   - Unknown layers: state clearly that the retrieved evidence does not establish them and that this is not proof the feature is absent - other or unretrieved files may contain it. Never say a feature does not exist or is missing solely because a layer is Unknown.
+   - Never upgrade a Partial or Unknown layer to a confident claim, and never downgrade a Verified layer to a guess.
 
 ${FORMAT}`;
 
@@ -169,7 +186,7 @@ export function classifyMessage(input: ClassifyInput, excerpt: string): string {
 }
 
 export function questionMessage(input: QuestionInput): string {
-  return [
+  const lines = [
     `Question: ${input.question.trim()}`,
     "",
     "Retrieved Code Snippets from Repository:",
@@ -177,9 +194,19 @@ export function questionMessage(input: QuestionInput): string {
     input.contextText.trim(),
     ">>>",
     "",
-    "Provide a clear, direct answer grounded strictly in the snippets above.",
-    "Cite every relevant file and line range using backticks, like `path/to/file.ts#L10-L25`.",
-  ].join("\n");
+  ];
+  if (input.coverage) {
+    const c = input.coverage;
+    lines.push("Evidence coverage of the final retrieved package (a guide to confidence, not proof of existence):");
+    lines.push(`- Verified layers (source text establishes them): ${c.verified.length ? c.verified.join(", ") : "none"}`);
+    lines.push(`- Partial layers (affiliated files exist, but the retrieved text does not establish them): ${c.partial.length ? c.partial.join(", ") : "none"}`);
+    lines.push(`- Unknown layers (no affiliated evidence was retrieved; NOT proof the feature is absent): ${c.unknown.length ? c.unknown.join(", ") : "none"}`);
+    lines.push(c.unknownNote);
+    lines.push("");
+  }
+  lines.push("Provide a clear, direct answer grounded strictly in the snippets above.");
+  lines.push("Cite every relevant file and line range using backticks, like `path/to/file.ts#L10-L25`.");
+  return lines.join("\n");
 }
 
 function neighbourLines(list: NeighbourFacts[]): string[] {

@@ -196,7 +196,6 @@ console.log("=== 4. Adaptive Coverage Evaluation with Discovered Concepts ===");
         score: 90,
         text: "export function ProcessPayment(paymentPayload: PaymentRequest) { return true; }",
         reason: "symbol ProcessPayment matches",
-        provenance: "direct",
       },
     ],
     files: [{ fileId: "c1", path: "src/payment/processor.ts", contentHash: "hash123", totalLines: 80 }],

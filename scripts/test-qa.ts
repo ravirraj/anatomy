@@ -295,6 +295,63 @@ Database client initialization is in \`lib/db/client.ts#L5-L25\`.
       fail("citation outside retrieved evidence did not throw CitationError");
     }
   }
+  // Test 9: coverage-aware synthesis - the coverage summary reaches the model prompt
+  {
+    let seenUser = "";
+    const coverageInput: QuestionInput = {
+      ...baseInput,
+      question: "How does authentication establish a session? (coverage-aware)",
+      coverage: {
+        verified: ["controllers", "frontend"],
+        partial: ["routes"],
+        unknown: ["models"],
+        unknownNote: "\"unknown\" means the retrieved evidence does not establish the category; it is never proof that a feature does not exist.",
+      },
+    };
+
+    const answer = await answerQuestion(coverageInput, {
+      cache: mockCache,
+      complete: async (_model, _system, user) => {
+        seenUser = user;
+        return "Verified controllers are in `lib/auth/session.ts#L10-L40`.";
+      },
+    });
+
+    if (
+      answer.citations.length === 1 &&
+      seenUser.includes("Evidence coverage of the final retrieved package") &&
+      seenUser.includes("Verified layers (source text establishes them): controllers, frontend") &&
+      seenUser.includes("Partial layers") &&
+      seenUser.includes("Unknown layers (no affiliated evidence was retrieved; NOT proof the feature is absent): models") &&
+      seenUser.includes("never proof that a feature does not exist")
+    ) {
+      pass("coverage summary is passed into answer synthesis for verified/partial/unknown layers");
+    } else {
+      fail(`coverage synthesis failed: seenUser=${JSON.stringify(seenUser)} answer=${JSON.stringify(answer)}`);
+    }
+  }
+
+  // Test 10: without coverage, no coverage section is added (backward compatible)
+  {
+    let seenUser = "";
+    const noCovInput: QuestionInput = {
+      ...baseInput,
+      question: "How does authentication establish a session? (no coverage)",
+    };
+    await answerQuestion(noCovInput, {
+      cache: mockCache,
+      complete: async (_model, _system, user) => {
+        seenUser = user;
+        return "Answer in `lib/auth/session.ts#L10-L40`.";
+      },
+    });
+    if (!seenUser.includes("Evidence coverage of the final retrieved package")) {
+      pass("answer synthesis stays backward compatible without coverage input");
+    } else {
+      fail("coverage section leaked into a no-coverage request");
+    }
+  }
+
 }
 
 run()

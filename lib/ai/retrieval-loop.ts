@@ -25,6 +25,7 @@
 import {
   CATEGORY_AFFILIATION,
   evaluateCoverage,
+  evaluateCoverageAdaptive,
   type CoverageEvaluation,
 } from "./coverage.ts";
 import {

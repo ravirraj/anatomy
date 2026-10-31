@@ -154,6 +154,16 @@ export function QAPanel({ analysisId, onReveal, isPath }: Props) {
             </div>
           )}
 
+          {(result.retrieval.coverage.partial > 0 || result.retrieval.coverage.unknown > 0 || result.retrieval.passes > 0) && (
+            <div className="rounded-[3px] border border-line bg-raised/40 px-2.5 py-1.5 text-[10px] text-fg-muted">
+              Evidence coverage: {result.retrieval.coverage.found} verified
+              {result.retrieval.coverage.partial > 0 ? `, ${result.retrieval.coverage.partial} partial` : ""}
+              {result.retrieval.coverage.unknown > 0 ? `, ${result.retrieval.coverage.unknown} unknown (not proof of absence)` : ""}
+              {result.retrieval.passes > 0 ? ` · ${result.retrieval.passes} targeted ${result.retrieval.passes === 1 ? "pass" : "passes"}` : ""}
+              {result.retrieval.stoppedBecause !== "sufficient-coverage" ? ` · stopped: ${result.retrieval.stoppedBecause}` : ""}
+            </div>
+          )}
+
           <ExplanationText
             text={result.body}
             isPath={checkIsPath}
