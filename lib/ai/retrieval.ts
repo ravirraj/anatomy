@@ -12,8 +12,8 @@ export type RetrievalBudget = {
 };
 
 export const DEFAULT_BUDGET: Required<RetrievalBudget> = {
-  maxCharacters: 18000,
-  maxFiles: 6,
+  maxCharacters: 24000,
+  maxFiles: 8,
   maxWindowsPerFile: 2,
   seedLimit: 5,
 };
@@ -81,6 +81,124 @@ const ONBOARDING_PATTERNS = [
 export function isOnboardingQuery(query: string): boolean {
   return ONBOARDING_PATTERNS.some((p) => p.test(query));
 }
+
+// --- Concept-aware query expansion ---------------------------------------
+// A question names a *concept* ("authentication", "errors", "the database");
+// the code names *implementations* ("AuthService", "verifyJWT", "connectDB").
+// Retrieval closes that gap with three general mechanisms, in this order of
+// strength: light suffix stemming, bidirectional subtoken matching against
+// symbol names and path segments, and one small glossary of generic
+// engineering vocabulary (abbreviations and concept clusters). None of it is
+// question-specific: the same table serves "how are errors handled?" as
+// "how does authentication work?".
+
+// Longest-first so "authentication" strips "ication", not "ation".
+const STEM_SUFFIXES = [
+  "ication", "ization", "isation", "ation", "ition", "tion", "sion",
+  "ities", "ility", "ing", "ies", "ied", "ed", "es", "s",
+];
+
+// Glossary values are alternative names for the same concept, read
+// symmetrically at lookup time. Kept deliberately small and generic —
+// it is vocabulary the *concept space* provides, not repository knowledge.
+const GLOSSARY: Record<string, string[]> = {
+  auth: ["authentication", "authorization", "login", "register", "session", "token", "signup", "oauth", "permission", "password"],
+  authentication: ["auth", "authorization", "login", "register", "session", "token", "jwt", "oauth"],
+  authorization: ["auth", "permission", "role"],
+  login: ["auth", "signin", "session"],
+  signin: ["login", "auth"],
+  signup: ["auth", "register"],
+  register: ["auth", "signup"],
+  error: ["exception", "failure", "throw", "catch"],
+  errors: ["error", "exception", "failure", "throw", "catch"],
+  exception: ["error", "throw", "catch"],
+  handling: ["handler", "catch", "middleware"],
+  upload: ["multipart", "attachment", "formdata", "storage"],
+  uploads: ["upload", "multipart"],
+  database: ["db", "connection", "migration"],
+  db: ["database"],
+  model: ["schema", "entity", "table"],
+  schema: ["model", "migration"],
+  config: ["configuration", "environment", "env"],
+  configuration: ["config", "env"],
+  cors: ["origin", "policy"],
+  client: ["frontend", "browser", "ui"],
+  frontend: ["client", "ui"],
+  backend: ["server", "api"],
+  server: ["backend", "api"],
+  token: ["jwt", "session"],
+  jwt: ["token", "auth"],
+  cookie: ["session", "token"],
+  cookies: ["cookie", "session"],
+  redis: ["cache", "store"],
+  cache: ["redis", "store"],
+  queue: ["job", "worker", "background"],
+  webhooks: ["webhook", "event"],
+};
+
+const ROLE_HINTS: { words: string[]; role: string }[] = [
+  { words: ["model", "schema", "database", "db", "query"], role: "model" },
+  { words: ["route", "router", "endpoint", "api"], role: "router" },
+  { words: ["middleware"], role: "middleware" },
+  { words: ["controller", "handler"], role: "controller" },
+  { words: ["service"], role: "service" },
+  { words: ["config", "configuration", "env"], role: "config" },
+  { words: ["store", "state"], role: "store" },
+];
+
+/**
+ * Splits an identifier into case/separator subtokens:
+ * "verifyJWT" -> ["verify","jwt"], "AuthService" -> ["auth","service"],
+ * "error_handler" -> ["error","handler"].
+ */
+export function identifierSubtokens(name: string): string[] {
+  const spaced = name
+    .replace(/[^A-Za-z0-9]+/g, " ")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .toLowerCase();
+  return spaced.split(/\s+/).filter((p) => p.length > 0);
+}
+
+const stemOf = (word: string): string | undefined => {
+  for (const suffix of STEM_SUFFIXES) {
+    if (word.endsWith(suffix) && word.length - suffix.length >= 4) {
+      return word.slice(0, -suffix.length);
+    }
+  }
+  return undefined;
+};
+
+export type TokenVariant = { text: string; kind: "original" | "stem" | "glossary" };
+
+/**
+ * Expands one query token into its concept variants: the token itself first
+ * (exact matches score highest), then its stem, then glossary synonyms.
+ * Each variant carries its kind so matches can be penalised by how far the
+ * variant had to travel from the user's own wording.
+ */
+export function tokenVariants(token: string): TokenVariant[] {
+  const out: TokenVariant[] = [{ text: token, kind: "original" }];
+  const seen = new Set([token]);
+  const stem = stemOf(token);
+  if (stem !== undefined && !seen.has(stem)) {
+    out.push({ text: stem, kind: "stem" });
+    seen.add(stem);
+  }
+  for (const syn of GLOSSARY[token] ?? []) {
+    if (!seen.has(syn)) {
+      out.push({ text: syn, kind: "glossary" });
+      seen.add(syn);
+    }
+  }
+  return out;
+}
+
+const KIND_PENALTY: Record<TokenVariant["kind"], number> = {
+  original: 0,
+  stem: 6,
+  glossary: 14,
+};
 
 const ENTRY_POINT_PATTERNS = [
   /(?:^|\/)(?:index|main|app|entry|cli|root|server)\.(?:tsx?|jsx?|mjs|cjs)$/i,
@@ -222,7 +340,9 @@ export async function retrieveGroundedContext(
   // Stage 2: Discover candidate seeds from symbols, routes, and files
   const seedWindows: TargetWindow[] = [];
 
-  // A. Search symbols
+  // A. Search symbols, matched against both the full identifier and its
+  // subtokens ("AuthService" -> ["auth","service"]) for every concept
+  // variant the query token expands to.
   const { data: symbolsData, error: symbolsError } = await db
     .from("symbols")
     .select("file_id, name, kind, line, exported")
@@ -233,20 +353,37 @@ export async function retrieveGroundedContext(
       const file = fileMap.get(sym.file_id);
       if (!file) continue;
 
-      const symNameLower = sym.name.toLowerCase();
+      const nameLower = sym.name.toLowerCase();
+      const subtokens = identifierSubtokens(sym.name);
       let bestScore = 0;
       let matchedToken = "";
 
       for (const token of tokens) {
-        if (symNameLower === token) {
-          bestScore = Math.max(bestScore, 100);
-          matchedToken = token;
-        } else if (symNameLower.startsWith(token)) {
-          bestScore = Math.max(bestScore, 70);
-          matchedToken = token;
-        } else if (token.length >= 3 && symNameLower.includes(token)) {
-          bestScore = Math.max(bestScore, 40);
-          matchedToken = token;
+        for (const { text: variant, kind } of tokenVariants(token)) {
+          const penalty = KIND_PENALTY[kind];
+          let score = 0;
+          if (nameLower === variant) {
+            score = 100;
+          } else if (subtokens.includes(variant)) {
+            score = 95;
+          } else {
+            // Bidirectional prefixes: "authentication" starts with "auth",
+            // "handl" (from "handled") starts with "handle" — keep signal on
+            // both sides, requiring a minimum stem length to stay honest.
+            const fullName = Math.min(nameLower.length, variant.length) >= 4
+              && (nameLower.startsWith(variant) || variant.startsWith(nameLower));
+            const sub = subtokens.some(
+              (st) => Math.min(st.length, variant.length) >= 4
+                && (st.startsWith(variant) || variant.startsWith(st)),
+            );
+            if (fullName) score = 75;
+            else if (sub) score = 55;
+            else if (variant.length >= 5 && nameLower.includes(variant)) score = 40;
+          }
+          if (score - penalty > bestScore) {
+            bestScore = score - penalty;
+            matchedToken = token;
+          }
         }
       }
 
@@ -281,19 +418,20 @@ export async function retrieveGroundedContext(
 
       const routeLower = route.path.toLowerCase();
       const methodLower = route.method.toLowerCase();
+      const segments = routeLower.split(/[^a-z0-9]+/).filter(Boolean);
       let bestScore = 0;
       let matchedToken = "";
 
       for (const token of tokens) {
-        if (routeLower === token || routeLower === `/${token}`) {
-          bestScore = Math.max(bestScore, 90);
-          matchedToken = token;
-        } else if (token.length >= 3 && routeLower.includes(token)) {
-          bestScore = Math.max(bestScore, 65);
-          matchedToken = token;
-        } else if (methodLower === token) {
-          bestScore = Math.max(bestScore, 50);
-          matchedToken = token;
+        for (const { text: variant, kind } of tokenVariants(token)) {
+          const penalty = KIND_PENALTY[kind];
+          if (segments.some((s) => s === variant)) {
+            if (100 - penalty > bestScore) { bestScore = 100 - penalty; matchedToken = token; }
+          } else if (variant.length >= 3 && routeLower.includes(variant)) {
+            if (65 - penalty > bestScore) { bestScore = 65 - penalty; matchedToken = token; }
+          } else if (methodLower === variant) {
+            if (50 - penalty > bestScore) { bestScore = 50 - penalty; matchedToken = token; }
+          }
         }
       }
 
@@ -314,20 +452,36 @@ export async function retrieveGroundedContext(
     }
   }
 
-  // C. Search file paths
+  // C. Search file paths: matched against the filename (strongest), then any
+  // path segment, using the same concept variants and identifier subtokens,
+  // so "authentication" finds src/middlewares/auth.middleware.js and
+  // "database" finds src/database/connectDB.js without substring noise.
   for (const file of fileMap.values()) {
     const pathLower = file.path.toLowerCase();
     const filename = pathLower.split("/").pop() ?? pathLower;
+    const nameParts = [
+      ...identifierSubtokens(filename),
+      ...pathLower.split("/").flatMap((seg) => identifierSubtokens(seg)),
+    ];
+    const filenameParts = new Set(identifierSubtokens(filename));
     let bestScore = 0;
     let matchedToken = "";
 
     for (const token of tokens) {
-      if (filename === token || filename.startsWith(`${token}.`)) {
-        bestScore = Math.max(bestScore, 80);
-        matchedToken = token;
-      } else if (pathLower.includes(token)) {
-        bestScore = Math.max(bestScore, 45);
-        matchedToken = token;
+      for (const { text: variant, kind } of tokenVariants(token)) {
+        const penalty = KIND_PENALTY[kind];
+        let score = 0;
+        if (filenameParts.has(variant)) {
+          score = 80;
+        } else if (nameParts.includes(variant)) {
+          score = 70;
+        } else if (variant.length >= 5 && pathLower.includes(variant)) {
+          score = 45;
+        }
+        if (score - penalty > bestScore) {
+          bestScore = score - penalty;
+          matchedToken = token;
+        }
       }
     }
 
@@ -347,7 +501,37 @@ export async function retrieveGroundedContext(
     }
   }
 
-  // D. For broad repository or onboarding queries, prioritize foundational entry points and hubs
+  // C2. Role-aware seeding: the pipe already labels files by architectural
+  // role (model, router, middleware, controller, service, ...); a question
+  // that names an architecture concept should find those files even when no
+  // path or symbol name echoes the wording. Ranks below name matches so it
+  // only carries files into the budget that belong to the named concept.
+  for (const hint of ROLE_HINTS) {
+    const tokensForRole = tokens.filter(
+      (token) => tokenVariants(token).some((v) => hint.words.includes(v.text)),
+    );
+    if (tokensForRole.length === 0) continue;
+
+    for (const file of fileMap.values()) {
+      if (file.role !== hint.role) continue;
+      const endLine = Math.min(file.lines, 50);
+      seedWindows.push({
+        fileId: file.id,
+        path: file.path,
+        contentHash: file.hash,
+        totalLines: file.lines,
+        startLine: 1,
+        endLine,
+        score: 55,
+        reason: `file holds the "${hint.role}" role, which the question's topic names`,
+      });
+    }
+  }
+
+  // D. For broad repository or onboarding queries, prioritize foundational
+  // entry points and hubs. These are *generic* seeds — a question's concept
+  // evidence always outranks them, so an unrelated bootstrap file can never
+  // displace real matches (and only fire when concept seeding found little).
   const broadQuery = isOnboardingQuery(rawQuery);
   if (broadQuery || seedWindows.length < 2) {
     type FileRecord = { id: string; path: string; hash: string; lines: number; role: string | null };
@@ -358,13 +542,13 @@ export async function retrieveGroundedContext(
 
       const isEntry = ENTRY_POINT_PATTERNS.some((p) => p.test(file.path));
       if (isEntry) {
-        score = 85;
+        score = 30;
         reason = "primary application entry point / core module";
       } else if (file.role === "route" || file.role === "entry") {
-        score = 80;
+        score = 28;
         reason = `core role "${file.role}"`;
       } else if (file.path.split("/").length <= 2) {
-        score = 65;
+        score = 24;
         reason = "shallow repository structure file";
       }
 
@@ -467,7 +651,56 @@ export async function retrieveGroundedContext(
   // Sort merged windows by score descending
   mergedWindows.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
 
-  // Stage 5: Retrieve actual source text and enforce budget
+  // Stage 5: Retrieve actual source text and enforce budget.
+  // Breadth first: every file gets its best window served before any file
+  // claims a second one, so one dense file cannot eat the character budget —
+  // a spread of related files grounds answers better than one deep file.
+  const order = [...mergedWindows].sort(
+    (a, b) => b.score - a.score || a.path.localeCompare(b.path),
+  );
+  const rounds: TargetWindow[][] = [];
+  const grouped = new Map<string, { windows: TargetWindow[]; best: TargetWindow }>();
+  for (const win of order) {
+    const entry = grouped.get(win.fileId);
+    if (!entry) {
+      grouped.set(win.fileId, { windows: [win], best: win });
+      rounds.push([win]);
+    } else {
+      entry.windows.push(win);
+    }
+  }
+  // Round 1: one window per file in best-score order.
+  const orderedForBudget: TargetWindow[] = grouped
+    ? rounds
+        .map((group) => group[0]!)
+        .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
+    : [];
+  // Remaining rounds: extra windows per file, interleaved by score so the
+  // strongest leftovers land before weaker extras.
+  {
+    const leftovers = order.filter((w) => w !== (grouped.get(w.fileId)?.best ?? w));
+    const perFile = new Map<string, TargetWindow[]>();
+    for (const w of leftovers) {
+      const list = perFile.get(w.fileId) ?? [];
+      list.push(w);
+      perFile.set(w.fileId, list);
+    }
+    const queues = [...perFile.values()].map((ws) =>
+      ws.sort((a, b) => b.score - a.score || a.startLine - b.startLine),
+    );
+    let rest = true;
+    while (rest) {
+      rest = false;
+      for (const q of queues) {
+        const next = q.shift();
+        if (next !== undefined) {
+          orderedForBudget.push(next);
+          rest = true;
+        }
+      }
+    }
+  }
+
   const retrievedWindows: RetrievedWindow[] = [];
   const includedFilesMap = new Map<
     string,
@@ -476,13 +709,11 @@ export async function retrieveGroundedContext(
   const fileWindowCounts = new Map<string, number>();
   let currentCharacters = 0;
 
-  for (const win of mergedWindows) {
+  for (const win of orderedForBudget) {
     if (currentCharacters >= config.maxCharacters) break;
 
-    const fileCount = includedFilesMap.has(win.fileId)
-      ? includedFilesMap.size
-      : includedFilesMap.size + 1;
-    if (fileCount > config.maxFiles && !includedFilesMap.has(win.fileId)) {
+    const isNewFile = !includedFilesMap.has(win.fileId);
+    if (isNewFile && includedFilesMap.size >= config.maxFiles) {
       continue;
     }
 

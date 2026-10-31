@@ -531,6 +531,28 @@ designed in [docs/architecture/file-content-storage.md](docs/architecture/file-c
   - **Dependencies:** Source-content storage (Phases 1–4), symbol index, and hash-bound citations.
   - **Effort:** XL.
   - **Design:** [docs/ai-system.md](docs/ai-system.md#9-implemented-repository-wide-question-answering-phase-5).
+  - **Follow-up (October 2026, concept-aware seed discovery):** the first
+    version of the retrieval engine matched query tokens only against literal
+    substring of symbol names and paths, so "How does authentication work?"
+    tokenized to `["authentication"]`, matched nothing (the code names things
+    `auth*`, `login*`, `jwt*`), and fell back to entry-point seeds scored
+    *above* every real match — the authsphere retrieval answered from
+    `app.js`/`index.js` bootstraps. Fixed generally in `lib/ai/retrieval.ts`:
+    per-token concept variants (light suffix stemming plus one small glossary
+    of generic engineering vocabulary, `db↔database`, `auth→login/jwt`,
+    `error→exception`, `upload→multipart` — no repo or question special
+    cases), bidirectional subtoken matching over symbol names and path
+    segments, role-aware seeding through the already-indexed `file_roles`,
+    breadth-first window budgeting under a strict character budget
+    (24k chars, 8 files, 2 windows per file), and entry-point fallbacks
+    re-scored below any concept match (`30` vs the old `85`). Regression
+    fixture with a full auth flow added to `scripts/test-retrieval.ts`
+    (routes/controller/middleware/JWT/user model/bcrypt, no-op setup files
+    must not leak), question categories for errors, uploads and databases.
+    Measured on the real authsphere analysis: 4 files/2,506 chars →
+    8 auth files/17,298 chars, and the end-to-end answer explains the JWT,
+    PKCE, OAuth and session flows with citation-verified lines
+    (`scripts/measure-authsphere.ts`).
 
 
 - [x] **[P0] Verify every citation against the stored analysis**

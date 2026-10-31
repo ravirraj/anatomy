@@ -337,6 +337,24 @@ produced, not that it was any good.
 
 **Implemented and verified in Phase 5.** Cross-file questions are answered deterministically using AST symbol discovery, route seeds, graph expansion, and hash-bound citation verification.
 
+**Concept-aware seed discovery (October 2026).** The first retrieval pass
+matched query tokens against literal substrings of symbol names and paths.
+Concept questions failed: *"How does authentication work?"* tokenized to
+`["authentication"]`, and repositories name that code `auth*`, `login*`,
+`jwt*` — nothing matched, and the entry-point fallback answered from
+bootstrap files at scores above every real match. Seed discovery now expands
+each query token into concept variants (light suffix stemming plus one small
+generic engineering glossary — `db↔database`, `auth→login/jwt`, `error→exception`,
+`upload→multipart` — vocabulary, not repository or question knowledge),
+matches bidirectionally against identifier subtokens (`verifyJWT` →
+`verify`+`jwt`) and path segments, seeds through the files' indexed
+architectural roles, and budgets windows breadth-first under a strict
+character budget so the strongest window of every related file lands before
+any file claims a second. Fallback entry seeds are re-scored below all
+concept evidence. A full auth-flow fixture with errors/uploads/database
+question categories lives in `scripts/test-retrieval.ts`; the measured
+authsphere case is recorded in [TODO.md](../TODO.md).
+
 ### 9.1 The question it answers
 
 > *How does authentication work in this repository?*
@@ -411,9 +429,10 @@ correct answer when the repository does not contain the answer.
 | Symbol extraction | AST extraction of symbols, routes, and declarations | Implemented (`lib/parser/symbols.ts`) |
 | Seed discovery & graph expansion | Multi-index ranking and 1-hop reach expansion | Implemented (`lib/ai/retrieval.ts`) |
 | Hash-bound citation verifier | Verifies paths, line ranges, and SHA-256 content hashes | Implemented (`lib/ai/citations.ts`) |
-| Traversal depth & token budget | Bounded 30k char context window assembly | Implemented (`lib/ai/retrieval.ts`) |
+| Traversal depth & token budget | Bounded 24k char, 8-file context assembly, breadth-first windows | Implemented (`lib/ai/retrieval.ts`) |
 | Workspace Q&A pane | Interactive question UI and map node highlight | Implemented (`components/qa-panel.tsx`) |
 | Live integration test suite | Evaluates retrieval and citation validity | Implemented (`scripts/test-qa-integration.ts`) |
+| Live retrieval measurement | End-to-end grounded answer for one real analysis | Implemented (`scripts/measure-authsphere.ts`) |
 
 ### 9.5 What it must not become
 

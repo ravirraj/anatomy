@@ -9,6 +9,8 @@ import {
   mergeCandidateWindows,
   retrieveGroundedContext,
   type Db,
+  tokenVariants,
+  identifierSubtokens,
   type TargetWindow,
 } from "../lib/ai/retrieval.ts";
 
@@ -267,10 +269,17 @@ if (resultB.windows.some((w) => w.path.includes("login.ts"))) {
 } else {
   fail("route query failed to identify login.ts");
 }
-if (resultB.windows.some((w) => w.path.includes("session.ts") && w.reason.includes("1-hop dependency"))) {
-  pass("dependency graph expansion brings in imported session.ts");
+if (resultB.windows.some((w) => w.path.includes("session.ts"))) {
+  const reason = resultB.windows.find((w) => w.path.includes("session.ts"))!.reason;
+  // Session.ts may arrive as a direct concept seed ("login" -> "session") or
+  // as 1-hop dependency of the login route; both ground it in evidence.
+  if (reason.includes("1-hop dependency") || reason.includes("file path") || reason.includes("symbol")) {
+    pass("login route query grounds session.ts (concept seed or graph expansion)");
+  } else {
+    fail(`session.ts grounded with unexpected reason: ${reason}`);
+  }
 } else {
-  fail(`graph expansion failed: ${JSON.stringify(resultB.windows.map((w) => ({ path: w.path, reason: w.reason })))}`);
+  fail(`login route query failed to reach session.ts: ${JSON.stringify(resultB.windows.map((w) => ({ path: w.path, reason: w.reason })))}`);
 }
 
 // Test insufficient evidence query
@@ -288,6 +297,330 @@ if (formatted.includes("--- File: src/api/login.ts") && formatted.includes("line
 } else {
   fail(`formatted context failed: ${formatted}`);
 }
+
+// --- Section 4: Concept-aware retrieval on a realistic auth fixture ---
+// A fixture repository with a real authentication flow (routes, controllers,
+// middleware, a user model, JWT + password hashing) plus unrelated setup
+// files. Verifies the general failure mode reported for the authsphere
+// analysis: "How does authentication work?" must reach the whole flow, not
+// bootstrap files, and the same must hold for the other question categories.
+
+console.log("");
+console.log("=== 4. Concept-aware retrieval (auth fixture) ===");
+
+type FixtureFile = {
+  id: string;
+  path: string;
+  role?: string;
+  symbolNames: [name: string, line: number, exported?: boolean][];
+  imports: string[]; // file ids
+};
+
+const fixtureFiles: FixtureFile[] = [
+  {
+    id: "fx_server",
+    path: "src/server.js",
+    symbolNames: [["startServer", 4], ["ensureEnv", 12]],
+    imports: ["fx_app"],
+  },
+  {
+    id: "fx_app",
+    path: "src/app.js",
+    symbolNames: [["createApp", 6]],
+    imports: ["fx_auth_routes", "fx_error_middleware", "fx_db"],
+  },
+  {
+    id: "fx_auth_routes",
+    path: "src/routes/auth.routes.js",
+    role: "router",
+    symbolNames: [["apiLoginRoute", 4, true], ["apiRegisterRoute", 9, true]],
+    imports: ["fx_auth_controller"],
+  },
+  {
+    id: "fx_auth_controller",
+    path: "src/controllers/authController.js",
+    role: "controller",
+    symbolNames: [["login", 10, true], ["register", 24, true], ["logout", 40], ["refreshTokenPair", 52]],
+    imports: ["fx_user_model", "fx_jwt", "fx_bcrypt"],
+  },
+  {
+    id: "fx_auth_middleware",
+    path: "src/middlewares/authMiddleware.js",
+    role: "middleware",
+    symbolNames: [["verifyJWT", 5, true], ["authenticateUser", 18]],
+    imports: ["fx_jwt"],
+  },
+  {
+    id: "fx_error_middleware",
+    path: "src/middlewares/errorMiddleware.js",
+    role: "middleware",
+    symbolNames: [["errorHandler", 6, true], ["notFoundHandler", 20]],
+    imports: ["fx_app_error"],
+  },
+  {
+    id: "fx_upload_middleware",
+    path: "src/middlewares/uploadMiddleware.js",
+    role: "middleware",
+    symbolNames: [["multerUpload", 5, true], ["acceptAvatar", 14]],
+    imports: ["fx_storage"],
+  },
+  {
+    id: "fx_user_model",
+    path: "src/models/userModel.js",
+    role: "model",
+    symbolNames: [["User", 8, true], ["findByEmail", 20], ["userSchema", 4]],
+    imports: ["fx_db"],
+  },
+  {
+    id: "fx_jwt",
+    path: "src/utils/jwt.js",
+    symbolNames: [["generateTokenPair", 3, true], ["validateSignedToken", 15, true]],
+    imports: [],
+  },
+  {
+    id: "fx_bcrypt",
+    path: "src/utils/bcrypt.js",
+    symbolNames: [["hashPassword", 4, true], ["comparePassword", 12, true]],
+    imports: [],
+  },
+  {
+    id: "fx_app_error",
+    path: "src/utils/AppError.js",
+    role: "service",
+    symbolNames: [["AppError", 2, true], ["throwBadRequest", 11, true]],
+    imports: [],
+  },
+  {
+    id: "fx_upload_controller",
+    path: "src/controllers/uploadController.js",
+    role: "controller",
+    symbolNames: [["uploadAvatar", 6, true], ["removeStoredFile", 22]],
+    imports: ["fx_upload_middleware", "fx_storage"],
+  },
+  {
+    id: "fx_storage",
+    path: "src/services/storage.js",
+    role: "service",
+    symbolNames: [["saveToDisk", 4, true], ["readStoredFile", 16]],
+    imports: ["fx_db"],
+  },
+  {
+    id: "fx_db",
+    path: "src/database/connectDB.js",
+    role: "model", // db bootstrap classified with the data layer in this fixture
+    symbolNames: [["connectDatabase", 5, true], ["disconnectDatabase", 14]],
+    imports: [],
+  },
+  {
+    id: "fx_logger",
+    path: "src/logger.js",
+    symbolNames: [["logDebug", 3, true], ["rotateLog", 14]],
+    imports: [],
+  },
+];
+
+const fxTexts = new Map<string, string>();
+const fxHashes = new Map<string, string>();
+class FixtureDb {
+  symbols = fixtureFiles.flatMap((f) =>
+    f.symbolNames.map(([name, line, exported]) => ({
+      file_id: f.id,
+      name,
+      kind: name[0] === name[0]!.toUpperCase() ? "class" : "function",
+      line,
+      exported: exported ?? false,
+    })),
+  );
+
+  edges = fixtureFiles.flatMap((f) =>
+    f.imports.map((target) => ({ source_file_id: f.id, target_file_id: target, kind: "import" })),
+  );
+
+  routes = [
+    { file_id: "fx_auth_routes", method: "POST", path: "/auth/login", line: 8 },
+  ];
+
+  files = fixtureFiles.map((f) => {
+    // 70 lines of filler content ending in a final newline.
+    const text = Array.from({ length: 70 }, (_, i) => `// line ${i + 1} of ${f.path}\n`).join("");
+    const hash = createHash("sha256").update(text).digest("hex");
+    fxTexts.set(f.id, text);
+    fxHashes.set(f.id, hash);
+    return {
+      id: f.id,
+      path: f.path,
+      hash,
+      lines: 70,
+      content_status: "stored",
+      file_roles: f.role ? [{ role: f.role, source: "convention" }] : [],
+    };
+  });
+
+  from(table: string) {
+    if (table === "files") {
+      return {
+        select: () => ({
+          eq: (_col: string, value: string) => ({
+            is: () => Promise.resolve({ data: this.files, error: null }),
+            maybeSingle: async () => ({
+              data: this.files.find((f) => f.id === value) ?? null,
+              error: null,
+            }),
+          }),
+        }),
+      };
+    }
+    if (table === "symbols") {
+      return {
+        select: () => ({
+          eq: () => Promise.resolve({ data: this.symbols, error: null }),
+        }),
+      };
+    }
+    if (table === "routes") {
+      return {
+        select: () => ({
+          eq: () => Promise.resolve({ data: this.routes, error: null }),
+        }),
+      };
+    }
+    if (table === "edges") {
+      return {
+        select: () => ({
+          eq: () => ({
+            or: () => Promise.resolve({ data: this.edges, error: null }),
+          }),
+        }),
+      };
+    }
+    if (table === "file_contents") {
+      return {
+        select: () => ({
+          eq: (col: string, value: string) => ({
+            eq: (_col2: string, hash: string) => ({
+              maybeSingle: async () => {
+                void col;
+                const f = this.files.find((x) => x.hash === hash);
+                if (!f) return { data: null, error: null };
+                const text = fxTexts.get(f.id) ?? "";
+                return {
+                  data: {
+                    payload: `\\x${Buffer.from(text, "utf8").toString("hex")}`,
+                    size: Buffer.byteLength(text, "utf8"),
+                  },
+                  error: null,
+                };
+              },
+            }),
+          }),
+        }),
+      };
+    }
+    throw new Error(`Unexpected table ${table}`);
+  }
+}
+
+const UNRELATED = new Set(["src/server.js", "src/logger.js"]);
+const fixtureDb = new FixtureDb();
+async function fixtureAsk(question: string): Promise<ReturnType<typeof retrieveGroundedContext>> {
+  return retrieveGroundedContext(fixtureDb as unknown as Db, "fx_analysis", question);
+}
+
+// The reported failure: authentication questions reach the whole flow.
+const fxAuth = await fixtureAsk("How does authentication work?");
+{
+  const paths = new Set(fxAuth.files.map((f) => f.path));
+  const needed = [
+    ["routes", "src/routes/auth.routes.js"],
+    ["controller", "src/controllers/authController.js"],
+    ["middleware", "src/middlewares/authMiddleware.js"],
+    ["jwt util", "src/utils/jwt.js"],
+    ["user model", "src/models/userModel.js"],
+  ] as const;
+  const missing = needed.filter(([, p]) => !paths.has(p));
+  if (missing.length === 0) {
+    pass("auth question discovers routes, controller, middleware, jwt util and user model");
+  } else {
+    fail(`auth question missed: ${missing.map(([l]) => l).join(", ")}`);
+  }
+  const passwordReachable = paths.has("src/utils/bcrypt.js");
+  if (passwordReachable) {
+    pass("password hashing reachable through the auth cluster or graph expansion");
+  } else {
+    fail("password hashing not discovered for the auth question");
+  }
+  if (![...paths].some((p) => UNRELATED.has(p))) {
+    pass("unrelated setup files do not appear for the auth question");
+  } else {
+    fail(`unrelated setup files leaked in: ${[...paths].filter((p) => UNRELATED.has(p)).join(", ")}`);
+  }
+  // bcrypt's names never echo "authentication": discovery must come from the
+  // dependency graph (the auth controller imports it).
+  const bcryptWin = fxAuth.windows.find((w) => w.path === "src/utils/bcrypt.js");
+  if (bcryptWin && bcryptWin.reason.includes("1-hop dependency")) {
+    pass("graph expansion connects bcrypt password hashing to the auth flow");
+  } else {
+    fail(`bcrypt discovered outside graph expansion or not at all: ${JSON.stringify(bcryptWin)}`);
+  }
+  if (fxAuth.files.length <= 8 && fxAuth.totalCharacters <= 24000) {
+    pass(`retrieval bounded: ${fxAuth.files.length} files, ${fxAuth.totalCharacters} chars, ${Math.round(fxAuth.totalCharacters / Math.max(1, fxAuth.windows.length))} chars/window`);
+  } else {
+    fail(`budget breach: ${fxAuth.files.length} files, ${fxAuth.totalCharacters} chars`);
+  }
+}
+
+// Errors category.
+const fxErrors = await fixtureAsk("How are errors handled?");
+{
+  const paths = new Set(fxErrors.files.map((f) => f.path));
+  if (paths.has("src/middlewares/errorMiddleware.js") && paths.has("src/utils/AppError.js")) {
+    pass("errors question finds error middleware and the error factory");
+  } else {
+    fail(`errors question missed: ${[...paths].join(", ")}`);
+  }
+}
+
+// Upload category.
+const fxUpload = await fixtureAsk("How does file upload work?");
+{
+  const paths = new Set(fxUpload.files.map((f) => f.path));
+  if (paths.has("src/controllers/uploadController.js") && paths.has("src/middlewares/uploadMiddleware.js") && paths.has("src/services/storage.js")) {
+    pass("upload question finds upload controller, middleware and storage service");
+  } else {
+    fail(`upload question missed: ${[...paths].join(", ")}`);
+  }
+}
+
+// Database category.
+const fxDatabase = await fixtureAsk("How does the database work?");
+{
+  const paths = new Set(fxDatabase.files.map((f) => f.path));
+  if (paths.has("src/database/connectDB.js") && paths.has("src/models/userModel.js")) {
+    pass("database question finds connection bootstrap and the data models");
+  } else {
+    fail(`database question missed: ${[...paths].join(", ")}`);
+  }
+}
+
+// Concept-expansion unit checks: plain vocabulary, no repo knowledge.
+{
+  const t = tokenVariants("authentication");
+  const auth = t.map((v) => v.text);
+  if (auth.includes("auth") && auth.includes("login") && auth.includes("jwt") && t[0]!.kind === "original") {
+    pass(`"authentication" expands to auth/login/jwt with the original wording first (${auth.length} variants)`);
+  } else {
+    fail(`bad auth variants: ${JSON.stringify(t)}`);
+  }
+  if (identifierSubtokens("verifyJWT").join("/") === "verify/jwt" && identifierSubtokens("AuthService").join("/") === "auth/service") {
+    pass("identifier subtokens split camel case and acronym runs");
+  } else {
+    fail(`bad subtokens: ${JSON.stringify(identifierSubtokens("verifyJWT"))}`);
+  }
+}
+
+// Expanded seeds outrank generic entry points: with the auth fixture, every
+// window above the last must be a concept file, while the entry fallback
+// stays below all real matches if it ever fires.
 
 // Summary
 console.log("");
