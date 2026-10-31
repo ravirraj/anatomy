@@ -93,6 +93,7 @@ Grounding and Anti-Hallucination Rules:
    - NEVER cite directories (e.g. never cite \`src/components/\` as a code citation).
    - NEVER cite npm packages as repository file paths (e.g. do not format \`@testing-library/react\` as a code citation).
    - NEVER use placeholder or template paths in citations (e.g. never use \`<component>\` or \`*\`).
+   - NEVER cite HTTP or REST endpoint paths as file citations (e.g. \`/api/login\`, \`/sdk/register\` name routes, not files). Describe endpoints in plain text or bold; a code-cited path is always a real file with an extension plus \`#L\` line numbers, exactly as it appears in the snippets.
 5. Repository Onboarding & Architecture Questions:
    When answering broad repository or onboarding questions, structure your answer to cover:
    - Project Purpose & Tech Stack

@@ -65,6 +65,16 @@ export function hasLineNumbers(token: string): boolean {
   return LINE_SUFFIX.test(token.trim());
 }
 
+/**
+ * Recognizes HTTP endpoint paths (`/api/login`, `/sdk/register`) so they are
+ * not mistaken for repository file citations. These appear in answers because
+ * retrieved source contains route registrations, and describing endpoints is
+ * legitimate; describing a *file* always involves an extension or line range.
+ */
+export function isRouteStylePath(stripped: string): boolean {
+  return stripped.startsWith("/") && !hasFileExtension(stripped);
+}
+
 export const STANDARD_PROJECT_FILES = new Set([
   "package.json",
   "tsconfig.json",
@@ -106,6 +116,15 @@ export function isCitationCandidate(
   if (hasLineNumbers(raw)) return true;
 
   const stripped = stripLineSuffix(raw);
+
+  // An extensionless token that begins with "/" reads as an HTTP endpoint
+  // (`/api/login`, `/sdk/register`), not a repository file: stored paths are
+  // relative and never carry a leading slash, and a file citation in an answer
+  // always carries an extension or line numbers. Endpoint mentions in an
+  // answer are REST vocabulary from the retrieved source, not citations, so
+  // they never enter file verification. A token that pairs a route shape WITH
+  // line numbers is still verified (the branch above).
+  if (isRouteStylePath(stripped)) return false;
 
   // In code spans (`...`), require either a recognizable file extension or a path separator
   if (inCodeSpan) {

@@ -9,6 +9,7 @@ import {
   CitationError,
   parseCitation,
   extractCitations,
+  isRouteStylePath,
   type FileEvidence,
 } from "../lib/ai/citations.ts";
 import { explainFile } from "../lib/ai/tasks.ts";
@@ -374,6 +375,78 @@ Check \`lib/ai/tasks.ts#L10-L25\` for task execution.
     pass("exact onboarding failure text passes cleanly without false positives");
   } else {
     fail(`exact onboarding failure text still flagged: ${JSON.stringify(repro.paths)}`);
+  }
+}
+
+// --- Route/api endpoints are not file citations (live Q&A regression) ---
+console.log("");
+console.log("=== route paths are not file citations ===");
+
+{
+  // Regression: the verified Q&A answer for the authsphere analysis cited the
+  // SDK REST endpoints `/sdk/register` and `/sdk/authorize`, which live in the
+  // retrieved controller source but are not files. Endpoint mentions must not
+  // enter file verification; invented extension-bearing paths still must.
+  const evidenceMap = new Map<string, FileEvidence>([
+    ["backend/src/controllers/sdk.controller.js", { lines: 180, contentHash: "hash-sdk" }],
+  ]);
+  const allAnalysisFiles = new Set<string>(["backend/src/controllers/sdk.controller.js"]);
+
+  const ok = verifyCitations(
+    "Registering starts at the SDK endpoints `POST /sdk/register` and `/sdk/authorize`, handled in `backend/src/controllers/sdk.controller.js#L10-L40`.",
+    evidenceMap,
+    { allAnalysisFiles },
+  );
+  if (ok.paths.length === 0) {
+    pass("endpoint mentions in code spans pass verification");
+  } else {
+    fail(`endpoint mentions still flagged: ${JSON.stringify(ok.paths)}`);
+  }
+
+  // A route shape paired with line numbers is an explicit citation attempt and stays bound.
+  const ranged = verifyCitations(
+    "See `/sdk/register#L10-L20` and `backend/src/controllers/sdk.controller.js#L10-L20`.",
+    evidenceMap,
+    { allAnalysisFiles },
+  );
+  if (ranged.paths.length === 1 && ranged.paths[0] === "/sdk/register#L10-L20") {
+    pass("route token with line numbers is still verified");
+  } else {
+    fail(`route token with line numbers not verified: ${JSON.stringify(ranged.paths)}`);
+  }
+
+  // No broad disablement: an extensionless separator path without a leading
+  // slash is still a file-citation candidate and is caught when invented.
+  const phantom = verifyCitations("The logic lives in `backend/src/phantom`.", evidenceMap, { allAnalysisFiles });
+  if (phantom.paths.length === 1 && phantom.paths[0] === "backend/src/phantom") {
+    pass("invented extensionless separator path is still caught");
+  } else {
+    fail(`invented extensionless path not caught: ${JSON.stringify(phantom.paths)}`);
+  }
+
+  // Guards still bind for extension-bearing invented paths (see block 3
+  // above); here the extractor keeps endpoints out of candidate extraction.
+  const tokens = pathTokens("`/sdk/register` and `lib/ai/tasks.ts`");
+  if (tokens.length === 1 && tokens[0] === "lib/ai/tasks.ts") {
+    pass("pathTokens skips endpoint spans");
+  } else {
+    fail(`pathTokens endpoint filtering wrong: ${JSON.stringify(tokens)}`);
+  }
+
+  // Unit predicates.
+  const cases: [string, boolean][] = [
+    ["/api/login", true],
+    ["/sdk/authorize", true],
+    ["/api/v2/users/:id/edit", true],
+    ["/lib/auth.ts", false],
+    ["sdk/register", false],
+    ["lib/ai/tasks.ts", false],
+  ];
+  const wrong = cases.filter(([token, want]) => isRouteStylePath(token) !== want);
+  if (wrong.length === 0) {
+    pass("isRouteStylePath recognizes endpoints and not file paths");
+  } else {
+    fail(`isRouteStylePath wrong on: ${JSON.stringify(wrong)}`);
   }
 }
 

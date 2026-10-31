@@ -65,6 +65,45 @@ async function run() {
     }
   }
 
+  // Test 1b: REST endpoint mentions in the answer are not file citations.
+  // Live failure on the authsphere analysis: the grounded answer cited
+  // `/sdk/register` and `/sdk/authorize` — real endpoints from the retrieved
+  // controller source — and citation verification rejected them as unknown
+  // files. Endpoint mentions must pass; invented file paths must not.
+  {
+    let completeCalls = 0;
+    const endpointInput: QuestionInput = {
+      ...baseInput,
+      question: "Which endpoints does registration use?",
+    };
+
+    let threw: unknown;
+    let answer: Awaited<ReturnType<typeof answerQuestion>> | null = null;
+    try {
+      answer = await answerQuestion(endpointInput, {
+        cache: mockCache,
+        complete: async () => {
+          completeCalls++;
+          return "Registration is served by the `POST /sdk/register` and `/sdk/authorize` endpoints, whose handlers live in `lib/auth/session.ts#L10-L40` and `lib/db/client.ts#L15-L30`.";
+        },
+      });
+    } catch (err) {
+      threw = err;
+    }
+
+    if (
+      !threw &&
+      answer &&
+      completeCalls === 1 &&
+      answer.citations.length === 2 &&
+      answer.citations.every((c) => c.path === "lib/auth/session.ts" || c.path === "lib/db/client.ts")
+    ) {
+      pass("endpoint mentions pass Q&A citation verification with real citations intact");
+    } else {
+      fail(`endpoint mention handling wrong: threw=${String(threw)} answer=${JSON.stringify(answer)}`);
+    }
+  }
+
   // Test 2: Cache hit returns cached answer with citations verified
   {
     let completeCalls = 0;
