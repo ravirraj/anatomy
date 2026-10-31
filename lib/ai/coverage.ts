@@ -1,0 +1,226 @@
+/**
+ * Deterministic coverage evaluation (Phase 5 of the coverage-driven Q&A
+ * plan). Consumes a QuestionPlan (lib/ai/planner.ts) and the final
+ * retrieved evidence package (lib/ai/retrieval.ts) and judges, for every
+ * expected evidence category, how firmly the retrieved source grounds it.
+ *
+ * The rules this module obeys:
+ *  - found means actual source evidence: a retrieved window's *text* (the
+ *    hash-verified content read by the pipeline) contains one of the
+ *    concept's vocabulary variants. A matching file or directory name
+ *    alone can never produce found.
+ *  - partial means relevant material exists (a category-affiliated file
+ *    was retrieved, symbol names echo the concept, or relationship
+ *    evidence connects such files) but the behaviour is not fully
+ *    established by the retrieved text.
+ *  - unknown means the retrieved evidence does not establish the
+ *    category. Unknown is epistemic: it is never proof that a feature
+ *    does not exist (UNKNOWN_NOTE carries this semantics).
+ *  - Every evaluation is explainable: each category reports which files,
+ *    lines, provenance and signal supported its status.
+ *  - Everything here is pure deterministic code — no LLM involved.
+ */
+
+import type { QuestionPlan } from "./planner.ts";
+import type { RetrievalResult, RetrievedWindow } from "./retrieval.ts";
+
+export type CoverageStatus = "found" | "partial" | "unknown";
+
+/**
+ * Signal strength for one piece of evidence, strongest first:
+ *  - source-text: a concept variant occurs in the window's verified text
+ *  - symbol-name: the window's reason records a symbol whose *name* echoes
+ *    the concept (parser-aggregated by the ingestion, not a filename)
+ *  - relationship-indexed / relationship-derived: the window arrived
+ *    through graph expansion or derivation, carrying category affiliation
+ *    but no concept-level textual hit in the retrieved slice
+ *  - filename-or-role: only the file's path or labelled role aligns
+ */
+export type EvidenceSignal =
+  | "source-text"
+  | "symbol-name"
+  | "relationship-indexed"
+  | "relationship-derived"
+  | "filename-or-role";
+
+export type EvidenceProvenance = "direct" | "indexed" | "derived";
+
+export type CoverageEvidence = {
+  path: string;
+  startLine: number;
+  endLine: number;
+  provenance: EvidenceProvenance;
+  signal: EvidenceSignal;
+  matchedVariant?: string;
+};
+
+export type CategoryCoverage = {
+  category: string;
+  status: CoverageStatus;
+  /** Explainability: which files and signals produce this status. */
+  reason: string;
+  evidence: CoverageEvidence[];
+};
+
+export type ConceptCoverage = {
+  token: string;
+  categories: CategoryCoverage[];
+};
+
+export type CoverageEvaluation = {
+  query: string;
+  concepts: ConceptCoverage[];
+  /** Counts across every evaluated (concept, category) pair. */
+  summary: { found: number; partial: number; unknown: number };
+  /** Fixed semantics of unknown (see requirement: absence is not proof). */
+  unknownNote: string;
+};
+
+/**
+ * Where each planner category is expected to live. Deliberately coarse and
+ * repo-agnostic: affiliation is checked as whole path segments (never
+ * substrings, so "sessions" does not affiliate with "session"…) plus the
+ * architectural role the retrieval reasons carry.
+ */
+export const CATEGORY_AFFILIATION: Record<string, { segments: string[]; roles: string[] }> = {
+  controllers: { segments: ["controllers", "controller"], roles: ["controller"] },
+  middleware: { segments: ["middlewares", "middleware"], roles: ["middleware"] },
+  models: { segments: ["models", "model"], roles: ["model"] },
+  services: { segments: ["services", "service"], roles: ["service"] },
+  config: { segments: ["config", "configs", "configuration", "settings", "env"], roles: ["config"] },
+  routes: { segments: ["routes", "routers", "route"], roles: ["router", "route"] },
+  frontend: {
+    segments: ["frontend", "components", "pages", "hooks", "store", "views", "screens", "ui", "client"],
+    roles: ["frontend"],
+  },
+};
+
+export const UNKNOWN_NOTE =
+  "\"unknown\" means the retrieved evidence does not establish the category; it is never proof that a feature does not exist — other or unretrieved files may contain it.";
+
+const ROLE_IN_REASON = /holds the "([a-z-]+)" role/;
+
+/**
+ * Path-like tokens are not source evidence ("src/routes/auth.routes.js" is
+ * a location, not behaviour). Repo-file-shaped tokens with source
+ * extensions are scrubbed before any text matching so a category cannot
+ * reach found through a filename echo inside the window text. Strings
+ * without a source extension (route URLs like "/developer/sdk/keys",
+ * plain identifiers like "sessions_v2") are genuine code and stay in.
+ */
+const PATH_TOKEN = /(?:\.\/|\.\.\/)?(?:[\w-]+\/)+[\w-]+(?:\.[\w-]+)*\.(?:js|jsx|ts|tsx|mjs|cjs|mts|cts|py|rb|go|rs|java|php|vue|svelte)\b/g;
+
+function discretionaryText(text: string): string {
+  return text.replace(PATH_TOKEN, " ");
+}
+const SYMBOL_MATCH = /symbol "[^"]+" \(|symbol \S+ matches/;
+
+function classifyWindow(win: RetrievedWindow, variants: string[]): CoverageEvidence {
+  const provenance: EvidenceProvenance = win.provenance ?? "direct";
+  const scrubbed = discretionaryText(win.text).toLowerCase();
+  const matchedVariant = variants.find((v) => scrubbed.includes(v));
+  const signal: EvidenceSignal = matchedVariant !== undefined
+    ? "source-text"
+    : SYMBOL_MATCH.test(win.reason)
+      ? "symbol-name"
+      : provenance === "indexed"
+        ? "relationship-indexed"
+        : provenance === "derived"
+          ? "relationship-derived"
+          : "filename-or-role";
+  return {
+    path: win.path,
+    startLine: win.startLine,
+    endLine: win.endLine,
+    provenance,
+    signal,
+    ...(matchedVariant !== undefined ? { matchedVariant } : {}),
+  };
+}
+
+const SIGNAL_RANK: Record<EvidenceSignal, number> = {
+  "source-text": 0,
+  "symbol-name": 1,
+  "relationship-indexed": 2,
+  "relationship-derived": 3,
+  "filename-or-role": 4,
+};
+
+/**
+ * Evaluates the plan's expected evidence categories against the final
+ * retrieved windows. Per (concept, category) pair the strongest evidence
+ * wins for the status; evidence lists keep the top items in signal-strength
+ * order so humans and the Phase 5 acceptance can see exactly what backed
+ * each verdict.
+ */
+export function evaluateCoverage(plan: QuestionPlan, result: RetrievalResult): CoverageEvaluation {
+  const concepts: ConceptCoverage[] = [];
+  let found = 0;
+  let partial = 0;
+  let unknown = 0;
+
+  for (const concept of plan.concepts) {
+    const variantList = [...new Set([concept.token, ...concept.variants.map((v) => v.text)])];
+    const categories: CategoryCoverage[] = [];
+    for (const category of concept.expectedEvidence) {
+      const affiliation = CATEGORY_AFFILIATION[category];
+      // Affiliation: whole path segment match or a retrieval reason that
+      // records the matching architectural role (role seeding writes
+      // `holds the "<role>" role` into the reason).
+      const affiliated = result.windows.filter((win) => {
+        if (!affiliation) return false;
+        const segments = win.path.toLowerCase().split("/");
+        if (segments.some((segment) => affiliation.segments.includes(segment))) return true;
+        const roleMatch = ROLE_IN_REASON.exec(win.reason);
+        return roleMatch !== null && affiliation.roles.includes(roleMatch[1]!);
+      });
+
+      const evidence = affiliated
+        .map((win) => classifyWindow(win, variantList))
+        .sort(
+          (a, b) =>
+            SIGNAL_RANK[a.signal] - SIGNAL_RANK[b.signal] ||
+            a.path.localeCompare(b.path) ||
+            a.startLine - b.startLine,
+        )
+        .slice(0, 8);
+
+      let status: CoverageStatus;
+      let reason: string;
+      const textEvidenced = evidence.filter((e) => e.signal === "source-text");
+      if (affiliated.length === 0) {
+        status = "unknown";
+        reason = `no retrieved file is affiliated with the "${category}" layer of "${concept.token}"`;
+      } else if (textEvidenced.length > 0) {
+        status = "found";
+        const shown = textEvidenced.slice(0, 3).map((e) => `${e.path} (${e.provenance}, via "${e.matchedVariant}")`);
+        reason = `source text in ${shown.join(", ")} establishes the "${category}" layer of "${concept.token}"`;
+      } else {
+        status = "partial";
+        const nameMatches = evidence.filter((e) => e.signal === "symbol-name").length;
+        const relationHints = evidence.filter(
+          (e) => e.signal === "relationship-indexed" || e.signal === "relationship-derived",
+        ).length;
+        const uniquePaths = [...new Set(evidence.map((e) => e.path))].slice(0, 3);
+        reason = `category-affiliated files exist (e.g. ${uniquePaths.join(", ")})`
+          + (nameMatches > 0 ? `; ${nameMatches} window(s) echo the concept in symbol names` : "")
+          + (relationHints > 0 ? `; ${relationHints} relationship-traversed file(s)` : "")
+          + `, but the retrieved text does not itself establish the "${category}" behaviour of "${concept.token}"`;
+      }
+
+      if (status === "found") found += 1;
+      else if (status === "partial") partial += 1;
+      else unknown += 1;
+
+      categories.push({ category, status, reason, evidence });
+    }
+    concepts.push({ token: concept.token, categories });
+  }
+
+  return {
+    query: plan.query,
+    concepts,
+    summary: { found, partial, unknown },
+    unknownNote: UNKNOWN_NOTE,
+  };
+}
