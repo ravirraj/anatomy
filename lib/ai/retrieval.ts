@@ -104,19 +104,27 @@ export function isOnboardingQuery(query: string): boolean {
 
 // Longest-first so "authentication" strips "ication", not "ation".
 const STEM_SUFFIXES = [
-  "ication", "ization", "isation", "ation", "ition", "tion", "sion",
+  "ication", "ization", "isation", "ation", "ition", "tion", "sion", "ion",
   "ities", "ility", "ing", "ies", "ied", "ed", "es", "s",
 ];
+
+// Verbal derivations that form distinct-but-related words ("-ate", "-ize",
+// "-ise"): "authenticate" ~ "authentication", "authorize" ~ "authorization".
+// Used only in word-family checks, never for stemming.
+const DERIVATIONAL_SUFFIXES = new Set(["ate", "ize", "ise"]);
 
 // Glossary values are alternative names for the same concept, read
 // symmetrically at lookup time. Kept deliberately small and generic —
 // it is vocabulary the *concept space* provides, not repository knowledge.
 const GLOSSARY: Record<string, string[]> = {
   auth: ["authentication", "authorization", "login", "register", "session", "token", "signup", "oauth", "permission", "password"],
-  authentication: ["auth", "authorization", "login", "register", "session", "token", "jwt", "oauth"],
-  authorization: ["auth", "permission", "role"],
+  authentication: ["auth", "login", "register", "session", "token", "jwt", "oauth", "password"],
+  authorization: ["auth", "permission", "role", "authorize"],
+  authorize: ["authorization", "permission", "role"],
   login: ["auth", "signin", "session"],
   signin: ["login", "auth"],
+  logout: ["login", "auth", "session"],
+  logged: ["login", "session", "auth"],
   signup: ["auth", "register"],
   register: ["auth", "signup"],
   error: ["exception", "failure", "throw", "catch"],
@@ -205,11 +213,59 @@ export function tokenVariants(token: string): TokenVariant[] {
   return out;
 }
 
-const KIND_PENALTY: Record<TokenVariant["kind"], number> = {
+export const KIND_PENALTY: Record<TokenVariant["kind"], number> = {
   original: 0,
   stem: 6,
   glossary: 14,
 };
+
+/**
+ * Two words may match through a shared prefix only when the leftover of the
+ * longer word looks like an inflection of the same word — a stem suffix or a
+ * 1-2 character tail (plural, truncation). This keeps word-family matching
+ * while killing cross-concept leaks that plain "starts with" allowed:
+ *
+ *   "authentication" ~ "authenticate"  (remainder "ation")   ✓ same word
+ *   "authorized"     ~ "authorize"     (remainder "d")       ✓ same word
+ *   "authorize"      ~ "auth"          (remainder "orize")   ✗ different word
+ *   "configuration"  ~ "config"        (remainder "uration") ✗ abbreviation —
+ *      matched by the explicit glossary pair instead, so short forms stay
+ *      deliberate vocabulary.
+ */
+/**
+ * Word-family check through the shared stem. Two words relate when the text
+ * they share is long enough to be a real stem and the leftovers on both
+ * sides are inflectional shapes (stem suffixes in either language style,
+ * verbal derivations like -ate/-ize, or a 1-2 character tail such as a
+ * plural). What plain "starts with" allowed but this rejects:
+ *
+ *   "authentication" ~ "authenticate"  ("ation" / "ate")   ✓ one word family
+ *   "authorized"     ~ "authorize"     ("d" / "")          ✓ one word family
+ *   "authorize"      ~ "auth"          ("orize" / "")      ✗ different word
+ *   "author"         ~ "auth"          ("or" / "")         ✗ different word
+ *   "configuration"  ~ "config"        ("uration" / "")    ✗ abbreviation —
+ *      handled by the explicit glossary pair, so short forms stay
+ *      deliberate vocabulary, never accidental substrings.
+ */
+export function sameFamily(a: string, b: string): boolean {
+  if (a === b) return true;
+  let shared = 0;
+  while (shared < a.length && shared < b.length && a[shared] === b[shared]) shared++;
+  if (shared < 4) return false;
+  const ra = a.slice(shared);
+  const rb = b.slice(shared);
+  const tailFamily = (tail: string): boolean =>
+    tail.length <= 2 || STEM_SUFFIXES.includes(tail) || DERIVATIONAL_SUFFIXES.has(tail);
+  // Both sides keep a tail: each tail must look inflectional on its own.
+  if (ra.length > 0 && rb.length > 0) {
+    return tailFamily(ra) && tailFamily(rb);
+  }
+  // One word ends where the other continues: the extension must be a true
+  // inflection or derivation of the consumed word, never a loose 2-char
+  // tail of an already-consumed stem ("auth" extended with "or"/"orize").
+  const rest = ra.length > 0 ? ra : rb;
+  return rest.length <= 1 || STEM_SUFFIXES.includes(rest) || DERIVATIONAL_SUFFIXES.has(rest);
+}
 
 const ENTRY_POINT_PATTERNS = [
   /(?:^|\/)(?:index|main|app|entry|cli|root|server)\.(?:tsx?|jsx?|mjs|cjs)$/i,
@@ -378,15 +434,12 @@ export async function retrieveGroundedContext(
           } else if (subtokens.includes(variant)) {
             score = 95;
           } else {
-            // Bidirectional prefixes: "authentication" starts with "auth",
-            // "handl" (from "handled") starts with "handle" — keep signal on
-            // both sides, requiring a minimum stem length to stay honest.
-            const fullName = Math.min(nameLower.length, variant.length) >= 4
-              && (nameLower.startsWith(variant) || variant.startsWith(nameLower));
-            const sub = subtokens.some(
-              (st) => Math.min(st.length, variant.length) >= 4
-                && (st.startsWith(variant) || variant.startsWith(st)),
-            );
+            // Word-family prefixes only (see sameFamily): "authentication"
+            // still matches "authenticate", but unrelated words that merely
+            // share the beginning ("authorize"/"author" vs "auth") no longer
+            // leak into the concept.
+            const fullName = sameFamily(nameLower, variant);
+            const sub = subtokens.some((st) => sameFamily(st, variant));
             if (fullName) score = 75;
             else if (sub) score = 55;
             else if (variant.length >= 5 && nameLower.includes(variant)) score = 40;
