@@ -39,11 +39,19 @@ export type TargetWindow = {
   reason: string;
   /**
    * Which retrieval strategies produced this window ("symbol", "route",
-   * "path", "role", "entry", "expansion"). Set individually by every seed
-   * stage and unioned when windows merge: evidence a file earned through
-   * two independent strategies outranks single-strategy evidence.
+   * "path", "role", "entry", "expansion", "derive"). Set individually by
+   * every seed stage and unioned when windows merge: evidence a file earned
+   * through two independent strategies outranks single-strategy evidence.
    */
   strategies?: string[];
+  /**
+   * Provenance of the relationship that pulled this window in: "indexed"
+   * means an existing edge row in the analysis's edges table; "derived"
+   * means the relationship was inferred at query time from inspected,
+   * hash-verified source text. A derived window is a hint, never an
+   * indexed fact, and is ranked below all indexed evidence.
+   */
+  provenance?: "indexed" | "derived";
 };
 
 /**
@@ -53,6 +61,78 @@ export type TargetWindow = {
  * this demotion so verb-named files can never outrank concept evidence.
  */
 const GENERIC_PENALTY = 25;
+
+// Phase 4 relationship-expansion bounds. No ingestion and no schema
+// involvement: expansion stays over the analysis's existing edges, and
+// derivation only reads source that the pipeline has already verified.
+/** Hard cap on transitive (2-hop) expansion windows per retrieval. */
+export const MAX_TRANSITIVE_WINDOWS = 6;
+/** Hard cap on windows derived from inspected source imports per retrieval. */
+export const MAX_DERIVED_WINDOWS = 8;
+
+export type DerivedReference = {
+  specifier: string;
+  kind: "import" | "require" | "dynamic-import" | "re-export";
+};
+
+const RELATIVE_SPECIFIER = /^\.{1,2}\//;
+
+/**
+ * Parses import-family statements out of inspected source text and returns
+ * the project-relative specifiers they reference. Purely textual and
+ * deterministic — it says nothing about whether a corresponding file exists;
+ * the caller resolves candidates against the analysis's own file table.
+ * Bare package specifiers ("react") are ignored: relationships are only
+ * derived to files of the same analysis.
+ */
+export function deriveReferences(source: string): DerivedReference[] {
+  const out: DerivedReference[] = [];
+  const seen = new Set<string>();
+  const push = (specifier: string, kind: DerivedReference["kind"]) => {
+    if (!RELATIVE_SPECIFIER.test(specifier)) return;
+    const key = `${kind}:${specifier}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ specifier, kind });
+  };
+  // import … from "x" and export … from "x" (re-exports)
+  for (const m of source.matchAll(/(?:^|\n)\s*(?:import|export)\b[^;"'\n]*from\s*["']([^"']+)["']/g)) {
+    push(m[1]!, m[0]!.trimStart().startsWith("export") ? "re-export" : "import");
+  }
+  for (const m of source.matchAll(/\brequire\s*\(\s*["']([^"']+)["']\s*\)/g)) {
+    push(m[1]!, "require");
+  }
+  for (const m of source.matchAll(/\bimport\s*\(\s*["']([^"']+)["']\s*\)/g)) {
+    push(m[1]!, "dynamic-import");
+  }
+  return out;
+}
+
+/**
+ * Candidate repository paths a relative specifier may resolve to, tried in
+ * order: the specifier itself, common source extensions, then index files.
+ */
+export function specifierCandidates(specifier: string, sourcePath: string): string[] {
+  const at = sourcePath.lastIndexOf("/");
+  const dir = at === -1 ? "" : sourcePath.slice(0, at + 1);
+  const parts = (dir + specifier).split("/");
+  const stack: string[] = [];
+  for (const part of parts) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") stack.pop();
+    else stack.push(part);
+  }
+  const normalized = stack.join("/");
+  return [
+    normalized,
+    `${normalized}.js`,
+    `${normalized}.ts`,
+    `${normalized}.jsx`,
+    `${normalized}.tsx`,
+    `${normalized}/index.js`,
+    `${normalized}/index.ts`,
+  ];
+};
 
 export type RetrievedWindow = {
   fileId: string;
@@ -64,6 +144,8 @@ export type RetrievedWindow = {
   score: number;
   text: string;
   reason: string;
+  /** Relationship provenance of the window ("indexed" | "derived"). */
+  provenance?: "indexed" | "derived";
 };
 
 export type RetrievalResult = {
@@ -736,65 +818,190 @@ export async function retrieveGroundedContext(
   // Sort seed windows by score descending, then path ascending
   seedWindows.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
 
-  // Stage 3: Dependency Graph Expansion
-  // Expand the top seed files to their 1-hop neighbours
+  // Stage 3: Dependency Graph Expansion (indexed relationships only)
+  // Expand the top seed files to their 1-hop neighbours over the analysis's
+  // existing import/re-export/dynamic-import/require edges, plus a bounded
+  // transitive second hop. Every expansion window is labelled provenance
+  // "indexed" — backed by an edge row in this analysis's edges table (the
+  // queries filter by analysis_id, so other organizations' graphs are
+  // unreachable) — and never claims a relationship kind the schema does
+  // not store.
   const topSeedFiles = [
     ...new Set(seedWindows.slice(0, config.seedLimit).map((s) => s.fileId)),
   ];
 
-  const expandedWindows: TargetWindow[] = [];
-  if (process.env.RETRIEVAL_DEBUG) {
-    console.error(`roots: ${topSeedFiles.map((id) => fileMap.get(id)?.path).join("; ")}`);
-  }
-  if (topSeedFiles.length > 0) {
-    const { data: edgesData, error: edgesError } = await db
+  const loadEdgeRows = async (focus: string[]) => {
+    if (focus.length === 0) return [];
+    const { data, error } = await db
       .from("edges")
       .select("source_file_id, target_file_id, kind")
       .eq("analysis_id", analysisId)
       .or(
-        `source_file_id.in.(${topSeedFiles.join(",")}),target_file_id.in.(${topSeedFiles.join(",")})`,
+        `source_file_id.in.(${focus.join(",")}),target_file_id.in.(${focus.join(",")})`,
       );
+    if (error) return [];
+    return data ?? [];
+  };
 
-    if (!edgesError && edgesData) {
-      const topSeedSet = new Set(topSeedFiles);
-      const visitedNeighbourIds = new Set<string>();
+  const expandedWindows: TargetWindow[] = [];
+  const seenIds = new Set(topSeedFiles);
+  if (process.env.RETRIEVAL_DEBUG) {
+    console.error(`roots: ${topSeedFiles.map((id) => fileMap.get(id)?.path).join("; ")}`);
+  }
+  if (topSeedFiles.length > 0) {
+    const topSeedSet = new Set(topSeedFiles);
+    const hop1Files: string[] = [];
 
-      for (const edge of edgesData) {
-        // Find the neighbour file
-        const isOutgoing = topSeedSet.has(edge.source_file_id);
-        const seedId = isOutgoing ? edge.source_file_id : edge.target_file_id;
-        const neighbourId = isOutgoing ? edge.target_file_id : edge.source_file_id;
+    for (const edge of await loadEdgeRows(topSeedFiles)) {
+      const isOutgoing = topSeedSet.has(edge.source_file_id);
+      const seedId = isOutgoing ? edge.source_file_id : edge.target_file_id;
+      const neighbourId = isOutgoing ? edge.target_file_id : edge.source_file_id;
 
-        if (topSeedSet.has(neighbourId) || visitedNeighbourIds.has(neighbourId)) {
-          continue;
-        }
-        visitedNeighbourIds.add(neighbourId);
+      // Self-loops, duplicate edge rows and fan-in deduplicate here; edges
+      // naming a file of another analysis (or a deleted file) resolve to no
+      // local record and are skipped — a missing target can never crash or
+      // leak into the window list.
+      if (neighbourId === seedId || topSeedSet.has(neighbourId) || seenIds.has(neighbourId)) {
+        continue;
+      }
+      const neighbour = fileMap.get(neighbourId);
+      const seedFile = fileMap.get(seedId);
+      if (!neighbour || !seedFile) continue;
+      seenIds.add(neighbourId);
+      hop1Files.push(neighbourId);
 
-        const neighbour = fileMap.get(neighbourId);
-        const seedFile = fileMap.get(seedId);
-        if (!neighbour || !seedFile) continue;
+      expandedWindows.push({
+        fileId: neighbour.id,
+        path: neighbour.path,
+        contentHash: neighbour.hash,
+        totalLines: neighbour.lines,
+        startLine: 1,
+        endLine: Math.min(neighbour.lines, 45),
+        score: isOutgoing ? 35 : 30,
+        strategies: ["expansion"],
+        provenance: "indexed",
+        reason: `1-hop dependency connected to seed "${seedFile.path}" (indexed ${edge.kind} edge)`,
+      });
+    }
 
-        // Bounded decayed score for 1-hop neighbour
-        const decayScore = Math.round((isOutgoing ? 35 : 30));
-        const endLine = Math.min(neighbour.lines, 45);
-
+    // Bounded transitive expansion: exactly one extra hop out of the
+    // reached neighbourhood, hard-capped at MAX_TRANSITIVE_WINDOWS windows.
+    // Within the cap the planner's expected evidence categories come first
+    // (a question that expects "controllers"/"routes"/... evidence prefers
+    // relationship targets that live in such paths), then plain path order
+    // keeps the choice deterministic. Score 18 keeps every transitive
+    // window below all direct and 1-hop evidence; deeper hops are never
+    // followed.
+    if (hop1Files.length > 0) {
+      const focus = [...topSeedFiles, ...hop1Files].slice(0, 60);
+      const hop2IdSeen = new Set(seenIds);
+      const hop2Candidates: {
+        neighbour: { id: string; path: string; hash: string; lines: number };
+        seedFile: { path: string };
+        kind: string;
+        relevant: boolean;
+      }[] = [];
+      for (const edge of await loadEdgeRows(focus)) {
+        const left = fileMap.get(edge.source_file_id);
+        const right = fileMap.get(edge.target_file_id);
+        if (!left || !right) continue;
+        const seedIsLeft = topSeedSet.has(edge.source_file_id) || hop1Files.includes(edge.source_file_id);
+        const seedId = seedIsLeft ? edge.source_file_id : edge.target_file_id;
+        const neighbour = seedIsLeft ? right : left;
+        const seedFile = seedIsLeft ? left : right;
+        if (seedId === neighbour.id || hop2IdSeen.has(neighbour.id)) continue;
+        const lower = neighbour.path.toLowerCase();
+        hop2Candidates.push({
+          neighbour,
+          seedFile,
+          kind: edge.kind,
+          relevant: plan.expectedEvidence.some((c) => lower.includes(c.toLowerCase())),
+        });
+        hop2IdSeen.add(neighbour.id);
+      }
+      hop2Candidates.sort(
+        (a, b) =>
+          Number(b.relevant) - Number(a.relevant) ||
+          a.neighbour.path.localeCompare(b.neighbour.path),
+      );
+      for (const { neighbour, seedFile, kind, relevant } of hop2Candidates.slice(
+        0,
+        MAX_TRANSITIVE_WINDOWS,
+      )) {
+        seenIds.add(neighbour.id);
         expandedWindows.push({
           fileId: neighbour.id,
           path: neighbour.path,
           contentHash: neighbour.hash,
           totalLines: neighbour.lines,
           startLine: 1,
-          endLine,
-          score: decayScore,
+          endLine: Math.min(neighbour.lines, 45),
+          score: 18,
           strategies: ["expansion"],
-          reason: `1-hop dependency connected to seed "${seedFile.path}"`,
+          provenance: "indexed",
+          reason: `2-hop dependency connected to seed "${seedFile.path}" (indexed ${kind} edge, transitive${relevant ? ", expected-evidence priority" : ""})`,
+        });
+      }
+    }
+  }
+
+  // Stage 3.5: relationship hints derived from inspected windows.
+  // Sources are the top seed windows whose text the pipeline reads through
+  // the hash- and size-verified content read service; each contributes at
+  // most its own import-family statements. Candidates resolve strictly
+  // against this analysis's own file table — specifiers naming files the
+  // analysis does not index (packages, missing files, other organizations)
+  // produce nothing. Every derived window carries provenance "derived",
+  // is worded as a hint ("derived, not an indexed edge"), and is ranked at
+  // score 20, below all indexed evidence; presenting a derived
+  // relationship as an indexed fact is impossible by construction.
+  const derivedWindows: TargetWindow[] = [];
+  {
+    const inspectedIds = new Set<string>();
+    const pathToFile = new Map([...fileMap.values()].map((f) => [f.path, f.id]));
+    const derivedSeen = new Set<string>();
+    let derivedUsed = 0;
+    const inspected = [...seedWindows].sort(
+      (a, b) => b.score - a.score || a.path.localeCompare(b.path),
+    );
+    for (const seed of inspected) {
+      if (derivedUsed >= MAX_DERIVED_WINDOWS || inspectedIds.size >= config.seedLimit) break;
+      if (inspectedIds.has(seed.fileId)) continue;
+      inspectedIds.add(seed.fileId);
+      let source: string | null = null;
+      try {
+        source = await getFileLines(db, seed.fileId, seed.startLine, seed.endLine);
+      } catch {
+        source = null;
+      }
+      if (!source) continue;
+      for (const ref of deriveReferences(source)) {
+        if (derivedUsed >= MAX_DERIVED_WINDOWS) break;
+        const targetId = specifierCandidates(ref.specifier, seed.path)
+          .map((p) => pathToFile.get(p) ?? "")
+          .find((id) => id && id !== seed.fileId && !derivedSeen.has(id));
+        const target = targetId ? fileMap.get(targetId) : undefined;
+        if (!target) continue;
+        derivedSeen.add(target.id);
+        derivedUsed += 1;
+        derivedWindows.push({
+          fileId: target.id,
+          path: target.path,
+          contentHash: target.hash,
+          totalLines: target.lines,
+          startLine: 1,
+          endLine: Math.min(target.lines, 45),
+          score: 20,
+          strategies: ["derive"],
+          provenance: "derived",
+          reason: `derived ${ref.kind} reference to "${target.path}" in inspected window of "${seed.path}" (derived, not an indexed edge)`,
         });
       }
     }
   }
 
   // Stage 4: Deduplicate and merge overlapping line ranges per file
-  const allWindows = [...seedWindows, ...expandedWindows];
+  const allWindows = [...seedWindows, ...expandedWindows, ...derivedWindows];
   const mergedWindows = mergeCandidateWindows(allWindows);
 
   // Sort merged windows by score descending
@@ -880,7 +1087,7 @@ export async function retrieveGroundedContext(
   orderedForBudget.push(...available, ...extras);
   if (process.env.RETRIEVAL_DEBUG) {
     for (const [i, win] of orderedForBudget.slice(0, Number(process.env.RETRIEVAL_DEBUG) || 30).entries()) {
-      console.error(`budget[${i}] ${win.score} ${win.path} ${win.startLine}-${win.endLine} :: ${win.reason.slice(0, 160)}`);
+      console.error(`budget[${i}] ${win.score} ${win.provenance ?? "-"} ${win.path} ${win.startLine}-${win.endLine} :: ${win.reason.slice(0, 160)}`);
     }
   }
 
@@ -933,6 +1140,7 @@ export async function retrieveGroundedContext(
         score: win.score,
         text,
         reason: win.reason,
+        provenance: win.provenance,
       });
     } catch {
       // Content unavailable or unreadable, continue to next candidate
@@ -982,6 +1190,14 @@ export function mergeCandidateWindows(windows: TargetWindow[]): TargetWindow[] {
       if (next.startLine <= current.endLine + 5) {
         const strategies = [...new Set([...(current.strategies ?? []), ...(next.strategies ?? [])])];
         const corroboration = Math.min(8, Math.max(0, strategies.length - 1) * 4);
+        // Provenance stays honest under merging: a window is "derived" only
+        // when every input was derived, and treats any undefined input as
+        // neither — the moment indexed evidence backs the file it is
+        // "indexed"; the derived hint additionally survives in the reason.
+        const provenance =
+          current.provenance === "indexed" || next.provenance === "indexed"
+            ? ("indexed" as const)
+            : (current.provenance ?? next.provenance);
         current = {
           fileId: current.fileId,
           path: current.path,
@@ -991,6 +1207,7 @@ export function mergeCandidateWindows(windows: TargetWindow[]): TargetWindow[] {
           endLine: Math.max(current.endLine, next.endLine),
           score: Math.max(current.score, next.score) + corroboration,
           strategies,
+          provenance,
           reason: next.reason === current.reason
             ? current.reason
             : corroboration > 0

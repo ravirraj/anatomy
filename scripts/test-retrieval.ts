@@ -12,6 +12,8 @@ import {
   type Db,
   tokenVariants,
   identifierSubtokens,
+  deriveReferences,
+  specifierCandidates,
   type TargetWindow,
 } from "../lib/ai/retrieval.ts";
 
@@ -328,7 +330,25 @@ type FixtureFile = {
   role?: string;
   symbolNames: [name: string, line: number, exported?: boolean][];
   imports: string[]; // file ids
+  /** Defaults to "fx_analysis"; other values model foreign organizations. */
+  analysisId?: string;
+  /** Overrides the default filler content (needed for import-derivation). */
+  text?: string;
 };
+
+const DERIVE_SOURCE_TEXT = [
+  "import { targetUtil } from \"./target.js\";",
+  "const shared = require(\"./shared.js\");",
+  "export async function lazyLoad() {",
+  "  return import(\"./lazy.js\");",
+  "}",
+  "export const duplicateTarget = import(\"./target.js\");",
+  "import ghostModule from \"./missing/ghost.js\";",
+  "import react from \"react\";",
+  "",
+  ...Array.from({ length: 62 }, (_, i) => `// line ${i + 1} of src/glean/source.js`),
+  "",
+].join("\n");
 
 const fixtureFiles: FixtureFile[] = [
   {
@@ -454,6 +474,75 @@ const fixtureFiles: FixtureFile[] = [
     symbolNames: [["fetchWithAuth", 8, true]],
     imports: [],
   },
+  // ---- Phase 4 relationship-expansion fixtures ----
+  // A bounded transitive chain: root seeds, mid is reached by 1-hop, leaf
+  // only by the capped 2-hop, and tip would require a never-taken 3rd hop.
+  // Root also imports a ghost target id (missing file) and is referenced
+  // under a foreign analysis id (organization-isolation probe). Paths and
+  // symbols deliberately avoid the question's vocabulary — only mid/leaf/
+  // tip's filenames ("src/meridian/mid.js"...) never match the query, so
+  // edge expansion is their only route into the window list.
+  {
+    id: "fx_hop_root",
+    path: "src/meridian/root.js",
+    symbolNames: [["zephyrQuill", 4, true]],
+    imports: ["fx_hop_mid", "fx_ghost_id"],
+  },
+  {
+    id: "fx_hop_mid",
+    path: "src/meridian/mid.js",
+    symbolNames: [],
+    imports: ["fx_hop_leaf"],
+  },
+  {
+    id: "fx_hop_leaf",
+    path: "src/meridian/leaf.js",
+    symbolNames: [],
+    imports: ["fx_hop_tip"],
+  },
+  {
+    id: "fx_hop_tip",
+    path: "src/meridian/tip.js",
+    symbolNames: [],
+    imports: [],
+  },
+  // Cycle with duplicate edge rows: alpha -> bravo (twice) -> alpha.
+  {
+    id: "fx_cycle_alpha",
+    path: "src/cycle/alpha.js",
+    symbolNames: [["alphaAnchor", 4, true]],
+    imports: ["fx_cycle_bravo", "fx_cycle_bravo"],
+  },
+  {
+    id: "fx_cycle_bravo",
+    path: "src/cycle/bravo.js",
+    symbolNames: [["bravoMark", 4, true]],
+    imports: ["fx_cycle_alpha"],
+  },
+  // Derivation group: source has NO indexed edge to its neighbours — they
+  // are only reachable through relative imports inside its inspected text.
+  // Directory "glean" avoids the "derive(sink)" query token entirely, so
+  // path seeding cannot pre-empt derivation.
+  {
+    id: "fx_derive_source",
+    path: "src/glean/source.js",
+    symbolNames: [["deriveSink", 4, true]],
+    imports: [],
+    text: DERIVE_SOURCE_TEXT,
+  },
+  { id: "fx_derive_target", path: "src/glean/target.js", symbolNames: [["targetUtil", 4, true]], imports: [] },
+  { id: "fx_derive_lazy", path: "src/glean/lazy.js", symbolNames: [["lazyLoad", 4, true]], imports: [] },
+  { id: "fx_derive_shared", path: "src/glean/shared.js", symbolNames: [["sharedCost", 4, true]], imports: [] },
+  // Foreign-organization file: same db, other analysis id. Its edges and
+  // rows must be invisible to retrieval filtered by analysis_id. The hop
+  // chain registers a foreign edge src/hop/root.js -> leak.js below.
+  {
+    id: "fx_foreign_leak",
+    path: "src/foreign/leak.js",
+    symbolNames: [["leakProbe", 4, true]],
+    imports: [],
+    analysisId: "other_analysis",
+  },
 ];
 
 const fxTexts = new Map<string, string>();
@@ -466,12 +555,28 @@ class FixtureDb {
       kind: name[0] === name[0]!.toUpperCase() ? "class" : "function",
       line,
       exported: exported ?? false,
+      analysis_id: f.analysisId ?? "fx_analysis",
     })),
   );
 
-  edges = fixtureFiles.flatMap((f) =>
-    f.imports.map((target) => ({ source_file_id: f.id, target_file_id: target, kind: "import" })),
-  );
+  edges = [
+    ...fixtureFiles.flatMap((f) =>
+      f.imports.map((target) => ({
+        source_file_id: f.id,
+        target_file_id: target,
+        kind: "import",
+        analysis_id: f.analysisId ?? "fx_analysis",
+      })),
+    ),
+    // Same file pair, wrong analysis: must be invisible to fx_analysis
+    // retrieval even though it touches a local file id.
+    {
+      source_file_id: "fx_hop_root",
+      target_file_id: "fx_foreign_leak",
+      kind: "import",
+      analysis_id: "other_analysis",
+    },
+  ];
 
   routes = [
     { file_id: "fx_auth_routes", method: "POST", path: "/auth/login", line: 8 },
@@ -479,7 +584,7 @@ class FixtureDb {
 
   files = fixtureFiles.map((f) => {
     // 70 lines of filler content ending in a final newline.
-    const text = Array.from({ length: 70 }, (_, i) => `// line ${i + 1} of ${f.path}\n`).join("");
+    const text = f.text ?? Array.from({ length: 70 }, (_, i) => `// line ${i + 1} of ${f.path}\n`).join("");
     const hash = createHash("sha256").update(text).digest("hex");
     fxTexts.set(f.id, text);
     fxHashes.set(f.id, hash);
@@ -489,7 +594,8 @@ class FixtureDb {
       hash,
       lines: 70,
       content_status: "stored",
-      file_roles: f.role ? [{ role: f.role, source: "convention" }] : [],
+      analysis_id: f.analysisId ?? "fx_analysis",
+      file_roles: f.role ? [{ role: f.role, source: "convention" }] : [{ role: undefined, source: "convention" }],
     };
   });
 
@@ -497,8 +603,12 @@ class FixtureDb {
     if (table === "files") {
       return {
         select: () => ({
-          eq: (_col: string, value: string) => ({
-            is: () => Promise.resolve({ data: this.files, error: null }),
+          eq: (col: string, value: string) => ({
+            is: () =>
+              Promise.resolve({
+                data: col === "analysis_id" ? this.files.filter((f) => f.analysis_id === value) : this.files,
+                error: null,
+              }),
             maybeSingle: async () => ({
               data: this.files.find((f) => f.id === value) ?? null,
               error: null,
@@ -510,7 +620,11 @@ class FixtureDb {
     if (table === "symbols") {
       return {
         select: () => ({
-          eq: () => Promise.resolve({ data: this.symbols, error: null }),
+          eq: (col: string, value: string) =>
+            Promise.resolve({
+              data: col === "analysis_id" ? this.symbols.filter((s) => s.analysis_id === value) : this.symbols,
+              error: null,
+            }),
         }),
       };
     }
@@ -524,22 +638,28 @@ class FixtureDb {
     if (table === "edges") {
       return {
         select: () => ({
-          eq: () => ({
-            or: (orFilter: string) => {
-              // Emulate PostgREST's `.or("source_file_id.in.(a,b),target_file_id.in.(a,b)")`
-              // — only edges actually touching one of the listed ids come back.
-              const seedIds = new Set<string>();
-              for (const m of orFilter.matchAll(/in\.\(([^)]*)\)/g)) {
-                for (const id of (m[1] ?? "").split(",")) {
-                  if (id.trim()) seedIds.add(id.trim());
+          eq: (col: string, value: string) => {
+            // analysis filtering happens here, exactly where the real
+            // PostgREST query chain applies it: only rows visible to this
+            // analysis can ever enter the `.or(...)` neighbor lookup.
+            const visible = col === "analysis_id" ? this.edges.filter((e) => e.analysis_id === value) : this.edges;
+            return {
+              or: (orFilter: string) => {
+                // Emulate PostgREST's `.or("source_file_id.in.(a,b),target_file_id.in.(a,b)")`
+                // — only edges actually touching one of the listed ids come back.
+                const seedIds = new Set<string>();
+                for (const m of orFilter.matchAll(/in\.\(([^)]*)\)/g)) {
+                  for (const id of (m[1] ?? "").split(",")) {
+                    if (id.trim()) seedIds.add(id.trim());
+                  }
                 }
-              }
-              const filtered = this.edges.filter(
-                (edge) => seedIds.has(edge.source_file_id) || seedIds.has(edge.target_file_id),
-              );
-              return Promise.resolve({ data: filtered, error: null });
-            },
-          }),
+                const filtered = visible.filter(
+                  (edge) => seedIds.has(edge.source_file_id) || seedIds.has(edge.target_file_id),
+                );
+                return Promise.resolve({ data: filtered, error: null });
+              },
+            };
+          },
         }),
       };
     }
@@ -732,6 +852,172 @@ const fxSdk = await fixtureAsk("How does the SDK work, and how does a developer 
     pass("single-strategy merge keeps the plain max score (no bonus)");
   } else {
     fail(`single-strategy merge wrong: score=${singleStrategy[0]?.score}, strategies=${JSON.stringify(singleStrategy[0]?.strategies)}`);
+  }
+}
+
+// Phase 4 — relationship expansion: bounded indexed-edge traversal, capped
+// transitivity, derived-provenance honesty, invalid targets, cycles,
+// organization isolation, budget caps.
+{
+  // Unit: import-family parsing (provenance-agnostic, textual only).
+  const refs = deriveReferences(
+    [
+      "import { a } from \"./a.js\";",
+      "import x from \"../parent/b.js\";",
+      "export { c } from \"./c.js\";",
+      "const d = require(\"./d.js\");",
+      "await import(\"./e.js\");",
+      "const again = import(\"./e.js\");",
+      "import react from \"react\";",
+      "import loop from \"./a.js\";",
+    ].join("\n"),
+  );
+  const specOf = (s: string) => refs.filter((r) => r.specifier === s).map((r) => r.kind);
+  if (refs.length === 5) {
+    pass(
+      "deriveReferences parses import/require/dynamic/re-export relative specifiers with dedupe " +
+        `(${refs.map((r) => `${r.specifier} as ${r.kind}`).join("; ")})`,
+    );
+  } else {
+    fail(`deriveReferences wrong count/kinds: ${JSON.stringify(refs)}`);
+  }
+  if (specOf("react").length === 0 && specOf("./a.js").length === 1 && specOf("./e.js").length === 1) {
+    pass("bare package specifiers are never derived; duplicate kinds collapse");
+  } else {
+    fail(`specifier filtering wrong: ${JSON.stringify(refs)}`);
+  }
+
+  // Unit: relative specifier resolution candidates.
+  const resolved = specifierCandidates("../parent/b.js", "src/deep/inner/file.js");
+  if (resolved[0] === "src/deep/parent/b.js" && resolved.some((p) => p === "src/deep/parent/b.js/index.ts")) {
+    pass("specifier candidates normalize dot-dot traversal and offer extension/index fallbacks");
+  } else {
+    fail(`specifier candidates wrong: ${JSON.stringify(resolved)}`);
+  }
+
+  // Existing import-edge expansion + transitive limit + invalid targets.
+  const fxHop = await fixtureAsk("How does zephyrQuill work?");
+  {
+    const paths = new Set(fxHop.files.map((f) => f.path));
+    const hopWin = fxHop.windows.find((w) => w.path === "src/meridian/mid.js");
+    const leafWin = fxHop.windows.find((w) => w.path === "src/meridian/leaf.js");
+    if (paths.has("src/meridian/root.js") && paths.has("src/meridian/mid.js")) {
+      pass("existing indexed import edge expands a 1-hop neighbour (mid.js)");
+    } else {
+      fail(`1-hop expansion broken: ${[...paths].join(", ")}`);
+    }
+    if (leafWin && hopWin) {
+      pass("bounded transitive expansion reaches the 2-hop neighbour (leaf.js)");
+    } else {
+      fail(`transitive expansion missing: ${[...paths].join(", ")}`);
+    }
+    if (leafWin?.provenance === "indexed" && hopWin?.provenance === "indexed") {
+      pass("edge-expanded windows carry provenance \"indexed\"");
+    } else {
+      fail(`provenance not indexed: ${hopWin?.provenance} / ${leafWin?.provenance}`);
+    }
+    const transitiveReason = leafWin?.reason ?? "";
+    if (transitiveReason.includes("2-hop") && transitiveReason.includes("indexed import edge")) {
+      pass("transitive window names its hop, edge kind and indexed provenance in the reason");
+    } else {
+      fail(`transitive reason wording wrong: "${transitiveReason}"`);
+    }
+    const ghostPath = "src/meridian/missing.js";
+    if (!paths.has("src/meridian/tip.js") && ![...paths].some((p) => p === ghostPath)) {
+      pass("expansion stops at the hop bound; missing edge targets produce no window");
+    } else {
+      fail(`3-hop tip.js or ghost target leaked: ${[...paths].join(", ")}`);
+    }
+    if (paths.has("src/meridian/root.js") && fxHop.windows.filter((w) => w.path === "src/meridian/root.js").length === 1) {
+      pass("seed file is not duplicated by cycle-back expansion");
+    } else {
+      const count = fxHop.windows.filter((w) => w.path === "src/meridian/root.js").length;
+      fail(`root windows duplicated: ${count}`);
+    }
+  }
+
+  // Cycles and duplicate edge rows.
+  const fxCycle = await fixtureAsk("How does alphaAnchor work?");
+  {
+    const paths = new Set(fxCycle.files.map((f) => f.path));
+    const alphaWins = fxCycle.windows.filter((w) => w.path === "src/cycle/alpha.js");
+    const bravoWins = fxCycle.windows.filter((w) => w.path === "src/cycle/bravo.js");
+    if (paths.has("src/cycle/alpha.js") && paths.has("src/cycle/bravo.js") && alphaWins.length === 1 && bravoWins.length === 1) {
+      pass("cycle edges and duplicate edge rows produce exactly one window per file");
+    } else {
+      fail(`cycle/dedupe wrong: paths=${[...paths].join(", ")} alpha=${alphaWins.length} bravo=${bravoWins.length}`);
+    }
+  }
+
+  // Derived provenance: neighbours reachable ONLY through imports inside
+  // inspected hash-verified source, never claiming indexed status.
+  const fxDerived = await fixtureAsk("How does deriveSink work?");
+  {
+    const paths = new Set(fxDerived.files.map((f) => f.path));
+    const derivedTargets = ["src/glean/target.js", "src/glean/lazy.js", "src/glean/shared.js"];
+    if (derivedTargets.every((p) => paths.has(p))) {
+      pass("derived import references pull in files with no indexed edge (target/lazy/shared)");
+    } else {
+      fail(`derived targets missing: ${[...paths].join(", ")}`);
+    }
+    const targetWins = fxDerived.windows.filter((w) => w.path === "src/glean/target.js");
+    if (targetWins.length === 1) {
+      pass("derived references to the same target (import + dynamic import) deduplicate to one window");
+    } else {
+      fail(`target windows not deduped: ${targetWins.length}`);
+    }
+    const withBadProvenance = fxDerived.windows.filter(
+      (w) =>
+        derivedTargets.includes(w.path) &&
+        (w.provenance !== "derived" || !w.reason.includes("derived, not an indexed edge") || /\(indexed [a-z-]+ edge\)/.test(w.reason)),
+    );
+    if (withBadProvenance.length === 0) {
+      pass("derived windows are labelled provenance \"derived\" and state \"derived, not an indexed edge\"");
+    } else {
+      fail(`derived windows mislabelled: ${withBadProvenance.map((w) => `${w.path} ${w.provenance} :: ${w.reason}`).join(" | ")}`);
+    }
+    if (!paths.has("src/glean/missing/ghost.js") && !paths.has("react") && !paths.has("src/foreign/leak.js")) {
+      pass("missing specifier targets and bare packages produce nothing derived");
+    } else {
+      fail(`phantom derived targets leaked: ${[...paths].join(", ")}`);
+    }
+    if (fxDerived.files.length <= 16 && fxDerived.totalCharacters <= 28000) {
+      pass(`derived windows respect the budget ceiling (${fxDerived.files.length} files, ${fxDerived.totalCharacters} chars)`);
+    } else {
+      fail(`budget breached: ${fxDerived.files.length} files, ${fxDerived.totalCharacters} chars`);
+    }
+  }
+
+  // Organization isolation: the fixture db bundles a foreign-analysis edge
+  // (src/meridian/root.js -> src/foreign/leak.js) and a foreign file;
+  // retrieval filters by analysis_id exactly where the real query chain
+  // does.
+  {
+    const edgesEmulator = fixtureDb.from("edges") as unknown as {
+      select: () => {
+        eq: (
+          col: string,
+          value: string,
+        ) => {
+          or: (filterArg: string) => Promise<{ data: { target_file_id: string }[] | null; error: unknown }>;
+        };
+      };
+    };
+    const foreignRows = await edgesEmulator
+      .select()
+      .eq("analysis_id", "other_analysis")
+      .or("source_file_id.in.(fx_hop_root)");
+    if (foreignRows.data?.length === 1 && foreignRows.data[0].target_file_id === "fx_foreign_leak") {
+      pass("isolation probe is real: the foreign edge exists under other_analysis");
+    } else {
+      fail(`isolation probe broken: ${JSON.stringify(foreignRows.data)}`);
+    }
+    const leakQueries = [fxHop, fxCycle, fxDerived];
+    if (leakQueries.every((r) => !r.files.some((f) => f.path === "src/foreign/leak.js"))) {
+      pass("foreign-analysis edges and files never leak into another organization's retrieval");
+    } else {
+      fail(`foreign leak reached retrieval: ${[...leakQueries.flatMap((r) => r.files.map((f) => f.path))].join(", ")}`);
+    }
   }
 }
 
