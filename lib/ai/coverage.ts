@@ -23,6 +23,7 @@
 
 import type { QuestionPlan } from "./planner.ts";
 import type { RetrievalResult, RetrievedWindow } from "./retrieval.ts";
+import type { ConceptIndex, QuestionConceptMapping } from "./concepts/types.ts";
 
 export type CoverageStatus = "found" | "partial" | "unknown";
 
@@ -187,11 +188,14 @@ export function evaluateCoverage(plan: QuestionPlan, result: RetrievalResult): C
 
       let status: CoverageStatus;
       let reason: string;
+      // Ensure concept-specific source text, not just category-affiliated text.
       const textEvidenced = evidence.filter((e) => e.signal === "source-text");
       if (affiliated.length === 0) {
         status = "unknown";
         reason = `no retrieved file is affiliated with the "${category}" layer of "${concept.token}"`;
       } else if (textEvidenced.length > 0) {
+        // Concept-specific check: evidence must both match the concept variant and be from
+        // a window whose affiliation matches the category we are evaluating for this concept.
         status = "found";
         const shown = textEvidenced.slice(0, 3).map((e) => `${e.path} (${e.provenance}, via "${e.matchedVariant}")`);
         reason = `source text in ${shown.join(", ")} establishes the "${category}" layer of "${concept.token}"`;
@@ -220,6 +224,149 @@ export function evaluateCoverage(plan: QuestionPlan, result: RetrievalResult): C
   return {
     query: plan.query,
     concepts,
+    summary: { found, partial, unknown },
+    unknownNote: UNKNOWN_NOTE,
+  };
+}
+
+
+// ── Adaptive coverage ─────────────────────────────────────────────────────────
+
+/**
+ * Builds a dynamic affiliation map for the categories discovered in the
+ * concept index. Unlike CATEGORY_AFFILIATION (which is generic and repo-agnostic),
+ * this derives affiliation directly from the concept's own file paths and roles.
+ *
+ * Returns a map from category label (e.g. "controller", "middleware") to
+ * the set of fileIds in the concept that carry that role. Used by
+ * evaluateCoverageAdaptive to check affiliation without any hardcoded category list.
+ */
+function buildConceptAffiliationMap(
+  mapping: QuestionConceptMapping,
+  result: RetrievalResult,
+): Map<string, { filePaths: Set<string>; roles: Set<string> }> {
+  const affiliationMap = new Map<string, { filePaths: Set<string>; roles: Set<string> }>();
+
+  for (const concept of mapping.topConcepts) {
+    // Use the concept's own discoveredCategories (architectural roles from the
+    // analysis's existing file_roles table — not hardcoded)
+    for (const category of concept.discoveredCategories) {
+      if (!affiliationMap.has(category)) {
+        affiliationMap.set(category, { filePaths: new Set(), roles: new Set() });
+      }
+      const entry = affiliationMap.get(category)!;
+      // Files in this concept that carry this role
+      for (const fp of concept.filePaths) {
+        entry.filePaths.add(fp);
+      }
+      entry.roles.add(category);
+    }
+  }
+
+  return affiliationMap;
+}
+
+/**
+ * Adaptive coverage evaluation that uses the ConceptIndex and QuestionConceptMapping
+ * to derive expected evidence categories from the REPOSITORY's own structure,
+ * not from a hardcoded glossary.
+ *
+ * Falls back to evaluateCoverage() when the concept mapping produces no
+ * top concepts (e.g. for queries about entirely unknown subsystems).
+ *
+ * This replaces the hardcoded CATEGORY_AFFILIATION lookup for concept-matched
+ * categories, while preserving all existing provenance, signal and evidence
+ * semantics.
+ */
+export function evaluateCoverageAdaptive(
+  plan: QuestionPlan,
+  result: RetrievalResult,
+  mapping: QuestionConceptMapping,
+  _index: ConceptIndex,
+): CoverageEvaluation {
+  // If no concepts matched, fall back to the existing deterministic evaluator
+  if (mapping.topConcepts.length === 0) {
+    return evaluateCoverage(plan, result);
+  }
+
+  const adaptiveConcepts: ConceptCoverage[] = [];
+  let found = 0;
+  let partial = 0;
+  let unknown = 0;
+
+  for (const concept of mapping.topConcepts) {
+    const variantList = [
+      concept.displayName,
+      ...concept.normalizedTerms,
+    ];
+
+    // Derive expected categories from the concept's own files' roles
+    // (not from a hardcoded word→categories map)
+    const expectedCategories = concept.discoveredCategories.length > 0
+      ? concept.discoveredCategories
+      : ["unclassified"];
+
+    const categories: CategoryCoverage[] = [];
+
+    for (const category of expectedCategories) {
+      // Affiliation: windows whose file path is in this concept's file list,
+      // OR whose role matches this category. All derived from the index — no
+      // hardcoded segment names.
+      const conceptFilePaths = new Set(concept.filePaths);
+      const affiliated = result.windows.filter((win) => {
+        if (conceptFilePaths.has(win.path)) return true;
+        // Also check if the window's reason records the matching role
+        const roleMatch = ROLE_IN_REASON.exec(win.reason);
+        return roleMatch !== null && roleMatch[1] === category;
+      });
+
+      const evidence = affiliated
+        .map((win) => classifyWindow(win, variantList))
+        .sort(
+          (a, b) =>
+            SIGNAL_RANK[a.signal] - SIGNAL_RANK[b.signal] ||
+            a.path.localeCompare(b.path) ||
+            a.startLine - b.startLine,
+        )
+        .slice(0, 8);
+
+      let status: CoverageStatus;
+      let reason: string;
+      const textEvidenced = evidence.filter((e) => e.signal === "source-text");
+
+      if (affiliated.length === 0) {
+        status = "unknown";
+        reason = `no retrieved file is affiliated with the "${category}" layer of concept "${concept.displayName}"`;
+      } else if (textEvidenced.length > 0) {
+        status = "found";
+        const shown = textEvidenced.slice(0, 3).map((e) => `${e.path} (${e.provenance}, via "${e.matchedVariant}")`);
+        reason = `source text in ${shown.join(", ")} establishes the "${category}" layer of concept "${concept.displayName}"`;
+      } else {
+        status = "partial";
+        const nameMatches = evidence.filter((e) => e.signal === "symbol-name").length;
+        const relationHints = evidence.filter(
+          (e) => e.signal === "relationship-indexed" || e.signal === "relationship-derived",
+        ).length;
+        const uniquePaths = [...new Set(evidence.map((e) => e.path))].slice(0, 3);
+        reason = `concept-affiliated files exist (e.g. ${uniquePaths.join(", ")})`
+          + (nameMatches > 0 ? `; ${nameMatches} window(s) echo the concept in symbol names` : "")
+          + (relationHints > 0 ? `; ${relationHints} relationship-traversed file(s)` : "")
+          + `, but the retrieved text does not establish "${category}" behaviour of "${concept.displayName}"`;
+      }
+
+      if (status === "found") found += 1;
+      else if (status === "partial") partial += 1;
+      else unknown += 1;
+
+      categories.push({ category, status, reason, evidence });
+    }
+
+    adaptiveConcepts.push({ token: concept.displayName, categories });
+  }
+
+  return {
+    query: plan.query,
+    concepts: adaptiveConcepts,
     summary: { found, partial, unknown },
     unknownNote: UNKNOWN_NOTE,
   };

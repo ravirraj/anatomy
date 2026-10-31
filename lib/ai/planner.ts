@@ -17,6 +17,7 @@ import {
   isOnboardingQuery,
   tokenVariants,
 } from "./retrieval.ts";
+import type { ConceptIndex } from "./concepts/types.ts";
 
 export const INTENTS = [
   "explain-architecture",
@@ -59,6 +60,8 @@ export type QuestionPlan = {
    * paying for retrieval.
    */
   isAnswerable: boolean;
+  /** Discovered concepts from repository index when provided to planner. */
+  matchedConceptIds?: string[];
 };
 
 // Action verbs describing what the asker wants done with the answer, never a
@@ -196,7 +199,7 @@ function looksIdentifier(word: string): boolean {
     || /\(/.test(word);
 }
 
-export function planQuestion(query: string): QuestionPlan {
+export function planQuestion(query: string, conceptIndex?: ConceptIndex): QuestionPlan {
   const isOnboarding = isOnboardingQuery(query);
   const tokens = extractQueryTokens(query);
 
@@ -244,10 +247,35 @@ export function planQuestion(query: string): QuestionPlan {
         variants.push({ text: subtoken, source: "subtoken" });
       }
     }
+    const matchedConceptIds: string[] = [];
+    if (conceptIndex) {
+      for (const v of variants) {
+        const hits = conceptIndex.termToConcepts.get(v.text);
+        if (hits) {
+          for (const hid of hits) {
+            if (!matchedConceptIds.includes(hid)) matchedConceptIds.push(hid);
+          }
+        }
+      }
+    }
+
+    // Adaptive categories from matched repository concepts take precedence when available
+    const adaptiveCategories: string[] = [];
+    if (conceptIndex && matchedConceptIds.length > 0) {
+      for (const cid of matchedConceptIds) {
+        const c = conceptIndex.concepts.find((x) => x.id === cid);
+        if (c) {
+          for (const cat of c.discoveredCategories) {
+            if (!adaptiveCategories.includes(cat)) adaptiveCategories.push(cat);
+          }
+        }
+      }
+    }
+
     return {
       token,
       variants,
-      expectedEvidence: expectedEvidenceFor(variants),
+      expectedEvidence: adaptiveCategories.length > 0 ? adaptiveCategories : expectedEvidenceFor(variants),
     };
   });
 
