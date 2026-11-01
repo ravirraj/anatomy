@@ -2,9 +2,9 @@
 //
 //   node scripts/test-qa.ts
 
-import { answerQuestion, type Cache } from "../lib/ai/tasks.ts";
+import { answerQuestion, cacheKey, type Cache } from "../lib/ai/tasks.ts";
 import { CitationError } from "../lib/ai/citations.ts";
-import type { QuestionInput } from "../lib/ai/prompts.ts";
+import { QUESTION_SYSTEM, questionMessage, type QuestionInput } from "../lib/ai/prompts.ts";
 
 const results: string[] = [];
 const pass = (m: string) => results.push(`ok    ${m}`);
@@ -125,7 +125,10 @@ async function run() {
     }
   }
 
-  // Test 3: Changing file content hash invalidates cache (produces miss)
+  // Test 3: A content edit changes the file's hash, which production renders
+  // into the window header (`--- File: x [hash: …] ---`), so the rendered
+  // context changes and the cache misses naturally. (The files list itself is
+  // no longer a key component: the rendered message is the evidence identity.)
   {
     let completeCalls = 0;
     const modifiedInput: QuestionInput = {
@@ -137,6 +140,8 @@ async function run() {
         },
         sampleFiles[1],
       ],
+      contextText:
+        "--- File: lib/auth/session.ts (lines 10-40) [hash: ffffffffa] ---\nfunction createSession() { return db.query(); }",
     };
 
     const newAnswer = await answerQuestion(modifiedInput, {
@@ -625,6 +630,313 @@ Database client initialization is in \`lib/db/client.ts#L5-L25\`.
       pass("a cache write failure surfaces as an error, per the existing contract");
     } else {
       fail("cache write failure was silently swallowed");
+    }
+  }
+
+  // ---- context-aware answer cache keys (CI-2) ----
+  // The key is now a fingerprint of the exact system and user messages the
+  // model receives, so anything that changes the effective input changes the
+  // identity, and anything constant (sorted coverage lists, identical asks)
+  // still hits. Each test drives its own isolated cache.
+
+  const localCache = () => {
+    const store = new Map<string, string>();
+    const counts = { model: 0 };
+    const cache: Cache = {
+      async read(key) {
+        return store.get(key) ?? null;
+      },
+      async write({ key, body }) {
+        store.set(key, body);
+      },
+      async delete(key) {
+        store.delete(key);
+      },
+    };
+    return { store, counts, cache };
+  };
+  const sessionAnswer = "`lib/auth/session.ts#L10-L40` opens the session.";
+  const wrap = (window1: string) =>
+    `--- File: lib/auth/session.ts (${window1}) [hash: a1b2c3d4] ---\nsession code`;
+
+  // Test 18: identical rendered context for identical files hits; a different
+  // window composition (different line ranges) is a different input, a miss.
+  {
+    const { cache, counts } = localCache();
+    const mk = (window1: string): QuestionInput => ({ ...baseInput, contextText: wrap(window1) });
+    const first = await answerQuestion(mk("lines 1-30"), {
+      cache,
+      complete: async () => {
+        counts.model++;
+        return sessionAnswer;
+      },
+    });
+    const afterFirst = counts.model;
+    const repeat = await answerQuestion(mk("lines 1-30"), {
+      cache,
+      complete: async () => {
+        counts.model++;
+        return sessionAnswer;
+      },
+    });
+    const afterRepeat = counts.model;
+    const reranged = await answerQuestion(mk("lines 31-60"), {
+      cache,
+      complete: async () => {
+        counts.model++;
+        return sessionAnswer;
+      },
+    });
+    const afterReranged = counts.model;
+    if (
+      first.cached === false &&
+      afterFirst === 1 &&
+      repeat.cached === true &&
+      afterRepeat === 1 &&
+      reranged.cached === false &&
+      afterReranged === 2
+    ) {
+      pass("window/composition change misses; identical rendered context still hits");
+    } else {
+      fail(`window composition keys wrong: first=${first.cached}/${afterFirst} repeat=${repeat.cached}/${afterRepeat} reranged=${reranged.cached}/${afterReranged}`);
+    }
+  }
+
+  // Test 19: identical file hashes with entirely different rendered context
+  // are a miss: under the old files-list key the first answer would have been
+  // served for a question whose effective evidence changed.
+  {
+    const { cache, counts } = localCache();
+    const first = await answerQuestion(
+      { ...baseInput, contextText: "window A: session bootstrap text" },
+      { cache, complete: async () => { counts.model++; return sessionAnswer; } },
+    );
+    const afterFirst = counts.model;
+    const second = await answerQuestion(
+      { ...baseInput, contextText: "window B: a completely different attribution slice" },
+      { cache, complete: async () => { counts.model++; return sessionAnswer; } },
+    );
+    if (first.cached === false && afterFirst === 1 && second.cached === false && counts.model === 2) {
+      pass("identical file hashes with different context produce a cache miss");
+    } else {
+      fail(`context identity wrong: first=${first.cached}/${afterFirst} second=${second.cached}/${counts.model}`);
+    }
+  }
+
+  // Test 20: changed coverage information renders into the message, so it
+  // invalidates the cache.
+  {
+    const { cache, counts } = localCache();
+    const cov = (verified: string[], unknown: string[]) => ({
+      question: baseInput.question,
+      contextText: baseInput.contextText,
+      files: sampleFiles,
+      coverage: { verified, partial: [], unknown, unknownNote: "unknown layers are not proof of absence" },
+    });
+    const first = await answerQuestion(cov(["controllers", "middleware"], ["models"]), {
+      cache,
+      complete: async () => {
+        counts.model++;
+        return sessionAnswer;
+      },
+    });
+    const afterFirst = counts.model;
+    const second = await answerQuestion(cov(["controllers"], ["middleware", "models"]), {
+      cache,
+      complete: async () => {
+        counts.model++;
+        return sessionAnswer;
+      },
+    });
+    if (first.cached === false && afterFirst === 1 && second.cached === false && counts.model === 2) {
+      pass("changed coverage information produces a cache miss");
+    } else {
+      fail(`coverage change ignored: first=${first.cached}/${afterFirst} second=${second.cached}/${counts.model}`);
+    }
+  }
+
+  // Test 21: coverage list order alone cannot change the rendered message
+  // (questionMessage sorts the lists), so reordering is a hit.
+  {
+    const { cache, counts } = localCache();
+    const cov = (verified: string[], unknown: string[]) => ({
+      question: baseInput.question,
+      contextText: baseInput.contextText,
+      files: sampleFiles,
+      coverage: { verified, partial: [], unknown, unknownNote: "unknown layers are not proof of absence" },
+    });
+    await answerQuestion(cov(["middleware", "controllers"], ["models", "frontend"]), {
+      cache,
+      complete: async () => {
+        counts.model++;
+        return sessionAnswer;
+      },
+    });
+    const reordered = await answerQuestion(cov(["controllers", "middleware"], ["frontend", "models"]), {
+      cache,
+      complete: async () => {
+        counts.model++;
+        return sessionAnswer;
+      },
+    });
+    if (counts.model === 1 && reordered.cached === true) {
+      pass("coverage list reordering alone is a cache hit");
+    } else {
+      fail(`reordering invalidated: model=${counts.model} reordered=${reordered.cached}`);
+    }
+  }
+
+  // Test 22: added or changed packaging evidence changes the rendered input,
+  // so it misses even with identical file hashes.
+  {
+    const { cache, counts } = localCache();
+    const withPackaging = (pack: string): QuestionInput => ({
+      ...baseInput,
+      contextText: `${baseInput.contextText}\n\n${pack}`,
+    });
+    const first = await answerQuestion(baseInput, {
+      cache,
+      complete: async () => {
+        counts.model++;
+        return sessionAnswer;
+      },
+    });
+    const afterFirst = counts.model;
+    const packaged = await answerQuestion(
+      withPackaging("[Manifests]\npackage.json declares pnpm workspaces"),
+      {
+        cache,
+        complete: async () => {
+          counts.model++;
+          return sessionAnswer;
+        },
+      },
+    );
+    const afterPackaged = counts.model;
+    const changed = await answerQuestion(withPackaging("[Manifests]\npackage.json declares npm workspaces"), {
+      cache,
+      complete: async () => {
+        counts.model++;
+        return sessionAnswer;
+      },
+    });
+    if (first.cached === false && afterFirst === 1 && packaged.cached === false && afterPackaged === 2 && changed.cached === false && counts.model === 3) {
+      pass("added or changed packaging evidence produces a cache miss");
+    } else {
+      fail(`packaging identity wrong: first=${first.cached}/${afterFirst} packaged=${packaged.cached}/${afterPackaged} changed=${changed.cached}/${counts.model}`);
+    }
+  }
+
+  // Test 23: API-surface appendix text (signatures, documentation) is part of
+  // the rendered input: a change there is a miss.
+  {
+    const { cache, counts } = localCache();
+    const withApi = (signature: string): QuestionInput => ({
+      ...baseInput,
+      contextText: `${baseInput.contextText}\n[API surface]\n- createSession (function): ${signature}`,
+    });
+    const first = await answerQuestion(withApi("createSession(): void"), {
+      cache,
+      complete: async () => {
+        counts.model++;
+        return sessionAnswer;
+      },
+    });
+    const afterFirst = counts.model;
+    const second = await answerQuestion(withApi("createSession(config): Promise<Session>"), {
+      cache,
+      complete: async () => {
+        counts.model++;
+        return sessionAnswer;
+      },
+    });
+    if (first.cached === false && afterFirst === 1 && second.cached === false && counts.model === 2) {
+      pass("changed API-surface signature or documentation produces a cache miss");
+    } else {
+      fail(`api-surface identity wrong: first=${first.cached}/${afterFirst} second=${second.cached}/${counts.model}`);
+    }
+  }
+
+  // Test 24: the identical complete model input — question, context, coverage
+  // — still hits, with zero redundant invalidation.
+  {
+    const { cache, counts } = localCache();
+    const full: QuestionInput = {
+      ...baseInput,
+      contextText: `${baseInput.contextText}\n\n[Dependencies]\nimported by 3 indexed files`,
+      coverage: { verified: ["controllers"], partial: [], unknown: ["models"], unknownNote: "note stays identical" },
+    };
+    const first = await answerQuestion(full, {
+      cache,
+      complete: async () => {
+        counts.model++;
+        return sessionAnswer;
+      },
+    });
+    const second = await answerQuestion(full, {
+      cache,
+      complete: async () => {
+        counts.model++;
+        return sessionAnswer;
+      },
+    });
+    if (first.cached === false && counts.model === 1 && second.cached === true && counts.model === 1) {
+      pass("identical complete model input produces a cache hit");
+    } else {
+      fail(`identical input invalidated: model=${counts.model} first=${first.cached} second=${second.cached}`);
+    }
+  }
+
+  // Test 25: casing differences keep hitting the same answer as before; the
+  // model still receives the original question text on the generating ask.
+  {
+    const { cache, counts } = localCache();
+    let seenQuestionLine = "";
+    const first = await answerQuestion(
+      { ...baseInput, question: "How does authentication establish a session?" },
+      {
+        cache,
+        complete: async (_model, _system, user) => {
+          counts.model++;
+          seenQuestionLine = user.split("\n")[0]!;
+          return sessionAnswer;
+        },
+      },
+    );
+    const lowered = await answerQuestion(
+      { ...baseInput, question: "how does authentication establish a session?" },
+      {
+        cache,
+        complete: async () => {
+          counts.model++;
+          return sessionAnswer;
+        },
+      },
+    );
+    if (
+      first.cached === false &&
+      counts.model === 1 &&
+      seenQuestionLine === "Question: How does authentication establish a session?" &&
+      lowered.cached === true &&
+      counts.model === 1
+    ) {
+      pass("question casing differences preserve case-insensitive cache hits");
+    } else {
+      fail(`casing semantics wrong: model=${counts.model} seen=${JSON.stringify(seenQuestionLine)} first=${first.cached} lowered=${lowered.cached}`);
+    }
+  }
+
+  // Test 26 (unit): the system prompt is part of the key envelope, so a
+  // changed system prompt can never serve under an unchanged identity.
+  {
+    const body = questionMessage(baseInput);
+    const solved = cacheKey("answer-question", "test/explain-v1", { system: QUESTION_SYSTEM, body });
+    const altered = cacheKey("answer-question", "test/explain-v1", { system: `${QUESTION_SYSTEM} changed`, body });
+    const sameAgain = cacheKey("answer-question", "test/explain-v1", { system: QUESTION_SYSTEM, body });
+    if (solved === sameAgain && solved !== altered) {
+      pass("a changed system prompt produces a different cache key");
+    } else {
+      fail(`system prompt identity wrong: solved=${solved.slice(0, 8)} altered=${altered.slice(0, 8)}`);
     }
   }
 

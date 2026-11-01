@@ -99,11 +99,22 @@ export async function answerQuestion(
   }
 
   const run = traceable(async (question: QuestionInput): Promise<QuestionAnswer> => {
+    // Cache identity is the exact input the model sees: the system prompt and
+    // the rendered user message. The message carries the question, the whole
+    // formatted context (windows, packaging, API surface, formatting) and the
+    // coverage block, so packaging or coverage changes that leave the file
+    // hashes untouched still change the key. The task's old files list is not
+    // in the payload: everything citable is rendered into the message, whose
+    // window headers name each file and its hash. The question is keyed in
+    // lower case — the model still receives the original text — so a casing
+    // difference keeps hitting the same answer, as before. Both renders come
+    // from the same questionMessage; only the question field differs.
     const key = cacheKey("answer-question", model, {
-      q: question.question.trim().toLowerCase(),
-      files: [...question.files]
-        .sort((a, b) => a.path.localeCompare(b.path))
-        .map((f) => ({ path: f.path, hash: f.contentHash })),
+      system: QUESTION_SYSTEM,
+      body: questionMessage({
+        ...question,
+        question: question.question.trim().toLowerCase(),
+      }),
     });
 
     const hit = await deps.cache.read(key);
