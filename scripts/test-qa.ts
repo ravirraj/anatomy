@@ -19,6 +19,9 @@ async function run() {
     async write({ key, body }) {
       store.set(key, body);
     },
+    async delete(key: string) {
+      store.delete(key);
+    },
   };
 
   const sampleFiles = [
@@ -386,6 +389,242 @@ Database client initialization is in \`lib/db/client.ts#L5-L25\`.
       pass("SDK integration question carries coverage and client/server separation guidance");
     } else {
       fail(`SDK integration synthesis failed: systemHasRule=${seenSystem.includes("SDK and Client/Server Separation")} userHasCoverage=${seenUser.includes("Evidence coverage")} citations=${answer.citations.length}`);
+    }
+  }
+
+  // ---- self-healing answer cache (CI-1) ----
+  // A cached answer is verified before serving, exactly as before; the new
+  // behavior is only what happens when that verification rejects it.
+
+  // Test 12: an invalid cached answer is never served: it is deleted, the
+  // answer is regenerated, verified, and cached like any miss.
+  {
+    const poisoned = "The session is built by `lib/ghost.ts#L1-L5`.";
+    let readCalls = 0;
+    let deleteCalls = 0;
+    let writeCalls = 0;
+    let completeCalls = 0;
+    let writtenBody = "";
+    const healing: Cache = {
+      async read() {
+        readCalls++;
+        return readCalls === 1 ? poisoned : null;
+      },
+      async write({ body }) {
+        writeCalls++;
+        writtenBody = body;
+      },
+      async delete() {
+        deleteCalls++;
+      },
+    };
+    const answer = await answerQuestion(baseInput, {
+      cache: healing,
+      complete: async () => {
+        completeCalls++;
+        return "Session handling is established in `lib/auth/session.ts#L10-L40`.";
+      },
+    });
+    const regenerated = "Session handling is established in `lib/auth/session.ts#L10-L40`.";
+    if (
+      deleteCalls === 1 &&
+      completeCalls === 1 &&
+      writeCalls === 1 &&
+      writtenBody === regenerated &&
+      answer.cached === false &&
+      answer.body === regenerated &&
+      answer.citations.length === 1 &&
+      answer.citations[0].path === "lib/auth/session.ts"
+    ) {
+      pass("invalid cache hit self-heals: deleted, regenerated, verified, and cached");
+    } else {
+      fail(`self-heal failed: delete=${deleteCalls} complete=${completeCalls} write=${writeCalls} written=${JSON.stringify(writtenBody)} answer=${JSON.stringify(answer)}`);
+    }
+  }
+
+  // Test 13: a valid cache hit is still served unchanged, without calling the
+  // model, and never deleted.
+  {
+    const store = new Map<string, string>();
+    let completeCalls = 0;
+    let deleteCalls = 0;
+    const validCache: Cache = {
+      async read(key) {
+        return store.get(key) ?? null;
+      },
+      async write({ key, body }) {
+        store.set(key, body);
+      },
+      async delete() {
+        deleteCalls++;
+      },
+    };
+    const first = await answerQuestion(baseInput, {
+      cache: validCache,
+      complete: async () => {
+        completeCalls++;
+        return "Sessions live at `lib/auth/session.ts#L10-L40`.";
+      },
+    });
+    const second = await answerQuestion(baseInput, {
+      cache: validCache,
+      complete: async () => {
+        completeCalls++;
+        return "never reachable";
+      },
+    });
+    if (
+      first.cached === false &&
+      completeCalls === 1 &&
+      second.cached === true &&
+      completeCalls === 1 &&
+      deleteCalls === 0 &&
+      second.body === first.body
+    ) {
+      pass("valid cache hit is served without the model and without any deletion");
+    } else {
+      fail(`valid hit corrupted: complete=${completeCalls} delete=${deleteCalls} first=${JSON.stringify(first)} second=${JSON.stringify(second)}`);
+    }
+  }
+
+  // Test 14: even after dropping the invalid entry, a regeneration that
+  // fails verification is a controlled failure with no cache write.
+  {
+    const poisoned = "Cited at `lib/ghost.ts#L1-L5`.";
+    let readCalls = 0;
+    let deleteCalls = 0;
+    let writeCalls = 0;
+    let completeCalls = 0;
+    let wrote = false;
+    const failing: Cache = {
+      async read() {
+        readCalls++;
+        return readCalls === 1 ? poisoned : null;
+      },
+      async write() {
+        writeCalls++;
+        wrote = true;
+      },
+      async delete() {
+        deleteCalls++;
+      },
+    };
+    let outcome: { ok: boolean; error?: unknown } = { ok: false };
+    try {
+      await answerQuestion(baseInput, {
+        cache: failing,
+        complete: async () => {
+          completeCalls++;
+          return "Still invented: `lib/ghost.ts#L1-L5`.";
+        },
+      });
+      outcome = { ok: true };
+    } catch (error) {
+      outcome = { ok: true, error };
+    }
+    if (
+      !outcome.ok ||
+      (deleteCalls === 1 &&
+        completeCalls === 1 &&
+        writeCalls === 0 &&
+        !wrote &&
+        outcome.error instanceof CitationError)
+    ) {
+      pass("regeneration that fails verification is a controlled failure and nothing is cached");
+    } else {
+      fail(`regeneration contract broken: delete=${deleteCalls} complete=${completeCalls} write=${writeCalls} error=${JSON.stringify(outcome, Object.getOwnPropertyNames(outcome))}`);
+    }
+  }
+
+  // Test 15: a failing deletion never surfaces the invalid answer; the ask
+  // continues to regeneration and serves only the verified fresh body.
+  {
+    const poisoned = "The stale cached body says `lib/ghost.ts#L1-L5`.";
+    let deleteCalls = 0;
+    let writeCalls = 0;
+    let completeCalls = 0;
+    const brokenDelete: Cache = {
+      async read() {
+        return poisoned;
+      },
+      async write() {
+        writeCalls++;
+      },
+      async delete() {
+        deleteCalls++;
+        throw new Error("delete refused");
+      },
+    };
+    const answer = await answerQuestion(baseInput, {
+      cache: brokenDelete,
+      complete: async () => {
+        completeCalls++;
+        return "Fresh evidence: `lib/db/client.ts#L5-L25` connects the pool at session setup.";
+      },
+    });
+    if (
+      deleteCalls === 1 &&
+      completeCalls === 1 &&
+      writeCalls === 1 &&
+      answer.cached === false &&
+      !answer.body.includes("lib/ghost.ts") &&
+      answer.citations.length === 1 &&
+      answer.citations[0].path === "lib/db/client.ts"
+    ) {
+      pass("delete failure never serves the invalid answer; regeneration continues safely");
+    } else {
+      fail(`delete-failure handling wrong: delete=${deleteCalls} complete=${completeCalls} write=${writeCalls} answer=${JSON.stringify(answer)}`);
+    }
+  }
+
+  // Test 16: a plain cache miss behaves exactly as before.
+  {
+    let completeCalls = 0;
+    const missOnly: Cache = {
+      async read() {
+        return null;
+      },
+      async write() {},
+      async delete() {},
+    };
+    const answer = await answerQuestion(baseInput, {
+      cache: missOnly,
+      complete: async () => {
+        completeCalls++;
+        return "Miss-path answer with `lib/auth/session.ts#L10-L40`.";
+      },
+    });
+    if (completeCalls === 1 && answer.cached === false && answer.citations.length === 1) {
+      pass("cache miss still generates, verifies, and serves normally");
+    } else {
+      fail(`cache miss behavior changed: complete=${completeCalls} answer=${JSON.stringify(answer)}`);
+    }
+  }
+
+  // Test 17: a failing cache write follows the existing contract (the error
+  // propagates; nothing is served from it).
+  {
+    let threw = false;
+    try {
+      await answerQuestion(baseInput, {
+        cache: {
+          async read() {
+            return null;
+          },
+          async write() {
+            throw new Error("cache write refused");
+          },
+          async delete() {},
+        },
+        complete: async () => "`lib/auth/session.ts#L10-L40` holds the session logic.",
+      });
+    } catch {
+      threw = true;
+    }
+    if (threw) {
+      pass("a cache write failure surfaces as an error, per the existing contract");
+    } else {
+      fail("cache write failure was silently swallowed");
     }
   }
 

@@ -52,6 +52,9 @@ async function run() {
     async write({ key, body }) {
       memoryCache.set(key, body);
     },
+    async delete(key) {
+      memoryCache.delete(key);
+    },
   };
 
   const firstFile = retrieved.files[0];

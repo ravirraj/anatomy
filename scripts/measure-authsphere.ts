@@ -58,6 +58,9 @@ async function run() {
     async write({ key, body }) {
       memoryCache.set(key, body);
     },
+    async delete(key) {
+      memoryCache.delete(key);
+    },
   };
 
   const t1 = performance.now();

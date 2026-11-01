@@ -28,6 +28,8 @@ export type Task = "explain-file" | "explain-folder" | "classify-file" | "answer
 export type Cache = {
   read: (key: string) => Promise<string | null>;
   write: (entry: { key: string; task: Task; model: string; body: string }) => Promise<void>;
+  /** Removes one entry. Best effort from the caller's side: a failed delete never blocks serving, because every read re-verifies. */
+  delete: (key: string) => Promise<void>;
 };
 
 export type Explanation = { body: string; model: string; cached: boolean };
@@ -106,13 +108,32 @@ export async function answerQuestion(
 
     const hit = await deps.cache.read(key);
     if (hit !== null) {
-      verifyCitationsEvidence(hit, allowedEvidence, deps.allAnalysisFiles);
-      return {
-        body: hit,
-        model,
-        cached: true,
-        citations: extractCitations(hit, { allAnalysisFiles: deps.allAnalysisFiles }),
-      };
+      try {
+        verifyCitationsEvidence(hit, allowedEvidence, deps.allAnalysisFiles);
+        return {
+          body: hit,
+          model,
+          cached: true,
+          citations: extractCitations(hit, { allAnalysisFiles: deps.allAnalysisFiles }),
+        };
+      } catch (error) {
+        // A cached answer whose evidence no longer verifies is never served:
+        // not as the answer, and not as a citation set. Drop the entry (best
+        // effort) and regenerate; the fresh answer faces the same verification
+        // below before it is served or cached. One regeneration per ask — the
+        // hit path never recurses into itself, so a poisoned entry cannot
+        // loop.
+        if (!(error instanceof CitationError)) throw error;
+        try {
+          await deps.cache.delete(key);
+        } catch {
+          // Deletion failing is not a reason to fail the ask: the entry, if
+          // it somehow remains, is also never served, because reads
+          // re-verify every time. (If the write below also lands, the cached
+          // spot may keep the old row when the cache stores ignore
+          // duplicates — the verification here is what keeps it inert.)
+        }
+      }
     }
 
     const completer = deps.complete ?? complete;

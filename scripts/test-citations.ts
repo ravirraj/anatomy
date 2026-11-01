@@ -143,6 +143,10 @@ const allowed = new Set([
     async write() {
       fail("a failing answer must never be written to the cache");
     },
+    async delete() {
+      // explainFile's verification refuses here without healing, so nothing
+      // to delete in this scenario.
+    },
   };
   let threw = false;
   try {

@@ -119,6 +119,9 @@ const store = new Map<string, string>();
 	  async write(entry: { key: string; body: string }) {
 	    store.set(entry.key, entry.body);
 	  },
+	  async delete(key: string) {
+	    store.delete(key);
+	  },
 	};
 
 	const edgeKinds: EdgeKind[] = ["import"];

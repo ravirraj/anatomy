@@ -260,6 +260,16 @@ function cacheFor(db: Db, organizationId: string): Cache {
         .upsert({ organization_id: organizationId, key, task, model, body }, { onConflict: "organization_id,key", ignoreDuplicates: true });
       if (error) throw new Error(`Storing the answer in the cache failed: ${error.message}`);
     },
+    // The server's writer removes the entry too: members have no delete grant.
+    // Cheapest healing for an invalid cached answer is dropping its own row.
+    async delete(key) {
+      const { error } = await createAdminSupabase()
+        .from("ai_cache")
+        .delete()
+        .eq("organization_id", organizationId)
+        .eq("key", key);
+      if (error) throw new Error(`Deleting the cached answer failed: ${error.message}`);
+    },
   };
 }
 
