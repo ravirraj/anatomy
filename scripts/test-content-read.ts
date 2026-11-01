@@ -316,6 +316,19 @@ async function main(): Promise<void> {
       weird = error;
     }
     check("an unknown content_status is a ConsistencyError", throws(weird, "ConsistencyError", "the schema does not define"));
+
+    // Security states are intentionally quiet terminal states: no content
+    // lookup, GitHub fallback, or error payload can recover their bytes.
+    for (const status of ["excluded", "legacy_unclassified"] as const) {
+      const guarded = new FakeSupabase();
+      seedStored(guarded, { id: `f-${status}`, path: `${status}.ts`, content_status: status }, "const mustNotEscape = true;\n");
+      const fetch = fetchStub(() => {
+        throw new Error(`${status} must never trigger GitHub backfill`);
+      });
+      const beforeReads = guarded.contentReads.length;
+      const guardedOut = await read(guarded, `f-${status}`, fetch.fetchFile);
+      check(`${status} content returns null without storage or GitHub access`, guardedOut === null && fetch.calls.length === 0 && guarded.contentReads.length === beforeReads);
+    }
   }
 
   // --- absent-but-content: the metadata update lost, the storage won ---

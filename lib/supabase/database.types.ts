@@ -186,6 +186,47 @@ export type Database = {
           },
         ]
       }
+      content_quarantine: {
+        Row: {
+          classifier_version: string
+          content_hash: string
+          fingerprint: string
+          first_seen_at: string
+          hmac_key_version: number
+          last_seen_at: string
+          organization_id: string
+          reason_codes: string[]
+        }
+        Insert: {
+          classifier_version: string
+          content_hash: string
+          fingerprint: string
+          first_seen_at?: string
+          hmac_key_version: number
+          last_seen_at?: string
+          organization_id: string
+          reason_codes: string[]
+        }
+        Update: {
+          classifier_version?: string
+          content_hash?: string
+          fingerprint?: string
+          first_seen_at?: string
+          hmac_key_version?: number
+          last_seen_at?: string
+          organization_id?: string
+          reason_codes?: string[]
+        }
+        Relationships: [
+          {
+            foreignKeyName: "content_quarantine_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       file_contents: {
         Row: {
           content_hash: string

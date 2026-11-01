@@ -7,10 +7,10 @@
 
 import { createHash } from "node:crypto";
 import { MAX_FILE_BYTES } from "../parser/walk.ts";
-import { IntegrityError, type ContentKey, type ContentReference, type ContentWrite, type ContentWriteResult } from "./types.ts";
+import { ContentExcludedError, IntegrityError, type ContentKey, type ContentReference, type ContentWrite, type ContentWriteResult } from "./types.ts";
 import type { Db } from "./types.ts";
 
-export { IntegrityError } from "./types.ts";
+export { ContentExcludedError, IntegrityError } from "./types.ts";
 export type { ContentKey, ContentReference, ContentWrite, ContentWriteResult } from "./types.ts";
 
 /** The parser sets the bound twice over — once here, once in the schema. */
@@ -56,7 +56,10 @@ export async function putContents(db: Db, organizationId: string, content: Uint8
     throw new Error(`A file over ${MAX_CONTENT_BYTES} bytes is skipped by the parser and never stored (${content.byteLength} bytes given)`);
   }
   const [result] = await putContentsBatch(db, organizationId, [{ body: content }]);
-  if (!result.stored) throw new Error(`Storing content failed: ${result.reason}`);
+  if (!result.stored) {
+    if (result.reasonCode === "CG001") throw new ContentExcludedError();
+    throw new Error(`Storing content failed: ${result.reason}`);
+  }
   return { organizationId, contentHash: result.contentHash, size: result.size };
 }
 
@@ -95,6 +98,10 @@ export async function putContentsBatch(db: Db, organizationId: string, writes: r
   }
 
   if (prepared.length > 0) {
+    // The database security trigger takes one transaction advisory lock per
+    // hash. A stable lock order prevents two overlapping batches from
+    // deadlocking when their caller order differs.
+    prepared.sort((a, b) => a.contentHash.localeCompare(b.contentHash));
     const nowIso = new Date().toISOString();
     const { error } = await db
       .from("file_contents")
@@ -110,8 +117,8 @@ export async function putContentsBatch(db: Db, organizationId: string, writes: r
       );
     if (error) {
       for (const p of prepared) {
-        results[p.first] = { stored: false, reason: error.message };
-        for (const i of p.dupes ?? []) results[i] = { stored: false, reason: error.message };
+        results[p.first] = { stored: false, reason: error.message, reasonCode: error.code };
+        for (const i of p.dupes ?? []) results[i] = { stored: false, reason: error.message, reasonCode: error.code };
       }
       return results;
     }

@@ -12,7 +12,7 @@
 // the client's own query, not a security boundary.
 
 import { MAX_CONTENT_BYTES, existsContent, getContent, putContents, sha256 } from "../lib/content/store.ts";
-import { IntegrityError, type Db } from "../lib/content/types.ts";
+import { ContentExcludedError, IntegrityError, type Db } from "../lib/content/types.ts";
 
 const results: string[] = [];
 const pass = (m: string) => results.push(`ok    ${m}`);
@@ -29,6 +29,7 @@ const check = (message: string, condition: boolean) => {
 class FakeContentsTable {
   rows: { organization_id: string; content_hash: string; payload: string; size: number }[] = [];
   failNextWith: string | null = null;
+  failNextCode: string | undefined;
 
   async upsert(values: { organization_id: string; content_hash: string; payload: string; size: number; last_referenced_at?: string }[], opts: { onConflict: string; ignoreDuplicates?: boolean }) {
     if (opts.onConflict !== "organization_id,content_hash") {
@@ -37,7 +38,9 @@ class FakeContentsTable {
     if (this.failNextWith) {
       const error = this.failNextWith;
       this.failNextWith = null;
-      return { error: { message: error } };
+      const code = this.failNextCode;
+      this.failNextCode = undefined;
+      return { error: { message: error, code } };
     }
     for (const row of values) {
       if (this.rows.some((r) => r.organization_id === row.organization_id && r.content_hash === row.content_hash)) continue;
@@ -176,8 +179,14 @@ async function main(): Promise<void> {
   const forged = sha256(text("the body that would have replaced it, if overwrites existed"));
   table.rows.push({ organization_id: A, content_hash: forged, payload: "\\x" + Buffer.from(planted).toString("hex"), size: planted.byteLength });
   const collision = await putContents(db, A, text("the body that would have replaced it, if overwrites existed"));
-  const kept = await getContent(db, A, forged);
-  check("a body already under an identity is never rewritten", Buffer.from(kept!).equals(Buffer.from(planted)));
+  let collisionIntegrity = false;
+  try {
+    await getContent(db, A, forged);
+  } catch (error) {
+    collisionIntegrity = error instanceof IntegrityError;
+  }
+  check("a body already under an identity is never rewritten", table.rows.find((row) => row.organization_id === A && row.content_hash === forged)?.payload === "\\x" + Buffer.from(planted).toString("hex"));
+  check("a pre-existing hash/payload contradiction is still refused on read", collisionIntegrity);
   check("the second write reports the same identity, unchanged", collision.contentHash === forged);
 
   // A database failure surfaces as an error, and nothing is returned.
@@ -189,6 +198,18 @@ async function main(): Promise<void> {
     surfaced = error instanceof Error && error.message.startsWith("Storing content failed:");
   }
   check("a database failure on write surfaces as an error", surfaced);
+
+  // The quarantine trigger uses a dedicated, value-free SQLSTATE. The store
+  // turns it into a typed error without copying database diagnostics.
+  table.failNextWith = "content excluded by security policy";
+  table.failNextCode = "CG001";
+  let excluded = false;
+  try {
+    await putContents(db, A, text("blocked while quarantine wins"));
+  } catch (error) {
+    excluded = error instanceof ContentExcludedError && error.message === "content excluded by security policy";
+  }
+  check("a quarantine rejection is typed and contains no source value", excluded);
 
   // Anything the parser would refuse is refused here too: storage only
   // holds what the parser parsed.

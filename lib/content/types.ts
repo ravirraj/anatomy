@@ -17,7 +17,14 @@ export type ContentWrite = { body: Uint8Array };
  */
 export type ContentWriteResult =
   | { stored: true; contentHash: string; size: number }
-  | { stored: false; reason: string };
+  | { stored: false; reason: string; reasonCode?: string };
+
+export type ContentStatus = "stored" | "absent" | "excluded" | "legacy_unclassified";
+
+/** Only an explicitly absent file may use the commit-pinned GitHub backfill. */
+export function isBackfillEligible(status: string): status is "absent" {
+  return status === "absent";
+}
 
 /** A fact about stored bytes: which organization holds them, what their identity is, how long they are. */
 export type ContentReference = {
@@ -53,6 +60,18 @@ export class ConsistencyError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ConsistencyError";
+  }
+}
+
+/**
+ * The database security gate rejected bytes that were quarantined while a
+ * writer or GitHub backfill was in flight. The message is deliberately
+ * generic and safe to surface in diagnostics.
+ */
+export class ContentExcludedError extends Error {
+  constructor() {
+    super("content excluded by security policy");
+    this.name = "ContentExcludedError";
   }
 }
 

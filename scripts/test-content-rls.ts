@@ -47,8 +47,8 @@ function query(file: string): unknown {
 
     if (file.endsWith("test-content-rls-after.sql")) {
       const lastLine = lines[lines.length - 1];
-      const [contents, test_orgs] = (lastLine ?? "0\t0").split("\t").map(Number);
-      return [{ contents, test_orgs }];
+      const [contents, quarantine, test_orgs] = (lastLine ?? "0\t0\t0").split("\t").map(Number);
+      return [{ contents, quarantine, test_orgs }];
     }
 
     const rows = lines
@@ -97,10 +97,11 @@ if (failed.length > 0) fail(`${failed.length} of ${rows.length} check(s) failed`
 // gone with the connection.
 const [state] = query("scripts/test-content-rls-after.sql") as {
   contents: number;
+  quarantine: number;
   test_orgs: number;
 }[];
-if (state.contents !== 0 || state.test_orgs !== 0) {
-  fail(`the test transaction left things behind: ${state.contents} content row(s), ${state.test_orgs} test organization(s)`);
+if (state.contents !== 0 || state.quarantine !== 0 || state.test_orgs !== 0) {
+  fail(`the test transaction left things behind: ${state.contents} content row(s), ${state.quarantine} quarantine row(s), ${state.test_orgs} test organization(s)`);
 }
 
 console.log(`\nThe ${isLocal ? "local" : "linked"} database was left untouched, and every security property held.`);

@@ -101,7 +101,9 @@ async function main(): Promise<void> {
     hash,
     fan_in: 0,
     fan_out: 0,
-    // content_status left at the schema's own 'absent' default
+    // The security default is 'legacy_unclassified'; an ingestible file
+    // declares 'absent' itself, so this tests backfill eligibility explicitly.
+    content_status: "absent",
   });
   if (file.error) throw new Error(`Creating the test file failed: ${file.error.message}`);
 

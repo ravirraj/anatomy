@@ -16,7 +16,7 @@ import { countLines } from "../parser/walk.ts";
 import { fetchFileAt, type Repository } from "../pipeline/github.ts";
 import { createAdminSupabase } from "../supabase/admin.ts";
 import { cachedGetContent, getContentCache, type ContentCache } from "./cache.ts";
-import { ConsistencyError, type Db } from "./types.ts";
+import { ContentExcludedError, ConsistencyError, isBackfillEligible, type Db } from "./types.ts";
 import { existsContent, getContent, putContents, sha256 } from "./store.ts";
 
 export { ConsistencyError, IntegrityError } from "./types.ts";
@@ -119,6 +119,9 @@ async function loadSource(db: Db, fileId: string, deps: BackfillDeps): Promise<F
  * `absent` one goes to the verified backfill.
  */
 async function sourceOfCheckedRows(db: Db, file: FileRecord & { hash: string }, deps: BackfillDeps): Promise<string | null> {
+  // Security states are terminal for this read. They never inspect the
+  // content table and, critically, never reach GitHub backfill.
+  if (file.content_status === "excluded" || file.content_status === "legacy_unclassified") return null;
   if (file.content_status === "stored") {
     // The store verifies the row itself — hash against the identity, length
     // against the row's own record — and throws rather than serve damaged
@@ -132,7 +135,7 @@ async function sourceOfCheckedRows(db: Db, file: FileRecord & { hash: string }, 
     }
     return bytesToText(bytes);
   }
-  if (file.content_status !== "absent") {
+  if (!isBackfillEligible(file.content_status)) {
     throw new ConsistencyError(
       `content_status of ${file.path} is ${JSON.stringify(file.content_status)}, which the schema does not define`,
     );
@@ -149,7 +152,7 @@ async function sourceOfCheckedRows(db: Db, file: FileRecord & { hash: string }, 
     // warned about — the next read flips it again — never a reason to
     // reject what was already verified.
     const outcome = await flagStored(deps, { id: file.id, organizationId: file.organization_id, hash: file.hash });
-    if (outcome.state === "stale" || outcome.state === "vanished") return null;
+    if (outcome.state === "blocked" || outcome.state === "stale" || outcome.state === "vanished") return null;
     if (deps.cache !== null) {
       (deps.cache ?? fromCacheSingleton()).set(file.organization_id, file.hash, bytes);
     }
@@ -183,7 +186,14 @@ async function backfillFromGitHub(db: Db, file: FileRecord & { hash: string }, d
     );
   }
 
-  await putContents(writerFor(deps), file.organization_id, bytes);
+  try {
+    await putContents(writerFor(deps), file.organization_id, bytes);
+  } catch (error) {
+    // Quarantine may have won after the GitHub request began. That is a
+    // normal security race: retain, cache, and serve nothing.
+    if (error instanceof ContentExcludedError) return null;
+    throw error;
+  }
   if (!(await existsContent(writerFor(deps), file.organization_id, file.hash))) {
     throw new Error(`putContents reported success but ${file.hash}'s content row is not there`);
   }
@@ -200,17 +210,18 @@ async function backfillFromGitHub(db: Db, file: FileRecord & { hash: string }, d
       return bytesToText(bytes);
     case "stale":
     case "vanished":
+    case "blocked":
       // The row is no longer the one this content belongs to (a re-index
-      // replaced it mid-read, or the id died). Its bytes stay in the
-      // content-addressed table — harmless, GC's business later — but
-      // serving them would answer with code of a previous identity.
+      // replaced it mid-read, the id died, or quarantine won). Any old bytes
+      // are either quarantine's deletion or GC's business; they are never
+      // served as the current file.
       return null;
   }
 }
 
 // ---- the conditional metadata update ----
 
-type FlagOutcome = { state: "done" | "failed" | "stale" | "vanished" };
+type FlagOutcome = { state: "done" | "failed" | "blocked" | "stale" | "vanished" };
 
 /**
  * Marks the row stored, but only while the row still says what it said when
@@ -231,6 +242,7 @@ async function flagStored(deps: BackfillDeps, file: { id: string; organizationId
     .eq("content_status", "absent")
     .select("id");
   if (error) {
+    if (error.code === "CG001") return { state: "blocked" };
     // A failed bookkeeping write: content stays verified, the row still
     // says absent, the next read re-tries. Warned, not swallowed.
     console.warn(`flagging ${file.id} as stored failed (${error.message}); content is stored and the next read re-tries`);
@@ -239,13 +251,14 @@ async function flagStored(deps: BackfillDeps, file: { id: string; organizationId
   if (flipped.length > 0) return { state: "done" };
   const { data: row, error: rereadError } = await writerFor(deps)
     .from("files")
-    .select("hash")
+    .select("hash, content_status")
     .eq("id", file.id)
     .eq("organization_id", file.organizationId)
     .maybeSingle();
   if (rereadError) throw new Error(`The recheck after the metadata update failed: ${rereadError.message}`);
   if (row === null) return { state: "vanished" };
   if (row.hash !== file.hash) return { state: "stale" };
+  if (row.content_status === "excluded" || row.content_status === "legacy_unclassified") return { state: "blocked" };
   // The row is still the file, still with the hash the content backs: it was
   // flipped already (a concurrent backfill won the identical race), or it
   // was stored all along. Both are the same finished state.
