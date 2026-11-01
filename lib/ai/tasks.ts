@@ -270,8 +270,7 @@ async function complete(model: string, system: string, user: string): Promise<st
           `[AI complete] model=${model} elapsed=${elapsed}ms promptTokens=${usage.prompt_tokens} completionTokens=${usage.completion_tokens}`,
         );
       }
-      const body = response.choices[0]?.message.content?.trim();
-      if (!body) throw new Error(`${model} returned an empty answer (finish reason: ${response.choices[0]?.finish_reason ?? "none"})`);
+      const body = takeCompletion(model, response.choices[0]);
       return body;
     } catch (err: unknown) {
       const status = (err as { status?: number })?.status;
@@ -285,6 +284,63 @@ async function complete(model: string, system: string, user: string): Promise<st
       throw err;
     }
   }
+}
+
+// A completion's text is taken only together with what the endpoint says
+// about how it ended. These answers are cached, so a body the endpoint cut
+// off mid-flight would be poisoning, not just one bad answer — and a
+// termination reason that can't be interpreted can't be trusted either.
+//
+//   stop                         accepted
+//   length / max_tokens          refused: cut off by the token limit
+//   content_filter               refused: withheld by a filter (refusal, not truncation)
+//   tool_calls / function_call   refused: no way to end a text answer
+//   missing / null / ""          accepted with a warning: absence is not
+//                                evidence of truncation, and plenty of
+//                                OpenAI-compatible endpoints send none
+//   anything else                refused: an unknown reason may well mean
+//                                "cut off", and cannot be read as complete
+// ("max_tokens" is the native stop name several OpenAI-compatible shims
+// expose for their own token cap; OpenAI itself uses "length".)
+type CompletionChoice = { message: { content: string | null }; finish_reason: string | null | undefined };
+
+function takeCompletion(model: string, choice: CompletionChoice): string {
+  if (!choice) throw new Error(`${model} returned an empty answer (finish reason: none)`);
+  const reason: string | null | undefined = choice.finish_reason;
+  const body = choice.message.content?.trim();
+  if (reason === undefined || reason === null || reason === "") {
+    // Missing metadata is compatible, not trustworthy: accept loudly rather
+    // than pattern-matching it into a pretend stop.
+    console.warn(`[AI complete] ${model} gave no termination reason; accepting its answer by convention`);
+  } else {
+    switch (reason) {
+      case "stop":
+        break;
+      case "length":
+      case "max_tokens":
+        throw new Error(
+          `${model} was cut off by the completion-token limit (finish reason "${reason}"): the incomplete answer was neither served nor stored`,
+        );
+      case "content_filter":
+        throw new Error(
+          `${model} stopped on a content filter (finish reason "content_filter"): the withheld answer was neither served nor stored`,
+        );
+      case "tool_calls":
+        throw new Error(
+          `${model} ended with a tool call (finish reason "tool_calls"), not a text answer: nothing was served or stored`,
+        );
+      case "function_call":
+        throw new Error(
+          `${model} ended with a function call (finish reason "function_call"), not a text answer: nothing was served or stored`,
+        );
+      default:
+        throw new Error(
+          `${model} ended with the unrecognized termination reason "${reason}", which cannot be read as a complete answer: nothing was served or stored`,
+        );
+    }
+  }
+  if (!body) throw new Error(`${model} returned an empty answer (finish reason: ${reason ?? "none"})`);
+  return body;
 }
 
 // The role is asked for as a strict JSON schema. Not every endpoint
@@ -308,14 +364,14 @@ async function askForRole(model: string, system: string, user: string): Promise<
         json_schema: { name: "file_role", strict: true, schema: ROLE_SCHEMA },
       },
     });
-    return response.choices[0]?.message.content ?? null;
+    return takeCompletion(model, response.choices[0]);
   } catch (error) {
     if (!schemaRefused(error)) throw error;
     const response = await ai().chat.completions.create({
       ...base,
       response_format: { type: "json_object" },
     });
-    return response.choices[0]?.message.content ?? null;
+    return takeCompletion(model, response.choices[0]);
   }
 }
 
