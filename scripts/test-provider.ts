@@ -143,7 +143,7 @@ if (asOpenAI) {
   report();
 }
 
-	const { explainFile, classifyFile, cacheKey } = await import("../lib/ai/tasks.ts");
+	const { explainFile, classifyFile, answerQuestion, cacheKey } = await import("../lib/ai/tasks.ts");
 	const { MODELS, isOpenRouterBaseUrl, resolveBaseUrl } = await import("../lib/ai/client.ts");
 	type EdgeKind = "import" | "re-export" | "dynamic-import" | "require";
 
@@ -514,5 +514,71 @@ for (const [scenarioName, expect, target] of [
   }
 }
 scenario = "normal";
+
+// k. CI-5 / T7: answerQuestion truncation policy (refuses length / max_tokens and never caches)
+{
+  scenario = "length";
+  const { cache, texts } = freshCache();
+  const qInput = {
+    question: "Where is the helper?",
+    contextText: "--- File: index.ts (lines 1-10) [hash: h1] ---\nexport const h = 1;\n",
+    files: [{ path: "index.ts", contentHash: "h1", totalLines: 10, windows: [{ startLine: 1, endLine: 10 }] }],
+  };
+  const out = await attempt(() => answerQuestion(qInput, { cache }));
+  if (
+    !out.ok &&
+    out.message.includes("cut off by the completion-token limit") &&
+    out.message.includes('"length"') &&
+    texts.size === 0
+  ) {
+    pass("Q&A answerQuestion rejects truncated completion with length, uncached");
+  } else {
+    fail(`answerQuestion truncation handling wrong: ok=${out.ok} message=${out.message}`);
+  }
+}
+
+// l. CI-5 / T8: answerQuestion content filter policy (refuses content_filter and never caches)
+{
+  scenario = "content_filter";
+  const { cache, texts } = freshCache();
+  const qInput = {
+    question: "Where is the helper?",
+    contextText: "--- File: index.ts (lines 1-10) [hash: h1] ---\nexport const h = 1;\n",
+    files: [{ path: "index.ts", contentHash: "h1", totalLines: 10, windows: [{ startLine: 1, endLine: 10 }] }],
+  };
+  const out = await attempt(() => answerQuestion(qInput, { cache }));
+  if (
+    !out.ok &&
+    out.message.includes("stopped on a content filter") &&
+    texts.size === 0
+  ) {
+    pass("Q&A answerQuestion rejects content filter refusal, uncached");
+  } else {
+    fail(`answerQuestion content_filter handling wrong: ok=${out.ok} message=${out.message}`);
+  }
+}
+
+// m. answerQuestion normal completion succeeds, verifies citations, and caches
+{
+  scenario = "normal";
+  const { cache, texts } = freshCache();
+  const qInput = {
+    question: "Where is the helper?",
+    contextText: "--- File: index.ts (lines 1-10) [hash: h1] ---\nexport const h = 1;\n",
+    files: [{ path: "index.ts", contentHash: "h1", totalLines: 10, windows: [{ startLine: 1, endLine: 10 }] }],
+  };
+  const ans = await answerQuestion(qInput, { cache });
+  if (
+    ans.cached === false &&
+    ans.body.includes("index.ts") &&
+    ans.citations.length === 1 &&
+    ans.citations[0].path === "index.ts" &&
+    texts.size === 1
+  ) {
+    pass("Q&A answerQuestion normal completion succeeds, verifies citations, and caches");
+  } else {
+    fail(`answerQuestion normal handling wrong: ${JSON.stringify(ans)}`);
+  }
+}
 
 report();

@@ -6,12 +6,13 @@ import { type ManifestFile, type ParsedCitation } from "@/lib/ai/citations";
 import { type QuestionInput } from "@/lib/ai/prompts";
 import { formatRetrievedContext } from "@/lib/ai/retrieval";
 import { retrieveWithCoverageLoop, type IterativeRetrievalResult } from "@/lib/ai/retrieval-loop";
-import { answerQuestion, classifyFile, explainFile, explainFolder, type Cache } from "@/lib/ai/tasks";
+import { answerQuestion, classifyFile, explainFile, explainFolder } from "@/lib/ai/tasks";
 import { allowedAnalysisPaths, loadFileInput, loadFolderInput } from "@/lib/analysis/context";
 import { getFileContent } from "@/lib/content/read";
 import { fetchFileAt, resolveHeadCommit } from "@/lib/pipeline/github";
 import type { ModelRole } from "@/lib/roles";
 import { createAdminSupabase } from "@/lib/supabase/admin";
+import { createAiCache } from "@/lib/supabase/cache";
 import { createServerSupabase } from "@/lib/supabase/server";
 
 export type ExplainResult =
@@ -254,34 +255,7 @@ async function readAnalysis(db: Db, analysisId: string): Promise<Analysis> {
   };
 }
 
-// Reads go through the member's client and its policy. Members have no write
-// grant, so answers are stored by the server's writer, stamped with the
-// organization the policy just let the member read.
-function cacheFor(db: Db, organizationId: string): Cache {
-  return {
-    async read(key) {
-      const { data, error } = await db.from("ai_cache").select("body").eq("key", key).maybeSingle();
-      if (error) throw new Error(`Reading the cache failed: ${error.message}`);
-      return data?.body ?? null;
-    },
-    async write({ key, task, model, body }) {
-      const { error } = await createAdminSupabase()
-        .from("ai_cache")
-        .upsert({ organization_id: organizationId, key, task, model, body }, { onConflict: "organization_id,key", ignoreDuplicates: true });
-      if (error) throw new Error(`Storing the answer in the cache failed: ${error.message}`);
-    },
-    // The server's writer removes the entry too: members have no delete grant.
-    // Cheapest healing for an invalid cached answer is dropping its own row.
-    async delete(key) {
-      const { error } = await createAdminSupabase()
-        .from("ai_cache")
-        .delete()
-        .eq("organization_id", organizationId)
-        .eq("key", key);
-      if (error) throw new Error(`Deleting the cached answer failed: ${error.message}`);
-    },
-  };
-}
+const cacheFor = createAiCache;
 
 async function storeModelRole(organizationId: string, fileId: string, role: ModelRole): Promise<void> {
   // A convention role is never replaced: the file only reaches here without one.
