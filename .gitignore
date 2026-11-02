@@ -47,3 +47,6 @@ supabase/cli-latest
 next-env.d.ts
 
 .agents
+
+# perch
+.perch/
