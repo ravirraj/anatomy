@@ -30,6 +30,7 @@ import {
 } from "./coverage.ts";
 import {
   DEFAULT_BUDGET,
+  computeEvidenceLimits,
   retrieveGroundedContext,
   supportFilePenalty,
   type Db,
@@ -37,6 +38,7 @@ import {
   type RetrievalResult,
   type RetrievedWindow,
 } from "./retrieval.ts";
+import { estimateCodeTokens } from "./budget.ts";
 import { buildConceptIndexForAnalysis } from "./concepts/loader.ts";
 import { matchConceptsForQuery } from "./concepts/mapping.ts";
 import type { ConceptIndex } from "./concepts/types.ts";
@@ -150,13 +152,14 @@ function windowOverlaps(a: RetrievedWindow, b: RetrievedWindow): boolean {
  * does not fit.
  */
 export function mergeIterationWindows(
-  current: { windows: RetrievedWindow[]; totalCharacters: number },
+  current: { windows: RetrievedWindow[]; totalCharacters: number; totalTokens?: number },
   candidates: RetrievedWindow[],
-  limits: { maxFiles: number; maxWindowsPerFile: number; maxCharacters: number; scoreFloor: number },
+  limits: { maxFiles: number; maxWindowsPerFile: number; maxCharacters: number; scoreFloor: number; maxTokens?: number },
   options?: { allowReplacement?: boolean; protectedFiles?: Set<string>; replacementMargin?: number },
 ): {
   windows: RetrievedWindow[];
   totalCharacters: number;
+  totalTokens: number;
   added: number;
   addedFiles: number;
   replacedFiles: number;
@@ -165,6 +168,7 @@ export function mergeIterationWindows(
 } {
   const windows = [...current.windows];
   let totalCharacters = current.totalCharacters;
+  let totalTokens = current.totalTokens ?? Math.ceil(totalCharacters / 3.0);
   // Fold stronger candidates first so the budget (char/file caps) is spent
   // on the most relevant evidence; sort by effective score (support files
   // demoted) to mirror the base pipeline's prioritization.
@@ -233,7 +237,10 @@ export function mergeIterationWindows(
           continue; // file budget full, no eligible displacement
         }
         // Remove the displaced file's windows and free its slot/chars.
-        for (const w of windows.filter((w) => w.fileId === victim)) totalCharacters -= w.text.length;
+        for (const w of windows.filter((w) => w.fileId === victim)) {
+          totalCharacters -= w.text.length;
+          totalTokens -= estimateCodeTokens(w.text);
+        }
         const remaining = windows.filter((w) => w.fileId !== victim);
         windows.length = 0;
         windows.push(...remaining);
@@ -242,12 +249,18 @@ export function mergeIterationWindows(
         replacedFiles += 1;
       }
     }
+    const candTokens = estimateCodeTokens(cand.text);
     if (totalCharacters + cand.text.length > limits.maxCharacters) {
+      rejectedBudget += 1;
+      continue;
+    }
+    if (limits.maxTokens !== undefined && totalTokens + candTokens > limits.maxTokens) {
       rejectedBudget += 1;
       continue;
     }
     windows.push(cand);
     totalCharacters += cand.text.length;
+    totalTokens += candTokens;
     perFile.set(cand.fileId, (perFile.get(cand.fileId) ?? 0) + 1);
     if (isNewFile) {
       files.add(cand.fileId);
@@ -256,7 +269,7 @@ export function mergeIterationWindows(
     added += 1;
   }
 
-  return { windows, totalCharacters, added, addedFiles, replacedFiles, rejectedBudget, candidatesConsidered };
+  return { windows, totalCharacters, totalTokens, added, addedFiles, replacedFiles, rejectedBudget, candidatesConsidered };
 }
 
 /**
@@ -290,13 +303,6 @@ export async function retrieveWithCoverageLoop(
     maxPasses: maxPasses ?? DEFAULT_LOOP.maxPasses,
     scoreFloor: scoreFloor ?? DEFAULT_LOOP.scoreFloor,
   };
-  const limits = {
-    maxFiles: DEFAULT_BUDGET.maxFiles,
-    maxWindowsPerFile: DEFAULT_BUDGET.maxWindowsPerFile,
-    maxCharacters: DEFAULT_BUDGET.maxCharacters,
-    scoreFloor: config.scoreFloor,
-  };
-
   // Build the repository-derived concept index once (Phase 1 integration).
   let conceptIndex: ConceptIndex | null = null;
   if (useAdaptive) {
@@ -315,8 +321,24 @@ export async function retrieveWithCoverageLoop(
   const base = await retrieveGroundedContext(db, analysisId, rawQuery, retrievalBudget, conceptIndex);
   let windows: RetrievedWindow[] = [...base.windows];
   let totalCharacters = base.totalCharacters;
+  let totalTokens = base.totalTokens ?? Math.ceil(totalCharacters / 3.0);
   let symbolsState: RetrievalResult["symbols"] = base.symbols ?? [];
   let symbolsStale = false;
+
+  // Single unified evidence budget: Pass 0, iterative passes, packaging, and API surface share one allocation.
+  const retrievalLimits = computeEvidenceLimits(retrievalBudget, rawQuery, base.packaging ?? "");
+  const pkgChars = base.packaging ? base.packaging.length : 0;
+  const pkgTokens = base.packaging ? estimateCodeTokens(base.packaging) : 0;
+  const availableCodeChars = Math.max(0, retrievalLimits.maxCharacters - pkgChars);
+  const availableCodeTokens = Math.max(0, retrievalLimits.maxTokens - pkgTokens);
+
+  const limits = {
+    maxFiles: retrievalBudget.maxFiles ?? DEFAULT_BUDGET.maxFiles,
+    maxWindowsPerFile: retrievalBudget.maxWindowsPerFile ?? DEFAULT_BUDGET.maxWindowsPerFile,
+    maxCharacters: availableCodeChars,
+    maxTokens: availableCodeTokens,
+    scoreFloor: config.scoreFloor,
+  };
 
   // Generic tokens for concept matching come from the plan.
   const genericTokens = new Set<string>(
@@ -378,10 +400,14 @@ export async function retrieveWithCoverageLoop(
         path: first.path,
         contentHash: first.contentHash,
         totalLines: first.totalLines,
+        windows: windows
+          .filter((w) => w.fileId === fileId)
+          .map((w) => ({ startLine: w.startLine, endLine: w.endLine })),
       };
     }),
     symbols: symbolsState,
     totalCharacters,
+    totalTokens,
     insufficientEvidence: windows.length === 0 && !base.packaging,
     // Packaging evidence is query-level, not window-level: it does not change
     // as the loop adds windows, so it is carried through unchanged.
@@ -448,7 +474,7 @@ export async function retrieveWithCoverageLoop(
     }
 
     const merged = mergeIterationWindows(
-      { windows, totalCharacters },
+      { windows, totalCharacters, totalTokens },
       candidates,
       limits,
       { allowReplacement: true, protectedFiles, replacementMargin: 10 },
@@ -476,6 +502,7 @@ export async function retrieveWithCoverageLoop(
 
     windows = merged.windows;
     totalCharacters = merged.totalCharacters;
+    totalTokens = merged.totalTokens;
     symbolsStale = true;
     coverage = evaluateCurrent(buildResult());
 

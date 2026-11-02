@@ -6,12 +6,19 @@ import { formatPackagingEvidence, loadPackagingEvidence } from "./packaging.ts";
 import type { ManifestFile } from "./citations.ts";
 import { PRIMARY_MANIFEST_NAMES } from "../parser/screening.ts";
 import { isCodeFile } from "../parser/walk.ts";
+import { QUESTION_SYSTEM } from "./prompts.ts";
+import {
+  estimateCodeTokens,
+  estimateProseTokens,
+  resolveModelProfile,
+  type ModelContextProfile,
+} from "./budget.ts";
 
 export type Db = SupabaseClient<Database>;
 
-export type RetrievalBudget = {
-  maxCharacters?: number;
-  maxFiles?: number;
+export type CoreRetrievalBudget = {
+  maxCharacters: number;
+  maxFiles: number;
   /**
    * Soft cap on files from one directory in round 1. A concept that lives in
    * a heavily-matched directory must not claim the whole budget before other
@@ -19,18 +26,118 @@ export type RetrievalBudget = {
    * order, so a question concentrated in one directory still fills every
    * slot exactly as without the cap.
    */
-  maxFilesPerDirectory?: number;
-  maxWindowsPerFile?: number;
-  seedLimit?: number;
+  maxFilesPerDirectory: number;
+  maxWindowsPerFile: number;
+  seedLimit: number;
 };
 
-export const DEFAULT_BUDGET: Required<RetrievalBudget> = {
+export type RetrievalBudget = Partial<CoreRetrievalBudget> & {
+  /** Operational target for evidence tokens */
+  maxTokens?: number;
+  /** Model context profile resolving context limits and token targets */
+  profile?: ModelContextProfile;
+  /** Model identifier used to resolve profile if profile is not directly supplied */
+  model?: string;
+  /** Explicit token reservation for prompt framing and system instructions */
+  reservedTokens?: number;
+  /** Explicit character reservation for prompt framing and system instructions */
+  reservedCharacters?: number;
+};
+
+export const DEFAULT_BUDGET: CoreRetrievalBudget = {
   maxCharacters: 28000,
   maxFiles: 16,
   maxFilesPerDirectory: 1,
   maxWindowsPerFile: 2,
   seedLimit: 5,
 };
+
+/**
+ * Computes net evidence limits (characters, tokens, files) accounting for prompt framing,
+ * system instructions, question length, and model context profile.
+ */
+export function computeEvidenceLimits(
+  budget: RetrievalBudget = {},
+  rawQuery: string = "",
+  packagingText: string = "",
+): {
+  maxCharacters: number;
+  maxTokens: number;
+  maxFiles: number;
+  maxFilesPerDirectory: number;
+  maxWindowsPerFile: number;
+  seedLimit: number;
+  reservedCharacters: number;
+  reservedTokens: number;
+  isProfileBound: boolean;
+} {
+  const profile = budget.profile ?? (budget.model ? resolveModelProfile(budget.model) : undefined);
+
+  const maxFiles = budget.maxFiles ?? DEFAULT_BUDGET.maxFiles;
+  const maxFilesPerDirectory = budget.maxFilesPerDirectory ?? DEFAULT_BUDGET.maxFilesPerDirectory;
+  const maxWindowsPerFile = budget.maxWindowsPerFile ?? DEFAULT_BUDGET.maxWindowsPerFile;
+  const seedLimit = budget.seedLimit ?? DEFAULT_BUDGET.seedLimit;
+
+  const systemPrompt = QUESTION_SYSTEM;
+  const systemTokens = estimateProseTokens(systemPrompt);
+  const systemChars = systemPrompt.length;
+
+  const questionTokens = estimateProseTokens(rawQuery);
+  const questionChars = rawQuery.length;
+
+  const framingTokens = 500;
+  const framingChars = 1500;
+
+  const packagingTokens = packagingText ? estimateCodeTokens(packagingText) : 0;
+  const packagingChars = packagingText ? packagingText.length : 0;
+
+  const reservedTokens = budget.reservedTokens ?? (systemTokens + questionTokens + framingTokens + packagingTokens);
+  const reservedCharacters = budget.reservedCharacters ?? (systemChars + questionChars + framingChars + packagingChars);
+
+  if (profile) {
+    const availableTokens = Math.max(0, profile.operationalInputTokens - reservedTokens);
+    const availableCharsCeiling = Math.max(0, profile.maxInputCharacters - reservedCharacters);
+    const availableCharsTokens = Math.floor(availableTokens * 3.0);
+    const availableChars = Math.min(availableCharsCeiling, availableCharsTokens);
+
+    const targetCharCap = budget.maxCharacters !== undefined
+      ? budget.maxCharacters
+      : Math.min(availableChars, DEFAULT_BUDGET.maxCharacters);
+    const targetTokenCap = budget.maxTokens !== undefined
+      ? budget.maxTokens
+      : Math.min(availableTokens, Math.ceil(targetCharCap / 3.0));
+
+    const maxCharacters = Math.min(availableChars, targetCharCap);
+    const maxTokens = Math.min(availableTokens, targetTokenCap);
+
+    return {
+      maxCharacters,
+      maxTokens,
+      maxFiles,
+      maxFilesPerDirectory,
+      maxWindowsPerFile,
+      seedLimit,
+      reservedCharacters,
+      reservedTokens,
+      isProfileBound: true,
+    };
+  }
+
+  const maxCharacters = budget.maxCharacters ?? DEFAULT_BUDGET.maxCharacters;
+  const maxTokens = budget.maxTokens ?? Math.ceil(maxCharacters / 3.0);
+
+  return {
+    maxCharacters,
+    maxTokens,
+    maxFiles,
+    maxFilesPerDirectory,
+    maxWindowsPerFile,
+    seedLimit,
+    reservedCharacters,
+    reservedTokens,
+    isProfileBound: false,
+  };
+}
 
 /**
  * General, vocabulary-free penalty for files that are unlikely to carry the
@@ -203,6 +310,8 @@ export type RetrievalResult = {
     documentation?: string;
   }[];
   totalCharacters: number;
+  totalTokens?: number;
+  renderedCharacters?: number;
   insufficientEvidence: boolean;
   /**
    * Packaging, configuration and entry-point evidence, rendered for the model.
@@ -535,6 +644,8 @@ export async function retrieveGroundedContext(
       windows: [],
       files: [],
       totalCharacters: 0,
+      totalTokens: 0,
+      renderedCharacters: 0,
       insufficientEvidence: true,
     };
   }
@@ -1190,24 +1301,56 @@ export async function retrieveGroundedContext(
     }
   }
 
+  // Packaging facts ride alongside the code windows. Loaded upfront so the evidence
+  // budget accounts for packaging text before candidate window selection.
+  const packagingEvidence = await loadPackagingEvidence(db, analysisId, rawQuery);
+  const packagingText = formatPackagingEvidence(packagingEvidence);
+
+  const limits = computeEvidenceLimits(budget, rawQuery, packagingText);
+
+  // Explicit handling of zero or insufficient remaining evidence budget:
+  if (limits.maxCharacters <= 0 || limits.maxTokens <= 0) {
+    return {
+      analysisId,
+      query: rawQuery,
+      tokens,
+      plan,
+      windows: [],
+      files: [],
+      symbols: [],
+      totalCharacters: 0,
+      totalTokens: 0,
+      renderedCharacters: 0,
+      insufficientEvidence: true,
+    };
+  }
+
+  // Packaging only enters the package if it fits cleanly within the available evidence budget.
+  const pkgChars = packagingText.length;
+  const pkgTokens = estimateCodeTokens(packagingText);
+  const includePackaging = packagingText !== "" && pkgChars < limits.maxCharacters && pkgTokens < limits.maxTokens;
+  const effectivePackagingText = includePackaging ? packagingText : "";
+
   const retrievedWindows: RetrievedWindow[] = [];
   const includedFilesMap = new Map<
     string,
     { fileId: string; path: string; contentHash: string; totalLines: number; windows: { startLine: number; endLine: number }[] }
   >();
   const fileWindowCounts = new Map<string, number>();
-  let currentCharacters = 0;
+  let currentCharacters = includePackaging ? pkgChars : 0;
+  let currentTokens = includePackaging ? pkgTokens : 0;
+  let rawCodeCharacters = 0;
 
   for (const win of orderedForBudget) {
-    if (currentCharacters >= config.maxCharacters) break;
+    if (currentCharacters >= limits.maxCharacters || currentTokens >= limits.maxTokens) break;
 
     const isNewFile = !includedFilesMap.has(win.fileId);
-    if (isNewFile && includedFilesMap.size >= config.maxFiles) {
+    if (isNewFile && includedFilesMap.size >= limits.maxFiles) {
       continue;
     }
 
     const currentWindowsForFile = fileWindowCounts.get(win.fileId) ?? 0;
-    if (currentWindowsForFile >= config.maxWindowsPerFile) {
+    if (currentWindowsForFile >= limits.maxWindowsPerFile) {
       continue;
     }
 
@@ -1215,12 +1358,21 @@ export async function retrieveGroundedContext(
       const text = await getFileLines(db, win.fileId, win.startLine, win.endLine, backfillDeps);
       if (text === null) continue;
 
-      const windowLength = text.length;
-      if (currentCharacters + windowLength > config.maxCharacters && retrievedWindows.length > 0) {
+      const headerCost = `--- File: ${win.path} (lines ${win.startLine}-${win.endLine}) [hash: ${win.contentHash.slice(0, 8)}] ---\n`.length + 2;
+      const candidateChars = text.length + headerCost;
+      const candidateTokens = estimateCodeTokens(text) + estimateProseTokens(win.path) + 15;
+
+      if (
+        currentCharacters + candidateChars > limits.maxCharacters ||
+        currentTokens + candidateTokens > limits.maxTokens
+      ) {
+        // Atomic rejection: window does not fit within remaining budget. Never truncate lines mid-window.
         continue;
       }
 
-      currentCharacters += windowLength;
+      currentCharacters += candidateChars;
+      currentTokens += candidateTokens;
+      rawCodeCharacters += text.length;
       fileWindowCounts.set(win.fileId, currentWindowsForFile + 1);
       const existingFile = includedFilesMap.get(win.fileId);
       if (existingFile) {
@@ -1258,7 +1410,6 @@ export async function retrieveGroundedContext(
   let retrievedSymbols: RetrievalResult["symbols"] = [];
   const retrievedFileIds = [...includedFilesMap.keys()];
   if (retrievedFileIds.length > 0) {
-    const idList = retrievedFileIds.join(",");
     let symData: Record<string, unknown>[] = [];
     try {
       const { data, error } = await (db as unknown as { from: (t: string) => { select: (c: string) => { eq: (k: string, v: string) => Promise<{ data: unknown; error: unknown }> } } })
@@ -1294,11 +1445,77 @@ export async function retrieveGroundedContext(
     }
   }
 
-  // Packaging facts ride alongside the code windows. They are loaded only when
-  // the query touched packaging vocabulary, and their absence is reported as
-  // absence of relevance, never as absence of facts.
-  const packagingEvidence = await loadPackagingEvidence(db, analysisId, rawQuery);
-  const packagingText = formatPackagingEvidence(packagingEvidence);
+  // Calculate API surface footprint and verify total evidence bounds.
+  // Group symbols by file path to calculate API surface overhead.
+  const symbolsByPath = new Map<string, NonNullable<RetrievalResult["symbols"]>>();
+  for (const sym of retrievedSymbols) {
+    const list = symbolsByPath.get(sym.path) ?? [];
+    list.push(sym);
+    symbolsByPath.set(sym.path, list);
+  }
+
+  const getApiSurfaceBlock = (path: string): string => {
+    const syms = symbolsByPath.get(path);
+    if (!syms || syms.length === 0) return "";
+    const api = syms
+      .filter((s) => s.exported)
+      .map((s) => {
+        const sig = s.signature ?? s.name;
+        const doc = s.documentation ? ` — ${s.documentation.split("\n")[0]}` : "";
+        return `- ${s.name} (${s.kind})${s.exportKind && s.exportKind !== "named" ? ` [${s.exportKind}]` : ""}: ${sig}${doc}`;
+      })
+      .join("\n");
+    return api ? `\n\n[API surface]\n${api}` : "";
+  };
+
+  let totalEvidenceChars = currentCharacters;
+  let totalEvidenceTokens = currentTokens;
+  for (const win of retrievedWindows) {
+    if (win.startLine === 1) {
+      const block = getApiSurfaceBlock(win.path);
+      if (block) {
+        totalEvidenceChars += block.length;
+        totalEvidenceTokens += estimateCodeTokens(block);
+      }
+    }
+  }
+
+  // Post-retrieval compaction: If API surface pushes total evidence beyond the operational budget,
+  // atomically drop lowest-scoring candidate windows from the tail until the prompt budget is satisfied.
+  // Original whole-window line bounds are strictly preserved (no partial line truncations).
+  while (
+    retrievedWindows.length > 1 &&
+    (totalEvidenceChars > limits.maxCharacters || totalEvidenceTokens > limits.maxTokens)
+  ) {
+    const dropped = retrievedWindows.pop()!;
+    const headerCost = `--- File: ${dropped.path} (lines ${dropped.startLine}-${dropped.endLine}) [hash: ${dropped.contentHash.slice(0, 8)}] ---\n`.length + 2;
+    const droppedChars = dropped.text.length + headerCost;
+    const droppedTokens = estimateCodeTokens(dropped.text) + estimateProseTokens(dropped.path) + 15;
+    totalEvidenceChars -= droppedChars;
+    totalEvidenceTokens -= droppedTokens;
+    rawCodeCharacters -= dropped.text.length;
+
+    if (dropped.startLine === 1) {
+      const block = getApiSurfaceBlock(dropped.path);
+      if (block) {
+        totalEvidenceChars -= block.length;
+        totalEvidenceTokens -= estimateCodeTokens(block);
+      }
+    }
+
+    // Synchronize includedFilesMap and symbols
+    const fileRecord = includedFilesMap.get(dropped.fileId);
+    if (fileRecord) {
+      fileRecord.windows = fileRecord.windows.filter(
+        (w) => !(w.startLine === dropped.startLine && w.endLine === dropped.endLine),
+      );
+      if (fileRecord.windows.length === 0) {
+        includedFilesMap.delete(dropped.fileId);
+        symbolsByPath.delete(dropped.path);
+        retrievedSymbols = retrievedSymbols.filter((s) => s.fileId !== dropped.fileId);
+      }
+    }
+  }
 
   return {
     analysisId,
@@ -1308,10 +1525,12 @@ export async function retrieveGroundedContext(
     windows: retrievedWindows,
     files: [...includedFilesMap.values()],
     symbols: retrievedSymbols,
-    totalCharacters: currentCharacters,
-    insufficientEvidence: retrievedWindows.length === 0 && packagingText === "",
-    ...(packagingText ? { packaging: packagingText } : {}),
-    ...(packagingEvidence.manifests ? { manifests: packagingEvidence.manifests } : {}),
+    totalCharacters: rawCodeCharacters,
+    totalTokens: totalEvidenceTokens,
+    renderedCharacters: totalEvidenceChars,
+    insufficientEvidence: retrievedWindows.length === 0 && effectivePackagingText === "",
+    ...(effectivePackagingText ? { packaging: effectivePackagingText } : {}),
+    ...(includePackaging && packagingEvidence.manifests ? { manifests: packagingEvidence.manifests } : {}),
   };
 }
 
