@@ -272,5 +272,18 @@
       ]
     }
   },
-  "configs": []
+  "configs": [],
+  "nonCodeCandidates": [
+    {
+      "path": "package.json",
+      "absolutePath": "C:\\Users\\thorfinn\\projects\\cartograph\\fixtures\\barrel-index\\repo\\package.json",
+      "module": ".",
+      "content": "{\n  \"name\": \"barrel-index\",\n  \"version\": \"1.0.0\",\n  \"private\": true\n}\n",
+      "bytes": 70,
+      "lines": 5,
+      "hash": "125027696e4ee63735021d5240de959571fd17bc9f90714c1bf3b9e021afa369",
+      "project": ".",
+      "category": "primary_manifest"
+    }
+  ]
 }

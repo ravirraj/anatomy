@@ -55,7 +55,7 @@ export type ClassifyInput = {
 export type QuestionInput = {
   question: string;
   contextText: string;
-  files: { path: string; contentHash: string; totalLines: number }[];
+  files: { path: string; contentHash: string; totalLines: number; windows?: { startLine: number; endLine: number }[] }[];
   /**
    * Coverage evaluation of the final retrieved evidence package: which layers
    * of the question's concepts are verified (source text), partially

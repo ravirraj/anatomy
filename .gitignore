@@ -45,3 +45,5 @@ supabase/cli-latest
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+.agents

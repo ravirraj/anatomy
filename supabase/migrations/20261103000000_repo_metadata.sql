@@ -193,9 +193,9 @@ begin
   insert into public.dependencies
     (organization_id, analysis_id, manifest_path, dir, name, version, kind, imported_by)
   select m.organization_id, p_analysis_id, d.manifest, d.dir, d.name, d.version, d.kind,
-         coalesce(d.imported_by, 0)
+         coalesce(d.imported_by, d."importedBy", 0)
   from jsonb_to_recordset(p_dependencies)
-    as d (manifest text, dir text, name text, version text, kind text, imported_by integer)
+    as d (manifest text, dir text, name text, version text, kind text, imported_by integer, "importedBy" integer)
   join public.manifests m on m.analysis_id = p_analysis_id and m.path = d.manifest;
   get diagnostics inserted = row_count;
   if inserted <> expected then
@@ -251,10 +251,10 @@ begin
   insert into public.entry_points
     (organization_id, analysis_id, path, kind, source, manifest_path, detail, resolved, unresolved_reason, via)
   select a.organization_id, p_analysis_id, e.path, e.kind, e.source, e.manifest, e.detail,
-         e.resolved, e.unresolved_reason, coalesce(e.via, '[]'::jsonb)
+         e.resolved, coalesce(e.unresolved_reason, e."unresolvedReason"), coalesce(e.via, '[]'::jsonb)
   from jsonb_to_recordset(p_entries)
     as e (path text, kind text, source text, manifest text, detail text,
-          resolved boolean, unresolved_reason text, via jsonb)
+          resolved boolean, unresolved_reason text, "unresolvedReason" text, via jsonb)
   join public.analyses a on a.id = p_analysis_id;
   get diagnostics inserted = row_count;
   if inserted <> expected then

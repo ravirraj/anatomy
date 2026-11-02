@@ -3,6 +3,12 @@ import path from "node:path";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { putContentsBatch, sha256, type ContentWrite } from "../content/store.ts";
 import type { Coverage, ParseResult } from "../parser/index.ts";
+import {
+  classifyManifestBuffer,
+  MAX_NON_CODE_BYTES,
+  PRIMARY_MANIFEST_NAMES,
+  type NonCodeCandidate,
+} from "../parser/screening.ts";
 import type { Database, Json } from "../supabase/database.types.ts";
 
 type Db = SupabaseClient<Database>;
@@ -65,16 +71,45 @@ export type StoredCoverage = Omit<Coverage, "files"> & { files: Omit<Coverage["f
  * wrong text for a path gets that file's content refused, not a mismatched
  * row.
  */
-export async function storeResult(db: Db, analysis: { id: string; organizationId: string }, result: ParseResult, contents: ReadonlyMap<string, string>): Promise<ContentStorageStats> {
-  // A re-run replaces what the last run stored; edges go with their files.
-  const cleared = await db.from("files").delete().eq("analysis_id", analysis.id);
-  if (cleared.error) throw new Error(`Clearing the previous run's files failed: ${cleared.error.message}`);
+export async function storeResult(
+  db: Db,
+  analysis: { id: string; organizationId: string },
+  result: ParseResult,
+  contents: ReadonlyMap<string, string>,
+  nonCodeCandidates?: readonly NonCodeCandidate[],
+): Promise<ContentStorageStats> {
+  // A re-run replaces what the last run stored. Edges, roles, routes and
+  // symbols cascade from files; dependencies cascade from manifests.
+  const [clearedFiles, clearedManifests, clearedConfigs, clearedEntries] = await Promise.all([
+    db.from("files").delete().eq("analysis_id", analysis.id),
+    db.from("manifests").delete().eq("analysis_id", analysis.id),
+    db.from("config_references").delete().eq("analysis_id", analysis.id),
+    db.from("entry_points").delete().eq("analysis_id", analysis.id),
+  ]);
+  if (clearedFiles.error) throw new Error(`Clearing the previous run's files failed: ${clearedFiles.error.message}`);
+  if (clearedManifests.error) throw new Error(`Clearing the previous run's manifests failed: ${clearedManifests.error.message}`);
+  if (clearedConfigs.error) throw new Error(`Clearing the previous run's config references failed: ${clearedConfigs.error.message}`);
+  if (clearedEntries.error) throw new Error(`Clearing the previous run's entry points failed: ${clearedEntries.error.message}`);
 
   // Content first, and confirmed: a file is marked stored only when its body
   // is already in file_contents. A body that fails to verify against its
   // parsed identity, or a request the database refuses, leaves the file's
   // content absent — never silently pretending.
-  const { storedHashes, stats } = await storeFileContents(db, analysis, result, contents);
+  const rawNonCode = nonCodeCandidates ?? [];
+  const validNonCode = Array.from(
+    new Map(
+      rawNonCode
+        .filter(
+          (c) =>
+            PRIMARY_MANIFEST_NAMES.has(path.basename(c.path)) &&
+            c.bytes <= MAX_NON_CODE_BYTES &&
+            c.category === "primary_manifest",
+        )
+        .map((c) => [c.path, c]),
+    ).values(),
+  );
+
+  const { storedHashes, stats } = await storeFileContents(db, analysis, result, contents, validNonCode);
 
   const parsedRows: Database["public"]["Tables"]["files"]["Insert"][] = result.files.map((f) => ({
     organization_id: analysis.organizationId,
@@ -90,8 +125,23 @@ export async function storeResult(db: Db, analysis: { id: string; organizationId
     exports: f.exports,
     content_status: storedHashes.has(f.hash) ? "stored" : "absent",
   }));
-  for (let i = 0; i < parsedRows.length; i += FILE_CHUNK) {
-    const { error } = await db.from("files").insert(parsedRows.slice(i, i + FILE_CHUNK));
+  const nonCodeRows: Database["public"]["Tables"]["files"]["Insert"][] = validNonCode.map((c) => ({
+    organization_id: analysis.organizationId,
+    analysis_id: analysis.id,
+    path: c.path,
+    module: c.module,
+    lines: c.lines,
+    bytes: c.bytes,
+    hash: c.hash,
+    fan_in: 0,
+    fan_out: 0,
+    reached_by: null,
+    exports: [],
+    content_status: storedHashes.has(c.hash) ? "stored" : "absent",
+  }));
+  const allFileRows = [...parsedRows, ...nonCodeRows];
+  for (let i = 0; i < allFileRows.length; i += FILE_CHUNK) {
+    const { error } = await db.from("files").insert(allFileRows.slice(i, i + FILE_CHUNK));
     if (error) throw new Error(`Storing files failed: ${error.message}`);
   }
 
@@ -139,20 +189,39 @@ export async function storeResult(db: Db, analysis: { id: string; organizationId
 
   // Phase 4: manifests first, because dependencies reference them by path;
   // then the two tables that resolve against stored files.
-  for (let i = 0; i < result.manifests.length; i += MANIFEST_CHUNK) {
-    const { error } = await db.rpc("insert_manifests", { p_analysis_id: analysis.id, p_manifests: result.manifests.slice(i, i + MANIFEST_CHUNK) });
+  const uniqueManifests = Array.from(new Map(result.manifests.map((m) => [m.path, m])).values());
+  for (let i = 0; i < uniqueManifests.length; i += MANIFEST_CHUNK) {
+    const { error } = await db.rpc("insert_manifests", { p_analysis_id: analysis.id, p_manifests: uniqueManifests.slice(i, i + MANIFEST_CHUNK) });
     if (error) throw new Error(`Storing manifests failed: ${error.message}`);
   }
-  for (let i = 0; i < result.dependencies.length; i += DEPENDENCY_CHUNK) {
-    const { error } = await db.rpc("insert_dependencies", { p_analysis_id: analysis.id, p_dependencies: result.dependencies.slice(i, i + DEPENDENCY_CHUNK) });
+  const dependencies = result.dependencies.map((d) => ({
+    manifest: d.manifest,
+    dir: d.dir,
+    name: d.name,
+    version: d.version,
+    kind: d.kind,
+    imported_by: d.importedBy,
+  }));
+  for (let i = 0; i < dependencies.length; i += DEPENDENCY_CHUNK) {
+    const { error } = await db.rpc("insert_dependencies", { p_analysis_id: analysis.id, p_dependencies: dependencies.slice(i, i + DEPENDENCY_CHUNK) });
     if (error) throw new Error(`Storing dependencies failed: ${error.message}`);
   }
   for (let i = 0; i < result.configReferences.length; i += CONFIG_CHUNK) {
     const { error } = await db.rpc("insert_config_references", { p_analysis_id: analysis.id, p_references: result.configReferences.slice(i, i + CONFIG_CHUNK) });
     if (error) throw new Error(`Storing configuration references failed: ${error.message}`);
   }
-  for (let i = 0; i < result.entryPoints.length; i += ENTRY_CHUNK) {
-    const { error } = await db.rpc("insert_entry_points", { p_analysis_id: analysis.id, p_entries: result.entryPoints.slice(i, i + ENTRY_CHUNK) });
+  const entryPoints = result.entryPoints.map((e) => ({
+    path: e.path,
+    kind: e.kind,
+    source: e.source,
+    manifest: e.manifest,
+    detail: e.detail ?? null,
+    resolved: e.resolved,
+    unresolved_reason: e.unresolvedReason ?? null,
+    via: e.via ?? [],
+  }));
+  for (let i = 0; i < entryPoints.length; i += ENTRY_CHUNK) {
+    const { error } = await db.rpc("insert_entry_points", { p_analysis_id: analysis.id, p_entries: entryPoints.slice(i, i + ENTRY_CHUNK) });
     if (error) throw new Error(`Storing entry points failed: ${error.message}`);
   }
 
@@ -170,9 +239,15 @@ export async function storeResult(db: Db, analysis: { id: string; organizationId
  * written under the stale identity. Candidates' contents are referenced, not
  * copied, so beyond the request's own chunk this adds no memory.
  */
-async function storeFileContents(db: Db, analysis: { id: string; organizationId: string }, result: ParseResult, contents: ReadonlyMap<string, string>): Promise<{ storedHashes: Set<string>; stats: ContentStorageStats }> {
+async function storeFileContents(
+  db: Db,
+  analysis: { id: string; organizationId: string },
+  result: ParseResult,
+  contents: ReadonlyMap<string, string>,
+  nonCode: readonly NonCodeCandidate[] = [],
+): Promise<{ storedHashes: Set<string>; stats: ContentStorageStats }> {
   const stats: ContentStorageStats = {
-    eligible: result.files.length,
+    eligible: result.files.length + nonCode.length,
     stored: 0,
     bytes: 0,
     deduplicated: 0,
@@ -256,6 +331,38 @@ async function storeFileContents(db: Db, analysis: { id: string; organizationId:
         console.warn(`${analysis.id}: ${file.path} changed between the walk and the store; its content stays absent`);
         continue;
       }
+    }
+    chunk.push({ contentHash: file.hash, body });
+    chunkBytes += body.byteLength;
+  }
+  for (const file of nonCode) {
+    if (chunk.length >= CONTENT_CHUNK_FILES || chunkBytes + file.bytes > CONTENT_CHUNK_BYTES) await flush();
+    const text = contents.get(file.path) ?? file.content;
+    if (text === undefined) {
+      stats.failed++;
+      console.warn(`${analysis.id}: no held content arrived for ${file.path}; its content stays absent`);
+      continue;
+    }
+    let body = Buffer.from(text, "utf8");
+    if (sha256(body) !== file.hash) {
+      try {
+        body = readFileSync(path.join(result.root, file.path));
+      } catch (error) {
+        stats.unreadable++;
+        console.warn(`${analysis.id}: reading ${file.path} to store its content failed (${error instanceof Error ? error.message : String(error)})`);
+        continue;
+      }
+      if (sha256(body) !== file.hash) {
+        stats.changed++;
+        console.warn(`${analysis.id}: ${file.path} changed between the walk and the store; its content stays absent`);
+        continue;
+      }
+    }
+    const screening = classifyManifestBuffer(body, file.path);
+    if (screening.status !== "eligible") {
+      stats.failed++;
+      console.warn(`${analysis.id}: manifest ${file.path} failed defense screening before storage; its content stays absent`);
+      continue;
     }
     chunk.push({ contentHash: file.hash, body });
     chunkBytes += body.byteLength;

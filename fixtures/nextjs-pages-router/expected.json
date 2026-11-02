@@ -305,5 +305,18 @@
       ]
     }
   },
-  "configs": []
+  "configs": [],
+  "nonCodeCandidates": [
+    {
+      "path": "package.json",
+      "absolutePath": "C:\\Users\\thorfinn\\projects\\cartograph\\fixtures\\nextjs-pages-router\\repo\\package.json",
+      "module": ".",
+      "content": "{\n  \"name\": \"nextjs-pages-router\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"next\": \"16.0.0\",\n    \"react\": \"19.0.0\"\n  }\n}\n",
+      "bytes": 146,
+      "lines": 9,
+      "hash": "c865b0beac4fae7a4ada38b1bf8e7b591d45c0fa3b403355abdae673a412f46c",
+      "project": ".",
+      "category": "primary_manifest"
+    }
+  ]
 }

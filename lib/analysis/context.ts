@@ -21,7 +21,7 @@ export async function loadFileInput(
 ): Promise<{ file: StoredFile; input: FileInput; classify: ClassifyInput } | null> {
   const { data: file, error } = await db
     .from("files")
-    .select("id, path, hash, exports, reached_by, skip_reason, file_roles(role, source)")
+    .select("id, path, hash, exports, reached_by, skip_reason, content_status, file_roles(role, source)")
     .eq("analysis_id", analysisId)
     .eq("path", path)
     .maybeSingle();
@@ -30,12 +30,18 @@ export async function loadFileInput(
   if (file.skip_reason !== null || file.hash === null || file.exports === null) {
     throw new Error(`${path} was skipped by the parser, so there's nothing parsed to explain`);
   }
+  // CI-4 gate, ahead of everything else in the caller: quarantined content is
+  // never explainable evidence, so this must throw before a cached
+  // classification or cached explanation can be served for the target.
+  if (file.content_status === "excluded" || file.content_status === "legacy_unclassified") {
+    throw new Error(`${path} is excluded in this analysis, so there's no content to explain`);
+  }
 
   const edges = await readAll((from, to) =>
     db
       .from("edges")
       .select(
-        "id, kind, type_only, source_file_id, target_file_id, source:files!edges_source_file_id_organization_id_fkey(path, exports, file_roles(role, source)), target:files!edges_target_file_id_organization_id_fkey(path, exports, file_roles(role, source))",
+        "id, kind, type_only, source_file_id, target_file_id, source:files!edges_source_file_id_organization_id_fkey(path, exports, content_status, file_roles(role, source)), target:files!edges_target_file_id_organization_id_fkey(path, exports, content_status, file_roles(role, source))",
       )
       .eq("analysis_id", analysisId)
       .or(`source_file_id.eq.${file.id},target_file_id.eq.${file.id}`)
@@ -49,6 +55,10 @@ export async function loadFileInput(
     const outgoing = e.source_file_id === file.id;
     const other = outgoing ? e.target : e.source;
     if (!other) throw new Error(`An edge of ${path} points at a file that isn't stored`);
+    // Quarantined neighbours are filtered out of the input here so they can
+    // never reach imports/importedBy and, through it, fileCitationsAllowed.
+    // Stored and absent neighbours pass unchanged.
+    if (other.content_status === "excluded" || other.content_status === "legacy_unclassified") continue;
     // A file importing itself would sit in both lists; the parser's own
     // counts include it that way too.
     if (outgoing) add(imports, other, e.kind, e.type_only);
@@ -75,13 +85,29 @@ export async function loadFileInput(
   return { file: { id: file.id, path: file.path, hash: file.hash, conventionRole: role?.source === "convention" }, input, classify };
 }
 
-// The folder is a group of the same folding the map draws, worked out from the
-// same parsed file list, so the question is about the box that was clicked.
+// Citation claims a question may satisfy outside the evidence actually read:
+// paths of files this analysis holds that were parsed, belong to the asking
+// analysis's scope, and whose content is field-trusted — `stored`. Excluded
+// and legacy-unclassified paths never appear here, and an `absent` path is
+// not eligible either: it can only become citable by a successful authorized
+// backfill that puts it in the answer's evidence map. The join runs against
+// db under the caller's policies, so another organization's analysis is not
+// in the set.
+export async function allowedAnalysisPaths(db: Db, analysisId: string): Promise<Set<string>> {
+  const { data, error } = await db
+    .from("files")
+    .select("path")
+    .eq("analysis_id", analysisId)
+    .is("skip_reason", null)
+    .eq("content_status", "stored");
+  if (error) throw new Error(`Reading the citation allowlist failed: ${error.message}`);
+  return new Set((data ?? []).map((f) => f.path));
+}
 export async function loadFolderInput(db: Db, analysisId: string, dir: string): Promise<FolderInput | null> {
   const rows = await readAll((from, to) =>
     db
       .from("files")
-      .select("id, path, module, hash, exports, fan_in, fan_out, file_roles(role, source)")
+      .select("id, path, module, hash, exports, fan_in, fan_out, content_status, file_roles(role, source)")
       .eq("analysis_id", analysisId)
       .is("skip_reason", null)
       .order("id")
@@ -93,7 +119,17 @@ export async function loadFolderInput(db: Db, analysisId: string, dir: string): 
     }
     return { ...r, module: r.module, hash: r.hash, exports: r.exports, fan_in: r.fan_in, fan_out: r.fan_out };
   });
-  const group = foldDirectories(files).groups.find((g) => g.dir === dir);
+  // CI-4: quarantined files are not explainable evidence. Removing them here
+  // keeps them out of the folder's grouping, its members and — through the
+  // endpoint check below — its boundary-edge metadata, which is exactly what
+  // folderCitationsAllowed is built from. The underlying graph rows and the
+  // stored fan-in/fan-out measurements are never touched.
+  const isQuarantined = (id: string): boolean => {
+    const status = files.find((f) => f.id === id)?.content_status;
+    return status === "excluded" || status === "legacy_unclassified";
+  };
+  const eligible = files.filter((f) => !(f.content_status === "excluded" || f.content_status === "legacy_unclassified"));
+  const group = foldDirectories(eligible).groups.find((g) => g.dir === dir);
   if (!group) return null;
 
   const inside = new Set(group.files);
@@ -104,6 +140,10 @@ export async function loadFolderInput(db: Db, analysisId: string, dir: string): 
   const incoming = new Map<string, { from: string; to: string }>();
   const outgoing = new Map<string, { from: string; to: string }>();
   for (const e of edges) {
+    // Quarantined endpoints are excluded from the boundary metadata before
+    // resolution, so a quarantined file is not misread as a corrupt edge;
+    // genuinely unknown ids below still throw as before.
+    if (isQuarantined(e.source_file_id) || isQuarantined(e.target_file_id)) continue;
     const source = pathOf.get(e.source_file_id);
     const target = pathOf.get(e.target_file_id);
     if (source === undefined || target === undefined) throw new Error("A stored edge points at a file that isn't a stored parsed file");
@@ -111,7 +151,7 @@ export async function loadFolderInput(db: Db, analysisId: string, dir: string): 
     if (inside.has(source) && !inside.has(target)) outgoing.set(`${source}\0${target}`, { from: source, to: target });
   }
 
-  const byPath = new Map(files.map((f) => [f.path, f]));
+  const byPath = new Map(eligible.map((f) => [f.path, f]));
   const members: FolderFile[] = group.files.map((p) => {
     const f = byPath.get(p);
     if (!f) throw new Error(`Folded file ${p} isn't in the file list it was folded from`);
@@ -122,7 +162,7 @@ export async function loadFolderInput(db: Db, analysisId: string, dir: string): 
 }
 
 type RoleRow = { role: string; source: string };
-type Other = { path: string; exports: string[] | null; file_roles: RoleRow[] };
+type Other = { path: string; exports: string[] | null; content_status: string; file_roles: RoleRow[] };
 
 // Other files' roles go to the model only when convention gave them. A label
 // the model gave one file later would otherwise change every neighbour's and

@@ -16,6 +16,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "../supabase/database.types.ts";
+import type { ManifestFile, ManifestStatus } from "./citations.ts";
 import { extractQueryTokens, identifierSubtokens, tokenVariants } from "./retrieval.ts";
 
 type Db = SupabaseClient<Database>;
@@ -53,6 +54,8 @@ export type PackagingEvidence = {
   blocks: string[];
   /** What was included, for the retrieval result's own accounting. */
   counts: { manifests: number; dependencies: number; config: number; entries: number };
+  /** Manifests actually rendered into the packaging block, with authoritative content status. */
+  manifests?: ManifestFile[];
 };
 
 const NOT_RELEVANT: PackagingEvidence = {
@@ -159,12 +162,32 @@ export async function loadPackagingEvidence(
   const blocks: string[] = [];
   const counts = { manifests: 0, dependencies: 0, config: 0, entries: 0 };
 
+  const renderedManifests: ManifestFile[] = [];
+
   // ---- Manifests ----
   if (manifests && manifests.length > 0) {
     const ranked = manifests
       .map((m) => ({ m, score: scoreAgainst(tokens, [m.path, m.ecosystem, m.name ?? "", m.dir]) }))
       .sort((a, b) => b.score - a.score || a.m.path.localeCompare(b.m.path))
       .slice(0, MAX_MANIFESTS);
+
+    const manifestPaths = ranked.map(({ m }) => m.path);
+    const { data: fileRows } = await db
+      .from("files")
+      .select("path, content_status")
+      .eq("analysis_id", analysisId)
+      .in("path", manifestPaths);
+    const statusByPath = new Map<string, ManifestStatus>(
+      (fileRows ?? []).map((f) => [f.path, f.content_status as ManifestStatus]),
+    );
+    for (const { m } of ranked) {
+      renderedManifests.push({
+        path: m.path,
+        content_status: statusByPath.get(m.path) ?? "absent",
+        analysis_id: analysisId,
+        rendered: true,
+      });
+    }
     const lines = ranked.map(({ m }) => {
       const parts = [`- ${m.path} (${m.ecosystem}${m.name ? `, declares "${m.name}"` : ""})`];
       const workspaces = stringArray(m.workspaces);
@@ -260,7 +283,7 @@ export async function loadPackagingEvidence(
     counts.entries = ranked.length;
   }
 
-  return { relevant: true, blocks, counts };
+  return { relevant: true, blocks, counts, ...(renderedManifests.length > 0 ? { manifests: renderedManifests } : {}) };
 }
 
 /**

@@ -293,5 +293,40 @@
       ]
     }
   },
-  "configs": []
+  "configs": [],
+  "nonCodeCandidates": [
+    {
+      "path": "package.json",
+      "absolutePath": "C:\\Users\\thorfinn\\projects\\cartograph\\fixtures\\unlinked-workspaces\\repo\\package.json",
+      "module": ".",
+      "content": "{\n  \"name\": \"unlinked-workspaces\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"workspaces\": [\n    \"packages/*\"\n  ]\n}\n",
+      "bytes": 117,
+      "lines": 8,
+      "hash": "91791e26da7d06d70f63dee93bb79ef75e601a1dde7f6e631a789f68df3eb852",
+      "project": ".",
+      "category": "primary_manifest"
+    },
+    {
+      "path": "packages/calc/package.json",
+      "absolutePath": "C:\\Users\\thorfinn\\projects\\cartograph\\fixtures\\unlinked-workspaces\\repo\\packages\\calc\\package.json",
+      "module": "packages/calc",
+      "content": "{\n  \"name\": \"@unlinked/calc\",\n  \"version\": \"1.0.0\",\n  \"private\": true\n}\n",
+      "bytes": 72,
+      "lines": 5,
+      "hash": "f7a8e345453514e8b6511eac180344154240590ed986b92fdc2eaac03dd3d96b",
+      "project": ".",
+      "category": "primary_manifest"
+    },
+    {
+      "path": "packages/geometry/package.json",
+      "absolutePath": "C:\\Users\\thorfinn\\projects\\cartograph\\fixtures\\unlinked-workspaces\\repo\\packages\\geometry\\package.json",
+      "module": "packages/geometry",
+      "content": "{\n  \"name\": \"@unlinked/geometry\",\n  \"version\": \"1.0.0\",\n  \"private\": true\n}\n",
+      "bytes": 76,
+      "lines": 5,
+      "hash": "98a0724cfe9d94582ebb66ba9721b9239ef9b2a9b57f0d91494c84d55c7463d1",
+      "project": ".",
+      "category": "primary_manifest"
+    }
+  ]
 }

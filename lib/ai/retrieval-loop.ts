@@ -386,6 +386,7 @@ export async function retrieveWithCoverageLoop(
     // Packaging evidence is query-level, not window-level: it does not change
     // as the loop adds windows, so it is carried through unchanged.
     ...(base.packaging ? { packaging: base.packaging } : {}),
+    ...(base.manifests ? { manifests: base.manifests } : {}),
   });
 
   const passes: IterationPass[] = [];

@@ -5,6 +5,7 @@
 import { answerQuestion, cacheKey, type Cache } from "../lib/ai/tasks.ts";
 import { CitationError } from "../lib/ai/citations.ts";
 import { QUESTION_SYSTEM, questionMessage, type QuestionInput } from "../lib/ai/prompts.ts";
+import { loadPackagingEvidence } from "../lib/ai/packaging.ts";
 
 const results: string[] = [];
 const pass = (m: string) => results.push(`ok    ${m}`);
@@ -492,6 +493,56 @@ Database client initialization is in \`lib/db/client.ts#L5-L25\`.
     }
   }
 
+  // Test 13/14 midpoint (CI-1 + CI-4): a cached answer whose citation was
+  // legal for retrieval but lies outside the current general allowlist — say,
+  // the file was quarantined (content_status left `stored`) since it was
+  // written — fails verification on the cache-read check and triggers the CI-1
+  // healing: the entry is dropped, the answer is regenerated, and only a
+  // fresh, allowlist-verified body is served.
+  {
+    const staleCached = "The session helper lives in `lib/auth/session.ts#L10-L40`; internals in `lib/auth/excluded.ts`.";
+    let readCalls = 0;
+    let deleteCalls = 0;
+    let writeCalls = 0;
+    let completeCalls = 0;
+    const regenerating: Cache = {
+      async read() {
+        readCalls++;
+        return readCalls === 1 ? staleCached : null;
+      },
+      async write({ body }) {
+        writeCalls++;
+        void body;
+      },
+      async delete() {
+        deleteCalls++;
+      },
+    };
+    // allowedAnalysisPaths output: the quarantined path is not in the set.
+    const allowlist: Set<string> = new Set(["lib/auth/session.ts", "lib/db/client.ts"]);
+    const answer = await answerQuestion(baseInput, {
+      cache: regenerating,
+      allAnalysisFiles: allowlist,
+      complete: async () => {
+        completeCalls++;
+        return "The session helper lives in `lib/auth/session.ts#L10-L40`.";
+      },
+    });
+    if (
+      deleteCalls === 1 &&
+      completeCalls === 1 &&
+      writeCalls === 1 &&
+      answer.cached === false &&
+      !answer.body.includes("lib/auth/excluded.ts") &&
+      answer.citations.length === 1 &&
+      answer.citations[0].path === "lib/auth/session.ts"
+    ) {
+      pass("a cached answer citing a later-quarantined file is refused, healed, and regenerated (CI-1 + CI-4)");
+    } else {
+      fail(`quarantine healing wrong: delete=${deleteCalls} complete=${completeCalls} write=${writeCalls} answer=${JSON.stringify(answer)}`);
+    }
+  }
+
   // Test 14: even after dropping the invalid entry, a regeneration that
   // fails verification is a controlled failure with no cache write.
   {
@@ -940,6 +991,176 @@ Database client initialization is in \`lib/db/client.ts#L5-L25\`.
     }
   }
 
+  // Test 27 (CI-4 production flow): loadPackagingEvidence queries files table for authoritative content_status
+  // and allows bare manifest citation only when stored in current analysis
+  {
+    const makeMockDb = (manifestFileStatus: string | null) => ({
+      from: (table: string) => {
+        if (table === "manifests") {
+          return {
+            select: () => ({
+              eq: async () => ({
+                data: [{ path: "package.json", dir: ".", ecosystem: "npm", name: "cartograph", workspaces: [], scripts: [], problems: [] }],
+                error: null,
+              }),
+            }),
+          };
+        }
+        if (table === "files") {
+          return {
+            select: () => ({
+              eq: () => ({
+                in: async (_col: string, paths: string[]) => ({
+                  data: manifestFileStatus && paths.includes("package.json")
+                    ? [{ path: "package.json", content_status: manifestFileStatus }]
+                    : [],
+                  error: null,
+                }),
+              }),
+            }),
+          };
+        }
+        return {
+          select: () => ({
+            eq: async () => ({ data: [], error: null }),
+          }),
+        };
+      },
+    });
+
+    const manifestInput: QuestionInput = {
+      question: "What packages and dependencies are in package.json?",
+      contextText: "[Manifests]\n- package.json (npm, declares \"cartograph\")",
+      files: sampleFiles,
+    };
+
+    // 27a: Stored manifest in current analysis passes bare mention
+    {
+      const { cache } = localCache();
+      const evidence = await loadPackagingEvidence(
+        makeMockDb("stored") as unknown as Parameters<typeof loadPackagingEvidence>[0],
+        "analysis-current",
+        "What dependencies are listed in the package manifest?",
+      );
+      if (evidence.manifests && evidence.manifests.length === 1 && evidence.manifests[0].content_status === "stored" && evidence.manifests[0].rendered === true) {
+        pass("production loadPackagingEvidence attaches authoritative content_status: stored and rendered: true");
+      } else {
+        fail("production loadPackagingEvidence failed to attach stored rendered manifest: " + JSON.stringify(evidence.manifests));
+      }
+
+      const manifestsByPath = new Map((evidence.manifests ?? []).map((m) => [m.path, m]));
+      const answer = await answerQuestion(manifestInput, {
+        cache,
+        manifestsByPath,
+        analysisId: "analysis-current",
+        complete: async () => "The manifest is `package.json` and session is in `lib/auth/session.ts`.",
+      });
+      if (answer.citations.some((c) => c.path === "package.json")) {
+        pass("production data flow authorizes bare mention of verified stored manifest");
+      } else {
+        fail("production data flow did not extract package.json citation: " + JSON.stringify(answer.citations));
+      }
+    }
+
+    // 27b: Excluded/quarantined manifest in current analysis is rejected
+    {
+      const { cache } = localCache();
+      const evidence = await loadPackagingEvidence(
+        makeMockDb("excluded") as unknown as Parameters<typeof loadPackagingEvidence>[0],
+        "analysis-current",
+        "What dependencies are listed in the package manifest?",
+      );
+      if (evidence.manifests?.[0]?.content_status === "excluded") {
+        pass("production loadPackagingEvidence resolves quarantined manifest as content_status: excluded");
+      } else {
+        fail("expected excluded content_status: " + JSON.stringify(evidence.manifests));
+      }
+
+      const manifestsByPath = new Map((evidence.manifests ?? []).map((m) => [m.path, m]));
+      let thrown = false;
+      try {
+        await answerQuestion(manifestInput, {
+          cache,
+          manifestsByPath,
+          analysisId: "analysis-current",
+          complete: async () => "The manifest is `package.json`.",
+        });
+      } catch (err) {
+        if (err instanceof CitationError && err.paths.includes("package.json")) {
+          thrown = true;
+        }
+      }
+      if (thrown) {
+        pass("production data flow strictly rejects quarantined/excluded manifest citation");
+      } else {
+        fail("production data flow allowed excluded manifest citation!");
+      }
+    }
+
+    // 27c: Absent from files table resolves as content_status: absent and is rejected
+    {
+      const { cache } = localCache();
+      const evidence = await loadPackagingEvidence(
+        makeMockDb(null) as unknown as Parameters<typeof loadPackagingEvidence>[0],
+        "analysis-current",
+        "What dependencies are listed in the package manifest?",
+      );
+      if (evidence.manifests?.[0]?.content_status === "absent") {
+        pass("production loadPackagingEvidence resolves unindexed manifest as content_status: absent");
+      } else {
+        fail("expected absent content_status: " + JSON.stringify(evidence.manifests));
+      }
+
+      const manifestsByPath = new Map((evidence.manifests ?? []).map((m) => [m.path, m]));
+      let thrown = false;
+      try {
+        await answerQuestion(manifestInput, {
+          cache,
+          manifestsByPath,
+          analysisId: "analysis-current",
+          complete: async () => "The manifest is `package.json`.",
+        });
+      } catch (err) {
+        if (err instanceof CitationError && err.paths.includes("package.json")) {
+          thrown = true;
+        }
+      }
+      if (thrown) {
+        pass("production data flow strictly rejects absent/unindexed manifest citation");
+      } else {
+        fail("production data flow allowed absent manifest citation!");
+      }
+    }
+
+    // 27d: Cross-analysis manifest rejection
+    {
+      const { cache } = localCache();
+      const evidence = await loadPackagingEvidence(
+        makeMockDb("stored") as unknown as Parameters<typeof loadPackagingEvidence>[0],
+        "analysis-foreign",
+        "What dependencies are listed in the package manifest?",
+      );
+      const manifestsByPath = new Map((evidence.manifests ?? []).map((m) => [m.path, m]));
+      let thrown = false;
+      try {
+        await answerQuestion(manifestInput, {
+          cache,
+          manifestsByPath,
+          analysisId: "analysis-current",
+          complete: async () => "The manifest is `package.json`.",
+        });
+      } catch (err) {
+        if (err instanceof CitationError && err.paths.includes("package.json")) {
+          thrown = true;
+        }
+      }
+      if (thrown) {
+        pass("production data flow strictly rejects cross-analysis manifest citation");
+      } else {
+        fail("production data flow allowed foreign manifest citation!");
+      }
+    }
+  }
 }
 
 run()

@@ -2,6 +2,7 @@
 // so changing it means bumping SCHEMA_VERSION and updating the validator.
 
 import type { Role } from "../roles.ts";
+import type { NonCodeCandidate } from "./screening.ts";
 
 export const SCHEMA_VERSION = 7;
 
@@ -401,4 +402,5 @@ export type ParseResult = {
   entryPoints: EntryPoint[];
   coverage: Coverage;
   configs: ConfigReport[];
+  nonCodeCandidates?: NonCodeCandidate[];
 };

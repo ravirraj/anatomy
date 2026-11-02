@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { validateParseResult } from "../parser/contract.ts";
 import { SCHEMA_VERSION, type ParseResult } from "../parser/types.ts";
+import { isCodeFile } from "../parser/walk.ts";
 import { isModelRole, type ModelRole } from "../roles.ts";
 import type { Database } from "../supabase/database.types.ts";
 
@@ -94,7 +95,7 @@ export async function loadStoredAnalysis(
   );
 
   const pathOf = new Map(files.map((f) => [f.id, f.path]));
-  const parsed = files.filter((f) => f.skip_reason === null);
+  const parsed = files.filter((f) => f.skip_reason === null && isCodeFile(f.path));
   const skipped = files.filter((f) => f.skip_reason !== null);
   const coverage = typeof analysis.coverage === "object" && analysis.coverage !== null ? analysis.coverage : {};
   const coverageFiles: unknown = Reflect.get(coverage, "files");

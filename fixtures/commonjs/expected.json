@@ -167,5 +167,18 @@
       "unresolvedCalls": []
     }
   },
-  "configs": []
+  "configs": [],
+  "nonCodeCandidates": [
+    {
+      "path": "package.json",
+      "absolutePath": "C:\\Users\\thorfinn\\projects\\cartograph\\fixtures\\commonjs\\repo\\package.json",
+      "module": ".",
+      "content": "{\n  \"name\": \"commonjs\",\n  \"version\": \"1.0.0\",\n  \"private\": true\n}\n",
+      "bytes": 66,
+      "lines": 5,
+      "hash": "9fb43017844d0981b40c12ab928abb6fcd2c138e6ead1d8571234941bb6b542e",
+      "project": ".",
+      "category": "primary_manifest"
+    }
+  ]
 }

@@ -221,5 +221,18 @@
       ]
     }
   },
-  "configs": []
+  "configs": [],
+  "nonCodeCandidates": [
+    {
+      "path": "package.json",
+      "absolutePath": "C:\\Users\\thorfinn\\projects\\cartograph\\fixtures\\dynamic-import\\repo\\package.json",
+      "module": ".",
+      "content": "{\n  \"name\": \"dynamic-import\",\n  \"version\": \"1.0.0\",\n  \"private\": true\n}\n",
+      "bytes": 72,
+      "lines": 5,
+      "hash": "997b1e1035e28a686ec99e49484ecb421bc8604e049ecdde346f524114c7ed6e",
+      "project": ".",
+      "category": "primary_manifest"
+    }
+  ]
 }

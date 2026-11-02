@@ -77,6 +77,11 @@ export function isRouteStylePath(stripped: string): boolean {
 
 export const STANDARD_PROJECT_FILES = new Set([
   "package.json",
+  "Cargo.toml",
+  "go.mod",
+  "pyproject.toml",
+  "requirements.txt",
+  "pnpm-workspace.yaml",
   "tsconfig.json",
   "jsconfig.json",
   "README.md",
@@ -276,6 +281,7 @@ export function extractCitations(body: string, options?: CitationOptions): Parse
 export type FileEvidence = {
   lines?: number;
   contentHash?: string;
+  windows?: { startLine: number; endLine: number }[];
 };
 
 export type AllowedCitations = Set<string> | Map<string, FileEvidence>;
@@ -285,8 +291,35 @@ export type CitationFailure = {
   details?: string[];
 };
 
+export type ManifestStatus =
+  | "stored"
+  | "absent"
+  | "excluded"
+  | "legacy_unclassified"
+  | "unknown";
+
+export type ManifestFile = {
+  /** Canonical repository-relative manifest path, e.g. "package.json". */
+  path: string;
+  /** The analysis's tracked content state, if one exists; "unknown" when the
+   * manifest table was not read for this answer (which makes the filename-only
+   * bypass unavailable). */
+  content_status: ManifestStatus;
+  /** Analysis this manifest belongs to. */
+  analysis_id?: string;
+  /** Whether this manifest is included in rendered packaging evidence. */
+  rendered?: boolean;
+};
+
 export type CitationOptions = {
   allAnalysisFiles?: Set<string>;
+  analysisId?: string;
+  /** Manifests actually rendered into the current answer's context. A standard
+   * manifest path (e.g. "package.json") may only be cited bare when its parsed
+   * row exists for this analysis and its content is field-trusted. Absent,
+   * excluded and legacy-unclassified manifests are not eligible through this
+   * exception. */
+  manifestsByPath?: Map<string, ManifestFile>;
 };
 
 const RESOLVE_EXTENSIONS = [
@@ -351,6 +384,37 @@ export function findMatchingPath(
   return null;
 }
 
+/**
+ * The standard root manifests (package.json, README.md, LICENSE, ...) are a
+ * special browsing shortcut for directory/package/metadata questions: the
+ * packaging block already shows these filenames as the repository's self-
+ * declarations, so a bare mention of one is "explainable" only when that
+ * manifest was actually included in the rendered context for this answer
+ * AND it is field-trusted and not quarantined. Filenames alone are not
+ * enough: absent manifests are not verified, quarantined manifests are
+ * stopped, and manifests never rendered into this answer are not citable
+ * through this tier.
+ */
+function isManifestFileGrounded(
+  normalizedPath: string,
+  manifestsByPath?: Map<string, ManifestFile>,
+  currentAnalysisId?: string,
+): boolean {
+  if (!manifestsByPath || !STANDARD_PROJECT_FILES.has(normalizedPath)) return false;
+  const m = manifestsByPath.get(normalizedPath);
+  if (!m) return false;
+  if (!currentAnalysisId || !m.analysis_id || m.analysis_id !== currentAnalysisId) {
+    return false;
+  }
+  if (m.rendered !== true) {
+    return false;
+  }
+  if (m.content_status !== "stored") {
+    return false;
+  }
+  return true;
+}
+
 // Returns the offending mentions (empty when every path-shaped token names a
 // file the model was shown and adheres to valid line bounds). The caller decides
 // what to do with them — the AI layer refuses and never caches.
@@ -391,6 +455,17 @@ export function verifyCitations(
           } else if (evidence.lines !== undefined && parsed.endLine > evidence.lines) {
             offending.add(token);
             details.push(`Invalid line range in "${token}": end line ${parsed.endLine} exceeds file length of ${evidence.lines} lines`);
+          } else if (evidence.windows !== undefined && evidence.windows.length > 0) {
+            const withinWindow = evidence.windows.some(
+              (w) => parsed.startLine! >= w.startLine && parsed.endLine! <= w.endLine,
+            );
+            if (!withinWindow) {
+              offending.add(token);
+              const windowStr = evidence.windows.map((w) => `${w.startLine}-${w.endLine}`).join(", ");
+              details.push(
+                `Line range outside retrieved evidence in "${token}": lines ${parsed.startLine}-${parsed.endLine} not within retrieved window(s) [${windowStr}]`,
+              );
+            }
           }
         }
       }
@@ -405,7 +480,7 @@ export function verifyCitations(
     const existsInAllFiles = options?.allAnalysisFiles
       ? findMatchingPath(normalizedPath, (p) => options.allAnalysisFiles!.has(p), options.allAnalysisFiles)
       : null;
-    const isStandard = STANDARD_PROJECT_FILES.has(normalizedPath);
+    const isStandard = isManifestFileGrounded(normalizedPath, options?.manifestsByPath, options?.analysisId);
 
     if (!existsInAllowed && !existsInAllFiles && !isStandard) {
       offending.add(token);

@@ -16,6 +16,7 @@ import {
   specifierCandidates,
   type TargetWindow,
 } from "../lib/ai/retrieval.ts";
+import type { BackfillDeps } from "../lib/content/read.ts";
 
 const results: string[] = [];
 const pass = (m: string) => results.push(`ok    ${m}`);
@@ -345,6 +346,8 @@ type FixtureFile = {
   analysisId?: string;
   /** Overrides the default filler content (needed for import-derivation). */
   text?: string;
+  /** CI-4: the row's content_status, defaulting to "stored". */
+  status?: string;
 };
 
 const DERIVE_SOURCE_TEXT = [
@@ -355,6 +358,7 @@ const DERIVE_SOURCE_TEXT = [
   "}",
   "export const duplicateTarget = import(\"./target.js\");",
   "import ghostModule from \"./missing/ghost.js\";",
+  "import quarLeak from \"./quarantined.js\";",
   "import react from \"react\";",
   "",
   ...Array.from({ length: 62 }, (_, i) => `// line ${i + 1} of src/glean/source.js`),
@@ -372,7 +376,10 @@ const fixtureFiles: FixtureFile[] = [
     id: "fx_app",
     path: "src/app.js",
     symbolNames: [["createApp", 6]],
-    imports: ["fx_auth_routes", "fx_error_middleware", "fx_db"],
+    // CI-4 probe: the stored app file indexes edges into both quarantined
+    // files. Allowing these edges in means quarantine can be reached through
+    // the graph; the candidate filter must make them dead ends.
+    imports: ["fx_status_quar", "fx_status_legacy", "fx_auth_routes", "fx_error_middleware", "fx_db"],
   },
   {
     id: "fx_auth_routes",
@@ -544,6 +551,35 @@ const fixtureFiles: FixtureFile[] = [
   { id: "fx_derive_target", path: "src/glean/target.js", symbolNames: [["targetUtil", 4, true]], imports: [] },
   { id: "fx_derive_lazy", path: "src/glean/lazy.js", symbolNames: [["lazyLoad", 4, true]], imports: [] },
   { id: "fx_derive_shared", path: "src/glean/shared.js", symbolNames: [["sharedCost", 4, true]], imports: [] },
+  // CI-4 probe for derived references: source.js imports "./quarantined.js"
+  // (see DERIVE_SOURCE_TEXT), so derivation resolves into a excluded row.
+  { id: "fx_derive_quar", path: "src/glean/quarantined.js", symbolNames: [], imports: [], status: "excluded" },
+  // CI-4 candidate-filter probes. All carry hashes, line counts, symbols and
+  // (for the excluded/legacy pair) incoming indexed edges from the stored app
+  // file — nothing but content_status distinguishes them from retrievable
+  // files. An absent row must stay eligible; the other two must not exist
+  // for retrieval at all.
+  {
+    id: "fx_status_quar",
+    path: "src/quarantine/excludedFlow.js",
+    symbolNames: [["excludedFlowProbe", 4, true]],
+    imports: [],
+    status: "excluded",
+  },
+  {
+    id: "fx_status_legacy",
+    path: "src/quarantine/legacyProbe.js",
+    symbolNames: [["legacyFlowProbe", 4, true]],
+    imports: [],
+    status: "legacy_unclassified",
+  },
+  {
+    id: "fx_status_absent",
+    path: "src/quarantine/absentFlow.js",
+    symbolNames: [["absentFlowProbe", 4, true]],
+    imports: [],
+    status: "absent",
+  },
   // Foreign-organization file: same db, other analysis id. Its edges and
   // rows must be invisible to retrieval filtered by analysis_id. The hop
   // chain registers a foreign edge src/hop/root.js -> leak.js below.
@@ -604,7 +640,7 @@ class FixtureDb {
       path: f.path,
       hash,
       lines: 70,
-      content_status: "stored",
+      content_status: f.status ?? "stored",
       analysis_id: f.analysisId ?? "fx_analysis",
       file_roles: f.role ? [{ role: f.role, source: "convention" }] : [{ role: undefined, source: "convention" }],
     };
@@ -1040,6 +1076,83 @@ const fxSdk = await fixtureAsk("How does the SDK work, and how does a developer 
     } else {
       fail(`foreign leak reached retrieval: ${[...leakQueries.flatMap((r) => r.files.map((f) => f.path))].join(", ")}`);
     }
+  }
+}
+
+// CI-4 — quarantined content can never become candidates or windows: rows
+// with content_status "excluded" or "legacy_unclassified" are invisible to
+// retrieval even with hashes, lines, symbols and incoming edges, including
+// through graph expansion and derived references. "absent" rows remain
+// ordinary candidates (they may be backfilled and read).
+console.log("");
+console.log("=== 5. CI-4 quarantined content never becomes evidence ===");
+
+const CRS = ["src/quarantine/excludedFlow.js", "src/quarantine/legacyProbe.js", "src/glean/quarantined.js"];
+{
+  // Direct symbol hits: the symbols table holds rows for the excluded and
+  // legacy files, but their rows are filtered out before seeding.
+  const sevAsk = await fixtureAsk("How does excludedFlowProbe work?");
+  if (!sevAsk.files.some((f) => CRS.includes(f.path)) && !sevAsk.windows.some((w) => CRS.includes(w.path))) {
+    pass("excluded and legacy-unclassified symbol hits are not candidates or windows");
+  } else {
+    fail(`quarantined symbol hit leaked: ${sevAsk.files.map((f) => f.path).join(", ")}`);
+  }
+  const legAsk = await fixtureAsk("How does legacyFlowProbe work?");
+  if (!legAsk.files.some((f) => CRS.includes(f.path)) && !legAsk.windows.some((w) => CRS.includes(w.path))) {
+    pass("the legacy-unclassified probe question returns no quarantined evidence");
+  } else {
+    fail(`legacy probe leaked: ${legAsk.files.map((f) => f.path).join(", ")}`);
+  }
+
+  // Graph edges: the stored app file indexes edges into the excluded and
+  // legacy files; expansion resolves targets against the filtered map.
+  const appAsk = await fixtureAsk("How does createApp work?");
+  if (appAsk.windows.length > 0 && !appAsk.files.some((f) => CRS.includes(f.path))) {
+    pass("graph edges cannot reintroduce excluded or legacy-unclassified files");
+  } else {
+    fail(`edge expansion leaked quarantined files: ${appAsk.files.map((f) => f.path).join(", ")}`);
+  }
+
+  // Derived references: the inspected derivative source imports
+  // "./quarantined.js"; its resolution finds no candidate in the map.
+  const derivedAsk = await fixtureAsk("How does deriveSink work?");
+  if (derivedAsk.files.some((f) => f.path === "src/glean/target.js") && !derivedAsk.files.some((f) => CRS.includes(f.path))) {
+    pass("derived references cannot reintroduce excluded files");
+  } else {
+    fail(`derived expansion leaked: ${derivedAsk.files.map((f) => f.path).join(", ")}`);
+  }
+
+  // Absent stays eligible: the row is a fresh candidate with a real read.
+  // The fixture's absent file has verified content under its own hash, so the
+  // window read only needs the row's metadata flip to succeed: a stub writer
+  // reports the flip (done), and fetching from GitHub would be a bug.
+  const absentBackfillDeps: BackfillDeps = {
+    writer: {
+      from: () => {
+        const chain = {
+          eq: () => chain,
+          select: () => Promise.resolve({ data: [{ id: "fx_status_absent" }], error: null }),
+        };
+        return { update: () => chain };
+      },
+    },
+    fetchFile: () => {
+      throw new Error("the fixture never backfills from GitHub");
+    },
+    cache: null,
+  } as unknown as NonNullable<Parameters<typeof retrieveGroundedContext>[5]>;
+  const absentAsk = await retrieveGroundedContext(
+    fixtureDb as unknown as Db,
+    "fx_analysis",
+    "How does absentFlowProbe work?",
+    {},
+    null,
+    absentBackfillDeps,
+  );
+  if (absentAsk.windows.find((w) => w.path === "src/quarantine/absentFlow.js")) {
+    pass("absent files remain retrieval candidates with readable windows");
+  } else {
+    fail(`absent candidate missing: ${absentAsk.files.map((f) => f.path).join(", ")}`);
   }
 }
 

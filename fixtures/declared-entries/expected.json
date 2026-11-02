@@ -484,5 +484,40 @@
       ]
     }
   },
-  "configs": []
+  "configs": [],
+  "nonCodeCandidates": [
+    {
+      "path": "package.json",
+      "absolutePath": "C:\\Users\\thorfinn\\projects\\cartograph\\fixtures\\declared-entries\\repo\\package.json",
+      "module": ".",
+      "content": "{\n  \"name\": \"@acme/widgets\",\n  \"version\": \"2.0.0\",\n  \"main\": \"./src/index.ts\",\n  \"bin\": \"./src/cli.ts\",\n  \"exports\": {\n    \".\": \"./src/index.ts\",\n    \"./theme\": \"./src/theme.ts\",\n    \"./missing\": \"./src/does-not-exist.ts\"\n  },\n  \"dependencies\": {\n    \"react\": \"^19.0.0\"\n  },\n  \"devDependencies\": {\n    \"react\": \"^19.0.0\"\n  }\n}\n",
+      "bytes": 327,
+      "lines": 17,
+      "hash": "d71f26f1ddbad354be8da101fa9dc7aba99313dd52c8347d9b2d7ee52da2aa8c",
+      "project": ".",
+      "category": "primary_manifest"
+    },
+    {
+      "path": "packages/broken/package.json",
+      "absolutePath": "C:\\Users\\thorfinn\\projects\\cartograph\\fixtures\\declared-entries\\repo\\packages\\broken\\package.json",
+      "module": "packages/broken",
+      "content": "{\n  \"name\": \"broken-manifest\",\n  \"dependencies\": {\n    \"left-pad\": \"^1.0.0\",\n  }\n}\n",
+      "bytes": 83,
+      "lines": 6,
+      "hash": "09612d649aa1488f6bad890126bae4975ec4a785ff74306560b45c8cdc58994b",
+      "project": ".",
+      "category": "primary_manifest"
+    },
+    {
+      "path": "packages/plain/package.json",
+      "absolutePath": "C:\\Users\\thorfinn\\projects\\cartograph\\fixtures\\declared-entries\\repo\\packages\\plain\\package.json",
+      "module": "packages/plain",
+      "content": "{\n  \"name\": \"no-manifest-here\",\n  \"private\": true\n}\n",
+      "bytes": 52,
+      "lines": 4,
+      "hash": "021b2ad28c0474a72ae72f4f5099c772230aa1a1dc70bf67c5974878e0b3a72c",
+      "project": ".",
+      "category": "primary_manifest"
+    }
+  ]
 }

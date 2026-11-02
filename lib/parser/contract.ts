@@ -76,6 +76,7 @@ export function validateParseResult(value: unknown): ParseResult {
     entryPoints: array(o.entryPoints, "$.entryPoints", entryPoint),
     coverage: coverage(o.coverage, "$.coverage"),
     configs: array(o.configs, "$.configs", configReport),
+    ...(Array.isArray(o.nonCodeCandidates) ? { nonCodeCandidates: o.nonCodeCandidates as ParseResult["nonCodeCandidates"] } : {}),
   };
 
   // Structural guarantees the rest of the app relies on, checked rather than trusted.
@@ -107,7 +108,11 @@ export function validateParseResult(value: unknown): ParseResult {
   // A dependency's manifest must be one of the manifests listed, and a
   // configuration reference must sit in a file that exists — either an indexed
   // file or an environment template the parser recorded.
-  const manifestPaths = new Set(result.manifests.map((m) => m.path));
+  const manifestPaths = new Set<string>();
+  result.manifests.forEach((m, i) => {
+    if (manifestPaths.has(m.path)) throw new ContractError(`$.manifests[${i}].path`, `duplicate manifest path: ${m.path}`);
+    manifestPaths.add(m.path);
+  });
   result.dependencies.forEach((d, i) => {
     if (!manifestPaths.has(d.manifest)) {
       throw new ContractError(`$.dependencies[${i}].manifest`, `${d.manifest} is not a manifest in the output`);
@@ -349,6 +354,9 @@ function entryPoint(value: unknown, at: string): EntryPoint {
   // resolved entry would be a contradiction the rest of the app could act on.
   if (resolved && reason !== undefined) {
     throw new ContractError(`${at}.unresolvedReason`, "a resolved entry point cannot carry an unresolved reason");
+  }
+  if (!resolved && reason === undefined) {
+    throw new ContractError(`${at}.unresolvedReason`, "an unresolved entry point must carry an unresolved reason");
   }
   return {
     path: string(o.path, `${at}.path`),

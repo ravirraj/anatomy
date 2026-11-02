@@ -223,5 +223,18 @@
       ]
     }
   },
-  "configs": []
+  "configs": [],
+  "nonCodeCandidates": [
+    {
+      "path": "package.json",
+      "absolutePath": "C:\\Users\\thorfinn\\projects\\cartograph\\fixtures\\export-import-equals\\repo\\package.json",
+      "module": ".",
+      "content": "{\n  \"name\": \"export-import-equals\",\n  \"version\": \"1.0.0\",\n  \"private\": true\n}\n",
+      "bytes": 78,
+      "lines": 5,
+      "hash": "b23ac58326ab0283efb13a9805dbda3f675cc11ab86402bf2aa530d944d062fa",
+      "project": ".",
+      "category": "primary_manifest"
+    }
+  ]
 }

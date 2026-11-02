@@ -444,5 +444,18 @@
       ]
     }
   },
-  "configs": []
+  "configs": [],
+  "nonCodeCandidates": [
+    {
+      "path": "package.json",
+      "absolutePath": "C:\\Users\\thorfinn\\projects\\cartograph\\fixtures\\nextjs-app-router\\repo\\package.json",
+      "module": ".",
+      "content": "{\n  \"name\": \"nextjs-app-router\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"next\": \"16.0.0\"\n  }\n}\n",
+      "bytes": 121,
+      "lines": 8,
+      "hash": "bc4577a3fe270bba8379aa782f857d34c435a534e32c615f99d268fbf0279026",
+      "project": ".",
+      "category": "primary_manifest"
+    }
+  ]
 }

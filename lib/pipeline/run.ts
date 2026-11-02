@@ -49,13 +49,16 @@ export async function continueRun(db: Db, claimed: ClaimedRun): Promise<void> {
     await enter(db, claimed, "select", "Walking the repository for TypeScript and JavaScript files");
     const selection = selectFiles(workdir);
 
-    const { candidates, skipped } = selection.walk;
+    const { candidates, skipped, nonCodeCandidates } = selection.walk;
     await enter(db, claimed, "parse", `Parsing ${count(candidates.length, "file")}${skipped.length ? `, ${skipped.length} skipped` : ""}`);
     const result = parseSelection(selection);
 
     // What content storage will need: the text each candidate still holds,
     // keyed the way the parsed files name themselves. Referenced, not copied.
     const contents = new Map<string, string>(candidates.map((c) => [c.path, c.content]));
+    for (const c of nonCodeCandidates) {
+      contents.set(c.path, c.content);
+    }
 
     await enter(
       db,
@@ -63,7 +66,7 @@ export async function continueRun(db: Db, claimed: ClaimedRun): Promise<void> {
       "store",
       `Storing ${count(result.coverage.files.found, "file")}, ${count(result.edges.length, "edge")} and ${count(result.routes.length, "route")}`,
     );
-    const contentStats = await storeResult(db, { id: analysisId, organizationId }, result, contents);
+    const contentStats = await storeResult(db, { id: analysisId, organizationId }, result, contents, nonCodeCandidates);
     await update(db, claimed, {
       status: "complete",
       finished_at: new Date().toISOString(),

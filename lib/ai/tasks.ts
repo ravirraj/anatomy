@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { isModelRole, MODEL_ROLES, type ModelRole } from "../roles.ts";
 import { traceable } from "langsmith/traceable";
 import { ai, MODELS, openAIOnly, traceConfig } from "./client.ts";
-import { verifyCitations, CitationError, extractCitations, type FileEvidence, type ParsedCitation } from "./citations.ts";
+import { verifyCitations, CitationError, extractCitations, type FileEvidence, type ManifestFile, type ParsedCitation } from "./citations.ts";
 import {
   CLASSIFY_SYSTEM,
   classifyMessage,
@@ -90,12 +90,18 @@ export async function answerQuestion(
     cache: Cache;
     complete?: (model: string, system: string, user: string) => Promise<string>;
     allAnalysisFiles?: Set<string>;
+    manifestsByPath?: Map<string, ManifestFile>;
+    analysisId?: string;
   },
 ): Promise<QuestionAnswer> {
   const model = MODELS.question;
   const allowedEvidence = new Map<string, FileEvidence>();
   for (const f of input.files) {
-    allowedEvidence.set(f.path, { lines: f.totalLines, contentHash: f.contentHash });
+    allowedEvidence.set(f.path, {
+      lines: f.totalLines,
+      contentHash: f.contentHash,
+      ...(f.windows ? { windows: f.windows } : {}),
+    });
   }
 
   const run = traceable(async (question: QuestionInput): Promise<QuestionAnswer> => {
@@ -120,12 +126,16 @@ export async function answerQuestion(
     const hit = await deps.cache.read(key);
     if (hit !== null) {
       try {
-        verifyCitationsEvidence(hit, allowedEvidence, deps.allAnalysisFiles);
+        verifyCitationsEvidence(hit, allowedEvidence, deps.allAnalysisFiles, deps.manifestsByPath, deps.analysisId);
         return {
           body: hit,
           model,
           cached: true,
-          citations: extractCitations(hit, { allAnalysisFiles: deps.allAnalysisFiles }),
+          citations: extractCitations(hit, {
+            allAnalysisFiles: deps.allAnalysisFiles,
+            manifestsByPath: deps.manifestsByPath,
+            analysisId: deps.analysisId,
+          }),
         };
       } catch (error) {
         // A cached answer whose evidence no longer verifies is never served:
@@ -149,13 +159,17 @@ export async function answerQuestion(
 
     const completer = deps.complete ?? complete;
     const body = await completer(model, QUESTION_SYSTEM, questionMessage(question));
-    verifyCitationsEvidence(body, allowedEvidence, deps.allAnalysisFiles);
+    verifyCitationsEvidence(body, allowedEvidence, deps.allAnalysisFiles, deps.manifestsByPath, deps.analysisId);
     await deps.cache.write({ key, task: "answer-question", model, body });
     return {
       body,
       model,
       cached: false,
-      citations: extractCitations(body, { allAnalysisFiles: deps.allAnalysisFiles }),
+      citations: extractCitations(body, {
+        allAnalysisFiles: deps.allAnalysisFiles,
+        manifestsByPath: deps.manifestsByPath,
+        analysisId: deps.analysisId,
+      }),
     };
   }, traceConfig("answer-question"));
 
@@ -166,8 +180,10 @@ function verifyCitationsEvidence(
   body: string,
   allowed: Map<string, FileEvidence>,
   allAnalysisFiles?: Set<string>,
+  manifestsByPath?: Map<string, ManifestFile>,
+  analysisId?: string,
 ): void {
-  const failing = verifyCitations(body, allowed, { allAnalysisFiles });
+  const failing = verifyCitations(body, allowed, { allAnalysisFiles, manifestsByPath, analysisId });
   if (failing.paths.length) throw new CitationError(failing.paths, failing.details);
 }
 

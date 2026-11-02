@@ -236,5 +236,18 @@
       "path": "tsconfig.json",
       "errors": []
     }
+  ],
+  "nonCodeCandidates": [
+    {
+      "path": "package.json",
+      "absolutePath": "C:\\Users\\thorfinn\\projects\\cartograph\\fixtures\\path-aliases\\repo\\package.json",
+      "module": ".",
+      "content": "{\n  \"name\": \"path-aliases\",\n  \"version\": \"1.0.0\",\n  \"private\": true\n}\n",
+      "bytes": 70,
+      "lines": 5,
+      "hash": "f153aa3110df181f681e320c0ba3106d6f8975eeee3f9d1927607623740f76fd",
+      "project": ".",
+      "category": "primary_manifest"
+    }
   ]
 }

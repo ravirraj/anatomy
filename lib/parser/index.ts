@@ -342,6 +342,7 @@ export function parseSelection({ root, walk }: Selection): ParseResult {
       calls: callCoverage,
     },
     configs: resolver.configs(),
+    nonCodeCandidates: walk.nonCodeCandidates,
   };
 }
 

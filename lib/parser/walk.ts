@@ -4,7 +4,23 @@ import path from "node:path";
 import { fallbackAdapter } from "./adapters/fallback.ts";
 import { selectAdapter, type FrameworkAdapter } from "./adapters/index.ts";
 import { manifestEcosystemOf, readManifest, type ManifestRead } from "./manifests.ts";
+import {
+  classifyNonCodeFile,
+  PRIMARY_MANIFEST_NAMES,
+  type CandidateClassification,
+  type NonCodeCandidate,
+} from "./screening.ts";
 import type { ExcludedDirectory, Project, SkippedFile } from "./types.ts";
+
+export {
+  classifyManifestBuffer,
+  classifyNonCodeFile,
+  PRIMARY_MANIFEST_NAMES,
+  type CandidateClassification,
+  type NonCodeCandidate,
+  type NonCodeRejectReason,
+  type NonCodeSkipReason,
+} from "./screening.ts";
 
 export const CODE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
 const DECLARATION = /\.d\.(ts|mts|cts)$|\.d\.[^/.]+\.ts$/;
@@ -58,6 +74,10 @@ export type WalkResult = {
    * ecosystem could plausibly declare are recorded, so this stays a small set.
    */
   otherFiles: Set<string>;
+  /** Approved, screened non-code candidates (e.g. primary manifests). */
+  nonCodeCandidates: NonCodeCandidate[];
+  /** Structured classification decisions for non-code files encountered. */
+  nonCodeClassifications: CandidateClassification[];
 };
 
 type CurrentProject = { path: string; adapter: FrameworkAdapter };
@@ -116,6 +136,8 @@ export function walkRepository(root: string): WalkResult {
     manifests: [],
     manifestDirs: [],
     otherFiles: new Set(),
+    nonCodeCandidates: [],
+    nonCodeClassifications: [],
   };
 
   const within = (project: CurrentProject, relativePath: string) => withinProject(project.path, relativePath);
@@ -128,12 +150,23 @@ export function walkRepository(root: string): WalkResult {
     // The root is always a project. Below it, a package.json starts one only
     // when a framework is detected there; otherwise the folder stays in its
     // parent's project and keeps its conventions.
+    // Early screening gate: a package.json that is not an eligible candidate
+    // (e.g. secret detected, sensitive path, oversized, binary) is blocked from
+    // framework adapter detection and workspace package name emission.
     let project = parent;
-    const manifest = entries.find((entry) => entry.isFile() && entry.name === "package.json");
-    if (!parent || manifest) {
-      const pkg = manifest ? readPackage(path.join(absoluteDir, manifest.name)) : null;
-      if (pkg?.name) result.workspacePackages.add(pkg.name);
-      const adapter = selectAdapter({ dir: absoluteDir, dependencies: pkg?.dependencies ?? new Set() });
+    const manifestEntry = entries.find((entry) => entry.isFile() && entry.name === "package.json");
+    let safePkg: { name: string | null; dependencies: Set<string> } | null = null;
+    if (manifestEntry) {
+      const manifestPath = toPosix(path.relative(root, path.join(absoluteDir, manifestEntry.name)));
+      const absPath = path.join(absoluteDir, manifestEntry.name);
+      const check = classifyNonCodeFile(absPath, manifestPath);
+      if (check.status === "eligible") {
+        safePkg = readPackage(absPath);
+      }
+    }
+    if (!parent || safePkg) {
+      if (safePkg?.name) result.workspacePackages.add(safePkg.name);
+      const adapter = selectAdapter({ dir: absoluteDir, dependencies: safePkg?.dependencies ?? new Set() });
       if (!parent || adapter !== fallbackAdapter) {
         project = { path: toPosix(path.relative(root, absoluteDir)) || ".", adapter };
         result.projects.push({ path: project.path, adapter: adapter.name });
@@ -143,16 +176,63 @@ export function walkRepository(root: string): WalkResult {
     if (!project) throw new Error(`No project for ${absoluteDir}`);
 
     // Every manifest this directory holds, whatever ecosystem it belongs to.
-    // Read here rather than in a second pass so a manifest is read exactly
-    // once, by the same walk that decides which directories are excluded.
+    // Screened first before candidate approval or newly exposed metadata.
     const dirPath = toPosix(path.relative(root, absoluteDir)) || ".";
     for (const entry of entries) {
+      const manifestPath = toPosix(path.relative(root, path.join(absoluteDir, entry.name)));
+      const absPath = path.join(absoluteDir, entry.name);
+
+      if (entry.isSymbolicLink() && PRIMARY_MANIFEST_NAMES.has(entry.name)) {
+        result.nonCodeClassifications.push({
+          status: "skipped",
+          path: manifestPath,
+          reason: "symlink",
+          detail: "symbolic link not followed",
+        });
+        continue;
+      }
+
       if (!entry.isFile()) continue;
       const ecosystem = manifestEcosystemOf(entry.name);
       if (ecosystem === null) continue;
-      const manifestPath = toPosix(path.relative(root, path.join(absoluteDir, entry.name)));
-      result.manifests.push(readManifest(path.join(absoluteDir, entry.name), manifestPath, dirPath, project.path, ecosystem));
-      if (!result.manifestDirs.includes(dirPath)) result.manifestDirs.push(dirPath);
+
+      const classification = classifyNonCodeFile(absPath, manifestPath);
+      result.nonCodeClassifications.push(classification);
+
+      if (classification.status === "eligible") {
+        result.nonCodeCandidates.push({
+          path: manifestPath,
+          absolutePath: absPath,
+          module: dirPath,
+          content: classification.content,
+          bytes: classification.bytes,
+          lines: classification.lines,
+          hash: classification.hash,
+          project: project.path,
+          category: "primary_manifest",
+        });
+        result.manifests.push(readManifest(absPath, manifestPath, dirPath, project.path, ecosystem));
+        if (!result.manifestDirs.includes(dirPath)) result.manifestDirs.push(dirPath);
+      } else {
+        // Fail closed for all non-eligible manifests (rejected or skipped):
+        // Neither rejected nor oversized/binary/invalid-utf8 manifests reach readManifest.
+        // No dependencies, scripts, workspaces, entry points, or metadata can be extracted.
+        result.manifests.push({
+          manifest: {
+            path: manifestPath,
+            dir: dirPath,
+            project: project.path,
+            ecosystem,
+            name: null,
+            workspaces: [],
+            scripts: [],
+            problems: [`security-screening-${classification.status}: ${classification.reason}`],
+          },
+          dependencies: [],
+          declared: [],
+        });
+        if (!result.manifestDirs.includes(dirPath)) result.manifestDirs.push(dirPath);
+      }
     }
 
     for (const entry of entries) {

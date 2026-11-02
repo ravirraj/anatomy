@@ -1,8 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { getFileLines } from "../content/read.ts";
+import { getFileLines, type BackfillDeps } from "../content/read.ts";
 import type { Database } from "../supabase/database.types.ts";
 import { planQuestion, type QuestionPlan } from "./planner.ts";
 import { formatPackagingEvidence, loadPackagingEvidence } from "./packaging.ts";
+import type { ManifestFile } from "./citations.ts";
+import { PRIMARY_MANIFEST_NAMES } from "../parser/screening.ts";
+import { isCodeFile } from "../parser/walk.ts";
 
 export type Db = SupabaseClient<Database>;
 
@@ -181,7 +184,7 @@ export type RetrievalResult = {
   /** The deterministic planner output behind this retrieval (explainable). */
   plan: QuestionPlan;
   windows: RetrievedWindow[];
-  files: { fileId: string; path: string; contentHash: string; totalLines: number }[];
+  files: { fileId: string; path: string; contentHash: string; totalLines: number; windows?: { startLine: number; endLine: number }[] }[];
   /**
    * Enriched symbol/API surface for the retrieved files, when available.
    * Optional and additive: older callers and tests may omit it.
@@ -208,6 +211,7 @@ export type RetrievalResult = {
    * asked about", never "the repository has none".
    */
   packaging?: string;
+  manifests?: ManifestFile[];
 };
 
 // Common English question words and stop-words to exclude from seed token matching
@@ -303,6 +307,16 @@ const GLOSSARY: Record<string, string[]> = {
   queue: ["job", "worker", "background"],
   webhooks: ["webhook", "event"],
   sdk: ["client", "package", "packages", "library"],
+  dependencies: ["dependency", "package", "packages", "manifest", "requirements"],
+  dependency: ["dependencies", "package", "packages", "manifest", "requirements"],
+  package: ["packages", "dependency", "dependencies", "manifest"],
+  packages: ["package", "dependency", "dependencies", "manifest", "workspace"],
+  manifest: ["manifests", "package", "cargo", "pyproject", "dependencies"],
+  manifests: ["manifest", "package", "cargo", "pyproject", "dependencies"],
+  requirements: ["requirement", "dependencies", "package", "manifest"],
+  requirement: ["requirements", "dependencies", "package", "manifest"],
+  workspace: ["workspaces", "pnpm", "packages", "monorepo"],
+  workspaces: ["workspace", "pnpm", "packages", "monorepo"],
 };
 
 const ROLE_HINTS: { words: string[]; role: string }[] = [
@@ -492,6 +506,14 @@ export async function retrieveGroundedContext(
   rawQuery: string,
   budget: RetrievalBudget = {},
   conceptIndex?: import("./concepts/index.ts").ConceptIndex | null,
+  /**
+   * Backfill dependencies for the window reads. An `absent` row's verified
+   * content may still be served (and the row flipped to `stored`) through
+   * this read; production uses the defaults (admin writer, commit-pinned
+   * fetch, process cache). Tests inject a stub; every existing caller keeps
+   * today's behavior untouched.
+   */
+  backfillDeps: BackfillDeps = {},
 ): Promise<RetrievalResult> {
   const config = { ...DEFAULT_BUDGET, ...budget };
   const tokens = extractQueryTokens(rawQuery);
@@ -540,6 +562,30 @@ export async function retrieveGroundedContext(
   >();
 
   for (const f of filesData ?? []) {
+    // CI-4 security gate: only field-trusted content may become retrieval
+    // evidence. Excluded and legacy-unclassified files never enter the
+    // candidate map at construction, so no later stage — symbol/route/path
+    // seeding, graph expansion or derived-reference resolution, which all
+    // resolve neighbours strictly against this map — can reintroduce them.
+    // `stored` and `absent` stay candidates: an absent file's window is only
+    // served after the content read service authorizes its verified backfill.
+    // For code files, `stored` and `absent` stay candidates (lazy backfill).
+    // For non-code files, strictly allow only eligible primary manifests that
+    // are already securely stored. Absent, excluded, legacy-unclassified, or
+    // unrecognized non-code files are never retrieval candidates.
+    if (f.content_status === "excluded" || f.content_status === "legacy_unclassified") {
+      continue;
+    }
+
+    const isCode = isCodeFile(f.path);
+    const filename = f.path.split("/").pop() ?? f.path;
+    const isPrimaryManifest = PRIMARY_MANIFEST_NAMES.has(filename);
+
+    if (!isCode) {
+      if (!isPrimaryManifest || f.content_status !== "stored") {
+        continue;
+      }
+    }
     if (f.hash && typeof f.lines === "number") {
       const roleRow = f.file_roles?.[0];
       fileMap.set(f.id, {
@@ -714,7 +760,7 @@ export async function retrieveGroundedContext(
       ...identifierSubtokens(filename),
       ...pathLower.split("/").flatMap((seg) => identifierSubtokens(seg)),
     ];
-    const filenameParts = new Set(identifierSubtokens(filename));
+    const filenameParts = new Set([filename, ...identifierSubtokens(filename)]);
     const matchedVariants = new Set<string>();
     let bestConcept = 0;
     let bestGeneric = 0;
@@ -726,7 +772,9 @@ export async function retrieveGroundedContext(
       for (const { text: variant, kind } of tokenVariants(token)) {
         const penalty = KIND_PENALTY[kind];
         let score = 0;
-        if (filenameParts.has(variant)) {
+        if (filename === variant || pathLower === variant) {
+          score = 85;
+        } else if (filenameParts.has(variant)) {
           score = 80;
         } else if (nameParts.includes(variant)) {
           score = 70;
@@ -1021,7 +1069,7 @@ export async function retrieveGroundedContext(
       inspectedIds.add(seed.fileId);
       let source: string | null = null;
       try {
-        source = await getFileLines(db, seed.fileId, seed.startLine, seed.endLine);
+        source = await getFileLines(db, seed.fileId, seed.startLine, seed.endLine, backfillDeps);
       } catch {
         source = null;
       }
@@ -1145,7 +1193,7 @@ export async function retrieveGroundedContext(
   const retrievedWindows: RetrievedWindow[] = [];
   const includedFilesMap = new Map<
     string,
-    { fileId: string; path: string; contentHash: string; totalLines: number }
+    { fileId: string; path: string; contentHash: string; totalLines: number; windows: { startLine: number; endLine: number }[] }
   >();
   const fileWindowCounts = new Map<string, number>();
   let currentCharacters = 0;
@@ -1164,7 +1212,7 @@ export async function retrieveGroundedContext(
     }
 
     try {
-      const text = await getFileLines(db, win.fileId, win.startLine, win.endLine);
+      const text = await getFileLines(db, win.fileId, win.startLine, win.endLine, backfillDeps);
       if (text === null) continue;
 
       const windowLength = text.length;
@@ -1174,12 +1222,18 @@ export async function retrieveGroundedContext(
 
       currentCharacters += windowLength;
       fileWindowCounts.set(win.fileId, currentWindowsForFile + 1);
-      includedFilesMap.set(win.fileId, {
-        fileId: win.fileId,
-        path: win.path,
-        contentHash: win.contentHash,
-        totalLines: win.totalLines,
-      });
+      const existingFile = includedFilesMap.get(win.fileId);
+      if (existingFile) {
+        existingFile.windows.push({ startLine: win.startLine, endLine: win.endLine });
+      } else {
+        includedFilesMap.set(win.fileId, {
+          fileId: win.fileId,
+          path: win.path,
+          contentHash: win.contentHash,
+          totalLines: win.totalLines,
+          windows: [{ startLine: win.startLine, endLine: win.endLine }],
+        });
+      }
 
       retrievedWindows.push({
         fileId: win.fileId,
@@ -1257,6 +1311,7 @@ export async function retrieveGroundedContext(
     totalCharacters: currentCharacters,
     insufficientEvidence: retrievedWindows.length === 0 && packagingText === "",
     ...(packagingText ? { packaging: packagingText } : {}),
+    ...(packagingEvidence.manifests ? { manifests: packagingEvidence.manifests } : {}),
   };
 }
 

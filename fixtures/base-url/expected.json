@@ -270,5 +270,18 @@
       "path": "tsconfig.json",
       "errors": []
     }
+  ],
+  "nonCodeCandidates": [
+    {
+      "path": "package.json",
+      "absolutePath": "C:\\Users\\thorfinn\\projects\\cartograph\\fixtures\\base-url\\repo\\package.json",
+      "module": ".",
+      "content": "{\n  \"name\": \"base-url\",\n  \"version\": \"1.0.0\",\n  \"private\": true\n}\n",
+      "bytes": 66,
+      "lines": 5,
+      "hash": "a94d7deb83774311c4b0cf633ffb3e9d31c7f29aabb85481cf3b52fe2c4f495b",
+      "project": ".",
+      "category": "primary_manifest"
+    }
   ]
 }

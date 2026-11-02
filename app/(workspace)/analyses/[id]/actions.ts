@@ -2,12 +2,12 @@
 
 import { createHash } from "node:crypto";
 import { tracingStatus, type TracingStatus } from "@/lib/ai/client";
-import { type ParsedCitation } from "@/lib/ai/citations";
+import { type ManifestFile, type ParsedCitation } from "@/lib/ai/citations";
 import { type QuestionInput } from "@/lib/ai/prompts";
 import { formatRetrievedContext } from "@/lib/ai/retrieval";
 import { retrieveWithCoverageLoop, type IterativeRetrievalResult } from "@/lib/ai/retrieval-loop";
 import { answerQuestion, classifyFile, explainFile, explainFolder, type Cache } from "@/lib/ai/tasks";
-import { loadFileInput, loadFolderInput } from "@/lib/analysis/context";
+import { allowedAnalysisPaths, loadFileInput, loadFolderInput } from "@/lib/analysis/context";
 import { getFileContent } from "@/lib/content/read";
 import { fetchFileAt, resolveHeadCommit } from "@/lib/pipeline/github";
 import type { ModelRole } from "@/lib/roles";
@@ -136,13 +136,16 @@ export async function askQuestionAction(analysisId: string, question: string): P
     for (const layer of coverageLayers.verified) coverageLayers.unknown.delete(layer);
     for (const layer of coverageLayers.partial) coverageLayers.unknown.delete(layer);
 
-    // 2. Fetch all analysis files for verification context
-    const { data: allFilesData } = await db
-      .from("files")
-      .select("path")
-      .eq("analysis_id", analysis.id)
-      .is("skip_reason", null);
-    const allAnalysisFiles = new Set((allFilesData ?? []).map((f) => f.path));
+    // 2. The citation allowlist, read after the retrieval loop completes: only
+    // `stored`, non-skipped paths of this analysis may be cited outside the
+    // evidence actually retrieved. Excluded and legacy-unclassified paths are
+    // never in this set, and an absent path only becomes citable by being
+    // successfully read into the answer's evidence map (the first tier of the
+    // verification below).
+    const allAnalysisFiles = await allowedAnalysisPaths(db, analysis.id);
+    const manifestsByPath = new Map<string, ManifestFile>(
+      (retrieved.manifests ?? []).map((m) => [m.path, m]),
+    );
 
     // 3. Answer question using bounded grounded context
     const questionInput: QuestionInput = {
@@ -152,6 +155,7 @@ export async function askQuestionAction(analysisId: string, question: string): P
         path: f.path,
         contentHash: f.contentHash,
         totalLines: f.totalLines,
+        ...(f.windows ? { windows: f.windows } : {}),
       })),
       coverage: {
         verified: [...coverageLayers.verified].sort(),
@@ -163,7 +167,12 @@ export async function askQuestionAction(analysisId: string, question: string): P
 
     const cache = cacheFor(db, analysis.organizationId);
     const tLlm = performance.now();
-    const answer = await answerQuestion(questionInput, { cache, allAnalysisFiles });
+    const answer = await answerQuestion(questionInput, {
+      cache,
+      allAnalysisFiles,
+      manifestsByPath,
+      analysisId: analysis.id,
+    });
     const tLlmEnd = performance.now();
     const tTotal = performance.now();
 
@@ -184,6 +193,7 @@ export async function askQuestionAction(analysisId: string, question: string): P
           fileId: f.fileId,
           path: f.path,
           totalLines: f.totalLines,
+          ...(f.windows ? { windows: f.windows } : {}),
         })),
         insufficientEvidence: retrieved.insufficientEvidence,
         coverage: loop.coverage.summary,

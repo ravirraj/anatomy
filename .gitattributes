@@ -1,0 +1,3 @@
+# Line-ending rules for parser test fixture repositories
+fixtures/declared-entries/repo/** text eol=lf
+fixtures/polyglot-manifests/repo/** text eol=lf

@@ -503,6 +503,69 @@ console.log("=== route paths are not file citations ===");
     else fail(`canonical path resolution broken: ${resolved}`);
   }
 
+// --- CI-4: the general allowlist tier is a stored-content allowlist ---
+console.log("");
+console.log("=== CI-4 allowlist tier: quarantined, absent and stored paths ===");
+
+{
+  // allowedAnalysisPaths(db, analysisId) returns exactly the analysis's
+  // `stored`, non-skipped paths. These sets model its output next to the
+  // evidence map the retrieved windows supply:
+  const evidenceMap = new Map<string, FileEvidence>([
+    ["lib/stored/served.ts", { lines: 40, contentHash: "hash-served" }],
+    // The absent file was successfully read into tier-1 evidence: its
+    // authorized backfill completed in the same request, so its bytes are
+    // verified and its mention is citable.
+    ["lib/absent/verified.ts", { lines: 30, contentHash: "hash-absent-read" }],
+  ]);
+  const allAnalysisFiles = new Set([
+    "lib/stored/served.ts",
+    // A stored file that retrieval did not reach stays citable through the
+    // general allowlist.
+    "lib/stored/not-retrieved.ts",
+    // Excluded, legacy-unclassified and not-yet-read absent paths never
+    // enter the set allowedAnalysisPaths builds.
+  ]);
+
+  // Bare mentions of quarantined paths fail — they are neither evidence nor
+  // allowlisted — while the absent mention that was successfully read passes
+  // on tier 1.
+  const bad = verifyCitations(
+    "Quarantine caught `lib/excluded/secret.ts` and `lib/legacy/old.ts`; the verified read of `lib/absent/verified.ts` stands.",
+    evidenceMap,
+    { allAnalysisFiles },
+  );
+  if (bad.paths.length === 2 && bad.paths.includes("lib/excluded/secret.ts") && bad.paths.includes("lib/legacy/old.ts")) {
+    pass("excluded and legacy bare mentions fail; the absent path read into evidence passes");
+  } else {
+    fail(`CI-4 tier-1/tier-2 boundary wrong: ${JSON.stringify(bad.paths)}`);
+  }
+
+  // Bare mentions of the still-absent (unread) path fail, exactly the way an
+  // invented path does, unless the answer's evidence map holds a successful
+  // read of it.
+  const unreadAbsent = verifyCitations("Pending a backfill: `lib/absent/unread.ts`.", evidenceMap, { allAnalysisFiles });
+  if (unreadAbsent.paths.length === 1 && unreadAbsent.paths[0] === "lib/absent/unread.ts") {
+    pass("an absent path absent from the evidence map fails like any uncovered path");
+  } else {
+    fail(`unread absent mismatch: ${JSON.stringify(unreadAbsent.paths)}`);
+  }
+  const readAbsent = verifyCitations("Backfilled in this ask: `lib/absent/verified.ts`.", evidenceMap, { allAnalysisFiles });
+  if (readAbsent.paths.length === 0) {
+    pass("an absent path that was read into evidence verifies through tier 1");
+  } else {
+    fail(`read absent flagged: ${JSON.stringify(readAbsent.paths)}`);
+  }
+
+  // Stored-but-not-retrieved stays eligible through the general allowlist.
+  const storedUnretrieved = verifyCitations("Set up in `lib/stored/not-retrieved.ts`.", evidenceMap, { allAnalysisFiles });
+  if (storedUnretrieved.paths.length === 0) {
+    pass("a stored path retrieval missed stays citable through the general allowlist");
+  } else {
+    fail(`stored-not-retrieved flagged: ${JSON.stringify(storedUnretrieved.paths)}`);
+  }
+}
+
 console.log("");
 for (const line of results) console.log(line);
 const failed = results.filter((r) => r.startsWith("FAIL")).length;

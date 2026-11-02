@@ -324,7 +324,7 @@ function readGoMod(text: string, relativePath: string, dir: string, project: str
   // go.mod is line-oriented: `require x v1.2.3` or a `require ( ... )` block.
   // `// indirect` marks a dependency the module does not import directly.
   let inRequire = false;
-  for (const rawLine of text.split("\n")) {
+  for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.replace(/\/\/.*$/, "").trim();
     if (!line) continue;
     if (line === ")" && inRequire) {
@@ -379,7 +379,7 @@ function readGoMod(text: string, relativePath: string, dir: string, project: str
 function readRequirementsTxt(text: string, relativePath: string, dir: string, project: string): ManifestRead {
   const problems: string[] = [];
   const dependencies: Dependency[] = [];
-  for (const rawLine of text.split("\n")) {
+  for (const rawLine of text.split(/\r?\n/)) {
     // Strip comments and line continuations, then options (-r, -e, --index-url)
     // which name no package.
     const line = rawLine.replace(/(^|\s)#.*$/, "").replace(/\\$/, "").trim();
@@ -487,7 +487,7 @@ function readPnpmWorkspace(text: string, relativePath: string, dir: string, proj
   // Deliberately narrow: pnpm-workspace.yaml's only fact this parser needs is
   // its `packages:` list, which is a flat sequence of quoted or bare strings.
   let inPackages = false;
-  for (const rawLine of text.split("\n")) {
+  for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.replace(/(^|\s)#.*$/, "");
     if (!line.trim()) continue;
     if (/^packages\s*:/.test(line)) {
@@ -636,7 +636,7 @@ function logicalLines(text: string, problems: string[]): string[] {
   let depth = 0;
   let quote: string | null = null;
 
-  for (const rawLine of text.split("\n")) {
+  for (const rawLine of text.split(/\r?\n/)) {
     // A comment ends the line, but only outside a string.
     const line = stripTomlComment(rawLine);
     const trimmed = line.trim();
