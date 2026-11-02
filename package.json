@@ -17,6 +17,7 @@
     "test:qa-dataset": "node scripts/test-golden-dataset.ts",
     "test:qa-arithmetic": "node scripts/test-metric-arithmetic.ts",
     "test:qa-all": "node scripts/test-metric-arithmetic.ts && node scripts/test-golden-dataset.ts && node scripts/eval-golden-qa.ts",
+    "test:budget": "node scripts/test-prompt-budget.ts && node scripts/test-retrieval-budget.ts && node scripts/test-task-budget.ts && node scripts/test-budget-edge-cases.ts",
     "typecheck": "next typegen && tsc --noEmit",
     "accuracy": "node scripts/accuracy-fixtures.ts",
     "check-links": "node scripts/check-links.mjs"
