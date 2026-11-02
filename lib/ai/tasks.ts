@@ -4,6 +4,21 @@ import { traceable } from "langsmith/traceable";
 import { ai, MODELS, openAIOnly, traceConfig } from "./client.ts";
 import { verifyCitations, CitationError, extractCitations, type FileEvidence, type ManifestFile, type ParsedCitation } from "./citations.ts";
 import {
+  assertPromptBudget,
+  resolveModelProfile,
+  BudgetExhaustedError,
+  BudgetOverflowError,
+  type ModelContextProfile,
+} from "./budget.ts";
+export {
+  assertPromptBudget,
+  resolveModelProfile,
+  BudgetExhaustedError,
+  BudgetOverflowError,
+  type ModelContextProfile,
+};
+import { resolveBaseUrl } from "./client.ts";
+import {
   CLASSIFY_SYSTEM,
   classifyMessage,
   EXPLAIN_FILE_SYSTEM,
@@ -24,6 +39,59 @@ import {
 // model call in it, and a broken cache is visible as a trace full of calls.
 
 export type Task = "explain-file" | "explain-folder" | "classify-file" | "answer-question";
+
+export const TASK_MAX_OUTPUT_TOKENS: Record<Task, number> = {
+  "answer-question": 3500,
+  "explain-file": 1500,
+  "explain-folder": 1500,
+  "classify-file": 100,
+};
+
+export type TaskUsage = {
+  task?: Task;
+  model: string;
+  elapsedMs: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens?: number;
+};
+
+type TelemetryListener = (usage: TaskUsage) => void;
+const telemetryListeners = new Set<TelemetryListener>();
+
+export function onTaskTelemetry(listener: TelemetryListener): () => void {
+  telemetryListeners.add(listener);
+  return () => {
+    telemetryListeners.delete(listener);
+  };
+}
+
+function emitTelemetry(usage: TaskUsage): void {
+  for (const listener of telemetryListeners) {
+    try {
+      listener(usage);
+    } catch {
+      try {
+        console.error("[Telemetry] A telemetry listener threw an exception");
+      } catch {
+        // Defensive: prevent any console error failure from propagating
+      }
+    }
+  }
+}
+
+export function isContextLengthExceededError(error: unknown): boolean {
+  if (!error) return false;
+  if (error instanceof BudgetOverflowError) return true;
+  const status = (error as { status?: number })?.status;
+  const message = (error as { message?: string })?.message ?? String(error);
+  const code = (error as { code?: string; error?: { code?: string } })?.code ?? (error as { error?: { code?: string } })?.error?.code;
+
+  if (code === "context_length_exceeded") return true;
+  if (status !== undefined && status !== 400 && status !== 422) return false;
+
+  return /context_length_exceeded|maximum context length|context length|prompt is too long|too many tokens|exceeds context|reduce the length of the messages/i.test(message);
+}
 
 export type Cache = {
   read: (key: string) => Promise<string | null>;
@@ -58,7 +126,11 @@ export async function explainFile(input: FileInput, deps: { cache: Cache; source
       verifyCitationsBody(hit, allowed);
       return { body: hit, model, cached: true };
     }
-    const body = await complete(model, EXPLAIN_FILE_SYSTEM, explainFileMessage(question, capped(await deps.source())));
+    const profile = resolveModelProfile(model, resolveBaseUrl());
+    const system = EXPLAIN_FILE_SYSTEM;
+    const user = explainFileMessage(question, capped(await deps.source()));
+    assertPromptBudget(profile, system, user);
+    const body = await complete(model, system, user, { task: "explain-file" });
     verifyCitationsBody(body, allowed);
     await deps.cache.write({ key, task: "explain-file", model, body });
     return { body, model, cached: false };
@@ -76,7 +148,11 @@ export async function explainFolder(input: FolderInput, deps: { cache: Cache }):
       verifyCitationsBody(hit, allowed);
       return { body: hit, model, cached: true };
     }
-    const body = await complete(model, EXPLAIN_FOLDER_SYSTEM, explainFolderMessage(question));
+    const profile = resolveModelProfile(model, resolveBaseUrl());
+    const system = EXPLAIN_FOLDER_SYSTEM;
+    const user = explainFolderMessage(question);
+    assertPromptBudget(profile, system, user);
+    const body = await complete(model, system, user, { task: "explain-folder" });
     verifyCitationsBody(body, allowed);
     await deps.cache.write({ key, task: "explain-folder", model, body });
     return { body, model, cached: false };
@@ -157,8 +233,13 @@ export async function answerQuestion(
       }
     }
 
-    const completer = deps.complete ?? complete;
-    const body = await completer(model, QUESTION_SYSTEM, questionMessage(question));
+    const profile = resolveModelProfile(model, resolveBaseUrl());
+    const system = QUESTION_SYSTEM;
+    const user = questionMessage(question);
+    assertPromptBudget(profile, system, user);
+
+    const completer = deps.complete ?? ((m, s, u) => complete(m, s, u, { task: "answer-question" }));
+    const body = await completer(model, system, user);
     verifyCitationsEvidence(body, allowedEvidence, deps.allAnalysisFiles, deps.manifestsByPath, deps.analysisId);
     await deps.cache.write({ key, task: "answer-question", model, body });
     return {
@@ -237,8 +318,12 @@ export async function classifyFile(input: ClassifyInput, deps: { cache: Cache; s
     const key = cacheKey("classify-file", model, question);
     const hit = await deps.cache.read(key);
     if (hit !== null) return { role: parseRole(hit), cached: true };
+    const profile = resolveModelProfile(model, resolveBaseUrl());
+    const system = CLASSIFY_SYSTEM;
     const excerpt = (await deps.source()).split("\n").slice(0, EXCERPT_LINES).join("\n");
-    const answer = readRole(await askForRole(model, CLASSIFY_SYSTEM, classifyMessage(question, excerpt)));
+    const user = classifyMessage(question, excerpt);
+    assertPromptBudget(profile, system, user);
+    const answer = readRole(await askForRole(model, system, user));
     // Parsed before caching, so a refused answer is never stored and served.
     const role = parseRole(answer);
     await deps.cache.write({ key, task: "classify-file", model, body: answer });
@@ -263,7 +348,23 @@ function readRole(content: string | null): string {
   return role;
 }
 
-async function complete(model: string, system: string, user: string): Promise<string> {
+export type CompleteOptions = {
+  task?: Task;
+  maxTokens?: number;
+};
+
+async function complete(
+  model: string,
+  system: string,
+  user: string,
+  options: CompleteOptions = {},
+): Promise<string> {
+  const profile = resolveModelProfile(model, resolveBaseUrl());
+  assertPromptBudget(profile, system, user);
+
+  const taskTarget = options.maxTokens ?? (options.task ? TASK_MAX_OUTPUT_TOKENS[options.task] : 3500);
+  const max_completion_tokens = Math.min(profile.maxOutputTokens, taskTarget);
+
   let attempts = 0;
   while (true) {
     attempts++;
@@ -276,19 +377,33 @@ async function complete(model: string, system: string, user: string): Promise<st
           { role: "user", content: user },
         ],
         reasoning_effort: "low",
-        max_completion_tokens: 3500,
+        max_completion_tokens,
         ...openAIOnly(),
       });
       const elapsed = Math.round(performance.now() - t0);
-      const usage = response.usage;
-      if (usage) {
+      if (response.usage) {
+        const usage = response.usage;
+        const promptTokens = usage.prompt_tokens ?? 0;
+        const completionTokens = usage.completion_tokens ?? 0;
         console.log(
-          `[AI complete] model=${model} elapsed=${elapsed}ms promptTokens=${usage.prompt_tokens} completionTokens=${usage.completion_tokens}`,
+          `[AI complete] model=${model} elapsed=${elapsed}ms promptTokens=${promptTokens} completionTokens=${completionTokens}`,
         );
+        emitTelemetry({
+          task: options.task,
+          model,
+          elapsedMs: elapsed,
+          promptTokens,
+          completionTokens,
+          totalTokens: usage.total_tokens,
+        });
       }
       const body = takeCompletion(model, response.choices[0]);
       return body;
     } catch (err: unknown) {
+      if (isContextLengthExceededError(err)) {
+        const message = (err as Error)?.message ?? String(err);
+        throw new BudgetOverflowError(model, message);
+      }
       const status = (err as { status?: number })?.status;
       const isTransient = status === 503 || status === 429 || status === 502;
       if (isTransient && attempts <= 3) {
@@ -363,6 +478,9 @@ function takeCompletion(model: string, choice: CompletionChoice): string {
 // implements that, so a refusal falls back to plain JSON mode, which every
 // one of them does. Either way the answer is checked before it is stored.
 async function askForRole(model: string, system: string, user: string): Promise<string | null> {
+  const profile = resolveModelProfile(model, resolveBaseUrl());
+  const max_completion_tokens = Math.min(profile.maxOutputTokens, TASK_MAX_OUTPUT_TOKENS["classify-file"]);
+
   const base = {
     model,
     messages: [
@@ -370,9 +488,14 @@ async function askForRole(model: string, system: string, user: string): Promise<
       { role: "user" as const, content: user },
     ],
     reasoning_effort: "low" as const,
+    max_completion_tokens,
     ...openAIOnly(),
   };
+
+  // Primary call: strictly schema-constrained structured output
+  assertPromptBudget(profile, system, user);
   try {
+    const t0 = performance.now();
     const response = await ai().chat.completions.create({
       ...base,
       response_format: {
@@ -380,14 +503,50 @@ async function askForRole(model: string, system: string, user: string): Promise<
         json_schema: { name: "file_role", strict: true, schema: ROLE_SCHEMA },
       },
     });
+    const elapsed = Math.round(performance.now() - t0);
+    if (response.usage) {
+      emitTelemetry({
+        task: "classify-file",
+        model,
+        elapsedMs: elapsed,
+        promptTokens: response.usage.prompt_tokens ?? 0,
+        completionTokens: response.usage.completion_tokens ?? 0,
+        totalTokens: response.usage.total_tokens,
+      });
+    }
     return takeCompletion(model, response.choices[0]);
   } catch (error) {
+    if (isContextLengthExceededError(error)) {
+      throw new BudgetOverflowError(model, (error as Error)?.message ?? String(error));
+    }
     if (!schemaRefused(error)) throw error;
-    const response = await ai().chat.completions.create({
-      ...base,
-      response_format: { type: "json_object" },
-    });
-    return takeCompletion(model, response.choices[0]);
+
+    // Fallback call: independently budgeted plain JSON mode
+    assertPromptBudget(profile, system, user);
+    try {
+      const t0 = performance.now();
+      const response = await ai().chat.completions.create({
+        ...base,
+        response_format: { type: "json_object" },
+      });
+      const elapsed = Math.round(performance.now() - t0);
+      if (response.usage) {
+        emitTelemetry({
+          task: "classify-file",
+          model,
+          elapsedMs: elapsed,
+          promptTokens: response.usage.prompt_tokens ?? 0,
+        completionTokens: response.usage.completion_tokens ?? 0,
+          totalTokens: response.usage.total_tokens,
+        });
+      }
+      return takeCompletion(model, response.choices[0]);
+    } catch (fallbackError) {
+      if (isContextLengthExceededError(fallbackError)) {
+        throw new BudgetOverflowError(model, (fallbackError as Error)?.message ?? String(fallbackError));
+      }
+      throw fallbackError;
+    }
   }
 }
 
