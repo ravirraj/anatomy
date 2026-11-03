@@ -22,6 +22,7 @@ import type { ConceptIndex } from "./concepts/types.ts";
 export const INTENTS = [
   "explain-architecture",
   "usage-integration",
+  "cli-execution",
   "diagnose-behavior",
   "trace-flow",
   "locate-implementation",
@@ -75,7 +76,7 @@ const GENERIC_VERBS = new Set([
 
 // Words that talk about the act of asking, not about a concept.
 const FILLER_WORDS = new Set([
-  "correctly", "easily", "me", "mine", "my", "our", "please", "properly",
+  "correctly", "easily", "locate", "located", "me", "mine", "my", "our", "please", "properly",
   "should", "way", "well", "you", "your",
 ]);
 
@@ -124,6 +125,10 @@ const CONCEPT_CATEGORIES: { words: string[]; categories: string[] }[] = [
     words: ["cors", "cookie", "cookies"],
     categories: ["middleware", "config"],
   },
+  {
+    words: ["cli", "subcommand", "commandline"],
+    categories: ["cli"],
+  },
 ];
 
 const CATEGORIES_BY_WORD = new Map<string, string[]>();
@@ -145,6 +150,25 @@ const INTENT_PATTERNS: { intent: QuestionIntent; patterns: RegExp[] }[] = [
     patterns: [
       /\barchitectur/i, /\bstructure\b/i, /\borganiz/i, /\borganis/i,
       /\blayout\b/i, /\bmodules\b.*\bfit\b/i, /\blayers\b/i,
+    ],
+  },
+  {
+    intent: "cli-execution",
+    patterns: [
+      /\bcli\b.*\b(?:command|execut|dispatch|subcommand|invok|flow|entry|run)/i,
+      /\b(?:command|execut|dispatch|subcommand|invok)\w*\b.*\bcli\b/i,
+      /\bcommand[- ]?line\b/i,
+      /\bhow does (?:the )?cli\b/i,
+      /\btrace (?:the )?cli\b/i,
+      /\bcommand\s+parsing\b/i,
+      /\bpars(?:e|ing|er)\b.*\b(?:command|subcommand|argv|args|flags?)\b/i,
+      /\b(?:command|subcommand)s?\b.*\bpars(?:e|ing|er)\b/i,
+      /\b(?:runs?|execut(?:e|es|ing)?|dispatch(?:es|ing|ed)?|invok(?:e|es|ing)?)\s+(?:a\s+)?(?:\w+\s+)?(?:command|subcommand)s?\b/i,
+      /\b(?:command|subcommand)s?\b.*\b(?:runs?|execut(?:e|es|ing|ed)?|dispatch(?:es|ing|ed)?|invok(?:e|es|ing)?)\b/i,
+      /\b(?:when\s+(?:a\s+)?user\s+)?runs?\s+[a-z0-9_-]+\s+(?:add|init|build|create|start|run|install|exec|generate|update|remove|list)\b/i,
+      /\bcommand\s+(?:execution|dispatch|invocation|handling|routing|lifecycle|flow)\b/i,
+      /\b(?:subcommand|terminal\s+command)s?\b/i,
+      /\b(?:trace|track|flow|lifecycle)\b.*\b(?:runs?|execut|dispatch|invok)\b.*\b(?:command|subcommand|[a-z0-9_-]+\s+(?:add|init|build|create|start|run|install|exec|generate|update|remove|list))\b/i,
     ],
   },
   {
@@ -305,7 +329,23 @@ export function planQuestion(query: string, conceptIndex?: ConceptIndex): Questi
     }
   }
 
+  if (intent === "cli-execution") {
+    let attached = false;
+    for (const c of concepts) {
+      if (["command", "subcommand", "cli", "parsing", "runs", "flow", "execut", "dispatch", "entry"].some((w) => c.token.startsWith(w) || w.startsWith(c.token))) {
+        if (!c.expectedEvidence.includes("cli")) c.expectedEvidence.push("cli");
+        attached = true;
+      }
+    }
+    if (!attached && concepts.length > 0) {
+      if (!concepts[0]!.expectedEvidence.includes("cli")) concepts[0]!.expectedEvidence.push("cli");
+    }
+  }
+
   const expectedEvidence = [...new Set(concepts.flatMap((c) => c.expectedEvidence))];
+  if (intent === "cli-execution" && !expectedEvidence.includes("cli")) {
+    expectedEvidence.push("cli");
+  }
 
   return {
     query,

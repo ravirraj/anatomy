@@ -94,6 +94,10 @@ export const CATEGORY_AFFILIATION: Record<string, { segments: string[]; roles: s
     segments: ["frontend", "components", "pages", "hooks", "store", "views", "screens", "ui", "client"],
     roles: ["frontend"],
   },
+  cli: {
+    segments: ["cli", "bin", "commands", "cmd"],
+    roles: ["cli"],
+  },
 };
 
 export const UNKNOWN_NOTE =

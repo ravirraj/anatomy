@@ -249,6 +249,59 @@ const plans: Record<string, ReturnType<typeof planQuestion>> = {};
   );
 }
 
+// --- 9. CLI execution vs UI/component intent & coverage ---------------------
+{
+  const cliPlan = planQuestion("Trace the complete flow when a user runs lithos add button, from command parsing to component installation.");
+  check(
+    "command parsing flow question plans as cli-execution without literal word CLI",
+    cliPlan.intent === "cli-execution",
+    `${cliPlan.intent} (${cliPlan.intentReason})`,
+  );
+  check(
+    "command parsing flow expects CLI evidence",
+    cliPlan.expectedEvidence.includes("cli"),
+    cliPlan.expectedEvidence.join(", "),
+  );
+
+  const cliPlan2 = planQuestion("How are subcommands dispatched from commandline arguments?");
+  check(
+    "subcommand dispatch question plans as cli-execution",
+    cliPlan2.intent === "cli-execution" && cliPlan2.expectedEvidence.includes("cli"),
+    `${cliPlan2.intent}`,
+  );
+
+  const installPlan = planQuestion("How do I install a component?");
+  check(
+    "ordinary component install question stays usage-integration (not cli-execution)",
+    installPlan.intent === "usage-integration",
+    `${installPlan.intent} (${installPlan.intentReason})`,
+  );
+  check(
+    "ordinary component install question does not expect cli evidence",
+    !installPlan.expectedEvidence.includes("cli"),
+    installPlan.expectedEvidence.join(", "),
+  );
+
+  const buttonPlan = planQuestion("How does the Button component work?");
+  check(
+    "ordinary UI Button question stays explain-subsystem (not cli-execution)",
+    buttonPlan.intent === "explain-subsystem",
+    `${buttonPlan.intent} (${buttonPlan.intentReason})`,
+  );
+  check(
+    "ordinary UI Button question does not expect cli evidence",
+    !buttonPlan.expectedEvidence.includes("cli"),
+    buttonPlan.expectedEvidence.join(", "),
+  );
+
+  const addButtonPlan = planQuestion("How do I add a Button to my page?");
+  check(
+    "add button to page question is usage-integration and does not expect cli evidence",
+    addButtonPlan.intent === "usage-integration" && !addButtonPlan.expectedEvidence.includes("cli"),
+    `${addButtonPlan.intent}`,
+  );
+}
+
 // --- Summary -----------------------------------------------------------------
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
