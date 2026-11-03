@@ -319,7 +319,9 @@ console.log("\n=== 2. retrieveGroundedContext: Dual Bounds & Zero/Insufficient B
   }
   check(allWindowsIntact, "every retrieved window preserves exact whole-window line boundaries");
 
-  // 2.3 Constrained character ceiling: Large windows (~3,500 chars) skipped; long-path compact file admitted
+  // 2.3 Constrained character ceiling: whole padded windows are skipped sharp at the
+  // cap; every candidate is admitted through its matched evidence core instead, and
+  // the long-path candidate's costly header is still accounted for within the cap.
   const constrainedRes = await retrieveGroundedContext(
     mockDb as unknown as Db,
     "test_analysis",
@@ -331,7 +333,14 @@ console.log("\n=== 2. retrieveGroundedContext: Dual Bounds & Zero/Insufficient B
     `constrained retrieval strictly respects 1,200 character cap (${constrainedRes.renderedCharacters ?? constrainedRes.totalCharacters} chars)`
   );
   check(constrainedRes.windows.length > 0, "compact candidate window admitted under 1,200 cap");
-  check(constrainedRes.windows[0]!.path === longPath, "long path candidate accounted for with full header cost");
+  check(
+    constrainedRes.files.some((f) => f.path === longPath),
+    "long path candidate admitted with its full header cost within the cap",
+  );
+  check(
+    constrainedRes.files.length >= 2,
+    `kernel serving admits multiple competing files under the cap (${constrainedRes.files.length} files)`,
+  );
 
   // 2.4 Zero / Insufficient budget handling: excessive question returns insufficientEvidence without throwing
   const fallbackProfile = resolveModelProfile("unknown-custom-model");

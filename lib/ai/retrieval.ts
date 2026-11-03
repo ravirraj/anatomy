@@ -7,6 +7,7 @@ import type { ManifestFile } from "./citations.ts";
 import { PRIMARY_MANIFEST_NAMES } from "../parser/screening.ts";
 import { isCodeFile } from "../parser/walk.ts";
 import { QUESTION_SYSTEM } from "./prompts.ts";
+import { resolveBaseUrl } from "./client.ts";
 import {
   estimateCodeTokens,
   estimateProseTokens,
@@ -42,6 +43,8 @@ export type RetrievalBudget = Partial<CoreRetrievalBudget> & {
   reservedTokens?: number;
   /** Explicit character reservation for prompt framing and system instructions */
   reservedCharacters?: number;
+  /** Whether this retrieval is an internal iterative category drill pass */
+  isIterativePass?: boolean;
 };
 
 export const DEFAULT_BUDGET: CoreRetrievalBudget = {
@@ -51,6 +54,46 @@ export const DEFAULT_BUDGET: CoreRetrievalBudget = {
   maxWindowsPerFile: 2,
   seedLimit: 5,
 };
+
+/**
+ * Shapes one raw `symbols` row (generated typings omit `end_line` and
+ * enrichment columns, so every read is guarded) for retrieval consumption.
+ * Stage A matching, the API-surface appendix, and the Phase-2 symbol listing
+ * all share this coercion so they can never drift apart.
+ */
+function mapSymbolCandidateRow(row: Record<string, unknown>, path: string): NonNullable<RetrievalResult["symbols"]>[number] {
+  return {
+    fileId: row.file_id as string,
+    path,
+    name: row.name as string,
+    kind: row.kind as string,
+    line: row.line as number,
+    ...(typeof row.end_line === "number" ? { endLine: row.end_line as number } : {}),
+    exported: row.exported as boolean,
+    ...(row.export_kind ? { exportKind: row.export_kind as string } : {}),
+    ...(row.signature ? { signature: row.signature as string } : {}),
+    ...(row.return_type ? { returnType: row.return_type as string } : {}),
+    ...(row.documentation ? { documentation: row.documentation as string } : {}),
+  };
+}
+
+/**
+ * The `[API surface]` appendix a prompt attaches under a file's line-1
+ * window: exported symbols of that file. Shared by the post-serving block
+ * and the serving-phase budget checks, which must reserve the same text.
+ */
+function formatApiSurfaceFor(syms: NonNullable<RetrievalResult["symbols"]>): string {
+  const api = syms
+    .filter((s) => s.exported)
+    .map((s) => {
+      const sig = s.signature ?? s.name;
+      const doc = s.documentation ? ` — ${s.documentation.split("\n")[0]}` : "";
+      return `- ${s.name} (${s.kind})${s.exportKind && s.exportKind !== "named" ? ` [${s.exportKind}]` : ""}: ${sig}${doc}`;
+    })
+    .join("\n");
+  return api ? `\n\n[API surface]\n${api}` : "";
+}
+
 
 /**
  * Computes net evidence limits (characters, tokens, files) accounting for prompt framing,
@@ -71,7 +114,7 @@ export function computeEvidenceLimits(
   reservedTokens: number;
   isProfileBound: boolean;
 } {
-  const profile = budget.profile ?? (budget.model ? resolveModelProfile(budget.model) : undefined);
+  const profile = budget.profile ?? (budget.model ? resolveModelProfile(budget.model, resolveBaseUrl()) : undefined);
 
   const maxFiles = budget.maxFiles ?? DEFAULT_BUDGET.maxFiles;
   const maxFilesPerDirectory = budget.maxFilesPerDirectory ?? DEFAULT_BUDGET.maxFilesPerDirectory;
@@ -91,10 +134,34 @@ export function computeEvidenceLimits(
   const packagingTokens = packagingText ? estimateCodeTokens(packagingText) : 0;
   const packagingChars = packagingText ? packagingText.length : 0;
 
-  const reservedTokens = budget.reservedTokens ?? (systemTokens + questionTokens + framingTokens + packagingTokens);
-  const reservedCharacters = budget.reservedCharacters ?? (systemChars + questionChars + framingChars + packagingChars);
+  const defaultReservedTokens = budget.reservedTokens ?? (systemTokens + questionTokens + framingTokens + packagingTokens);
+  const defaultReservedCharacters = budget.reservedCharacters ?? (systemChars + questionChars + framingChars + packagingChars);
 
   if (profile) {
+    const promptOverheadTokens = systemTokens + questionTokens + framingTokens;
+    const promptOverheadChars = systemChars + questionChars + framingChars;
+
+    const totalAvailableTokens = Math.max(0, profile.operationalInputTokens - promptOverheadTokens);
+    const totalAvailableChars = Math.max(0, profile.maxInputCharacters - promptOverheadChars);
+
+    const hasExplicitCodeTarget = /[a-zA-Z0-9_\-./]+\.(?:tsx?|jsx?|mjs|cjs|py|rs|go)\b/i.test(rawQuery);
+
+    const minCodeChars = hasExplicitCodeTarget
+      ? Math.min(3600, Math.floor(totalAvailableChars * 0.75))
+      : Math.min(3200, Math.floor(totalAvailableChars * 0.65));
+    const minCodeTokens = hasExplicitCodeTarget
+      ? Math.min(1200, Math.floor(totalAvailableTokens * 0.75))
+      : Math.min(1000, Math.floor(totalAvailableTokens * 0.65));
+
+    const maxAllowedPackagingChars = Math.max(0, totalAvailableChars - minCodeChars);
+    const maxAllowedPackagingTokens = Math.max(0, totalAvailableTokens - minCodeTokens);
+
+    const effectivePkgChars = Math.min(packagingChars, maxAllowedPackagingChars);
+    const effectivePkgTokens = Math.min(packagingTokens, maxAllowedPackagingTokens);
+
+    const reservedTokens = budget.reservedTokens ?? (promptOverheadTokens + effectivePkgTokens);
+    const reservedCharacters = budget.reservedCharacters ?? (promptOverheadChars + effectivePkgChars);
+
     const availableTokens = Math.max(0, profile.operationalInputTokens - reservedTokens);
     const availableCharsCeiling = Math.max(0, profile.maxInputCharacters - reservedCharacters);
     const availableCharsTokens = Math.floor(availableTokens * 3.0);
@@ -133,8 +200,8 @@ export function computeEvidenceLimits(
     maxFilesPerDirectory,
     maxWindowsPerFile,
     seedLimit,
-    reservedCharacters,
-    reservedTokens,
+    reservedCharacters: defaultReservedCharacters,
+    reservedTokens: defaultReservedTokens,
     isProfileBound: false,
   };
 }
@@ -188,6 +255,19 @@ export type TargetWindow = {
    * indexed fact, and is ranked below all indexed evidence.
    */
   provenance?: "indexed" | "derived";
+  /**
+   * The matched evidence core inside this candidate: the matched symbol's
+   * own line span. The candidate's startLine/endLine pad that span
+   * generously for serving context. When budget-constrained serving cannot
+   * fit the whole padded window, serving compacts toward the core — the
+   * core's own lines are always served whole (never split, never omitted),
+   * recorded bounds stay inside the candidate's original bounds, so
+   * citation line ranges and slice content can never diverge.
+   * Candidates seeded without a symbol anchor have no core and are never
+   * compacted.
+   */
+  coreStart?: number;
+  coreEnd?: number;
 };
 
 /**
@@ -197,6 +277,18 @@ export type TargetWindow = {
  * this demotion so verb-named files can never outrank concept evidence.
  */
 const GENERIC_PENALTY = 25;
+
+/**
+ * Serving-layer displacement margin. Within-margin score differences are
+ * dominated by corroboration bonuses (+4/+8 per corroborating strategy,
+ * +8/+12 for multiple query concepts) — badges the ranking layer itself
+ * treats as a tie. When the post-serving rescue needs budget to admit a
+ * starved candidate, it may therefore also displace a served window whose
+ * effective score sits within this margin of the candidate's, in addition
+ * to every strictly weaker one. Serving-only policy: ranking, ordering and
+ * explicit-path priority are untouched.
+ */
+const SERVING_DISPLACEMENT_MARGIN = 15;
 
 // Phase 4 relationship-expansion bounds. No ingestion and no schema
 // involvement: expansion stays over the analysis's existing edges, and
@@ -328,7 +420,7 @@ const STOP_WORDS = new Set([
   "a", "about", "across", "all", "an", "and", "any", "are", "as", "at",
   "be", "between", "both", "but", "by", "can", "do", "does", "each",
   "file", "files", "for", "from", "get", "has", "have", "how",
-  "in", "is", "it", "its", "make", "of", "on", "or", "over",
+  "in", "is", "it", "its", "locate", "located", "make", "of", "on", "or", "over",
   "show", "tell", "that", "the", "their", "there", "this", "through",
   "to", "under", "up", "use", "used", "uses", "using",
   "what", "when", "where", "which", "who", "why",
@@ -375,6 +467,12 @@ const STEM_SUFFIXES = [
 // "-ise"): "authenticate" ~ "authentication", "authorize" ~ "authorization".
 // Used only in word-family checks, never for stemming.
 const DERIVATIONAL_SUFFIXES = new Set(["ate", "ize", "ise"]);
+
+const COMMON_INFLECTIONS = new Set([
+  ...STEM_SUFFIXES,
+  ...DERIVATIONAL_SUFFIXES,
+  "d", "s", "r", "e", "ed", "es", "er", "ing", "ly", "al", "en", "or",
+]);
 
 // Glossary values are alternative names for the same concept, read
 // symmetrically at lookup time. Kept deliberately small and generic —
@@ -528,7 +626,9 @@ export function sameFamily(a: string, b: string): boolean {
   const ra = a.slice(shared);
   const rb = b.slice(shared);
   const tailFamily = (tail: string): boolean =>
-    tail.length <= 2 || STEM_SUFFIXES.includes(tail) || DERIVATIONAL_SUFFIXES.has(tail);
+    tail.length === 0 ||
+    COMMON_INFLECTIONS.has(tail) ||
+    (tail.length >= 3 && COMMON_INFLECTIONS.has(tail.slice(1)));
   // Both sides keep a tail: each tail must look inflectional on its own.
   if (ra.length > 0 && rb.length > 0) {
     return tailFamily(ra) && tailFamily(rb);
@@ -537,7 +637,7 @@ export function sameFamily(a: string, b: string): boolean {
   // inflection or derivation of the consumed word, never a loose 2-char
   // tail of an already-consumed stem ("auth" extended with "or"/"orize").
   const rest = ra.length > 0 ? ra : rb;
-  return rest.length <= 1 || STEM_SUFFIXES.includes(rest) || DERIVATIONAL_SUFFIXES.has(rest);
+  return rest === "s" || rest === "d" || COMMON_INFLECTIONS.has(rest);
 }
 
 const ENTRY_POINT_PATTERNS = [
@@ -560,7 +660,8 @@ export function extractQueryTokens(rawQuery: string): string[] {
   // Extract explicit path-like or dot-like tokens (e.g. "auth/session.ts", "lib/ai", "route.ts")
   const pathMatches = query.match(/[a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+/g) ?? [];
   for (const m of pathMatches) {
-    tokens.add(m.toLowerCase());
+    const cleanPath = m.replace(/[.,:;!?]+$/, "");
+    if (cleanPath) tokens.add(cleanPath.toLowerCase());
   }
 
   // Split into whitespace and punctuation separated words
@@ -570,13 +671,14 @@ export function extractQueryTokens(rawQuery: string): string[] {
     .filter(Boolean);
 
   for (const word of words) {
-    const lower = word.toLowerCase();
+    const cleanWord = word.replace(/[.\-]+$/, "");
+    const lower = cleanWord.toLowerCase();
     if (lower.length >= 2 && !STOP_WORDS.has(lower)) {
       tokens.add(lower);
     }
 
     // Split camelCase and PascalCase identifiers (e.g. "createAdminSupabase" -> "create", "admin", "supabase")
-    const camelParts = word.replace(/([a-z])([A-Z])/g, "$1 $2").split(/\s+/);
+    const camelParts = cleanWord.replace(/([a-z])([A-Z])/g, "$1 $2").split(/\s+/);
     if (camelParts.length > 1) {
       for (const part of camelParts) {
         const pLower = part.toLowerCase();
@@ -587,7 +689,7 @@ export function extractQueryTokens(rawQuery: string): string[] {
     }
 
     // Split snake_case and kebab-case identifiers (e.g. "auth_middleware" -> "auth", "middleware")
-    const splitParts = word.split(/[-_]/);
+    const splitParts = cleanWord.split(/[-_]/);
     if (splitParts.length > 1) {
       for (const part of splitParts) {
         const pLower = part.toLowerCase();
@@ -725,16 +827,87 @@ export async function retrieveGroundedContext(
   // Stage 2: Discover candidate seeds from symbols, routes, and files
   const seedWindows: TargetWindow[] = [];
 
+  const GENERIC_QUERY_WORDS = new Set([
+    "controller", "controllers", "handler", "handlers", "service", "services",
+    "middleware", "middlewares", "model", "models", "schema", "schemas",
+    "route", "routes", "router", "routers", "endpoint", "endpoints",
+    "component", "components", "store", "stores",
+    "file", "files", "function", "functions", "method", "methods",
+    "class", "classes", "module", "modules", "type", "types",
+    "code", "config", "configuration",
+    "call", "create", "handle", "implement", "learn", "need", "run", "tell",
+    "understand", "want", "write", "locate", "located", "find", "get", "use",
+  ]);
+
+  const repoTokens = new Set<string>();
+  try {
+    const { data: analysisData } = await db
+      .from("analyses")
+      .select("projects(repo_name, repo_owner)")
+      .eq("id", analysisId)
+      .single();
+    if (analysisData?.projects) {
+      const p = analysisData.projects as { repo_name?: string; repo_owner?: string };
+      if (p.repo_name) {
+        for (const st of identifierSubtokens(p.repo_name)) repoTokens.add(st.toLowerCase());
+      }
+      if (p.repo_owner) {
+        for (const st of identifierSubtokens(p.repo_owner)) repoTokens.add(st.toLowerCase());
+      }
+    }
+  } catch {
+    // Offline fixtures or stub dbs may not have projects relation
+  }
+
+  const domainTokens = new Set(
+    tokens.filter(
+      (t) => !GENERIC_QUERY_WORDS.has(t) && !STOP_WORDS.has(t) && !repoTokens.has(t) && t.length >= 3,
+    ),
+  );
+  const matchedDomainTokens = new Set<string>();
+
   // A. Search symbols, matched against both the full identifier and its
   // subtokens ("AuthService" -> ["auth","service"]) for every concept
   // variant the query token expands to.
-  const { data: symbolsData, error: symbolsError } = await db
-    .from("symbols")
-    .select("file_id, name, kind, line, exported")
-    .eq("analysis_id", analysisId);
+  // The core span (end_line) is served from the same row when the runtime
+  // schema exposes it (production does); the typed fallback keeps older
+  // generated typings and mock rows readable, mirroring the Phase-2 read.
+  let symbolRows: Record<string, unknown>[] = [];
+  {
+    try {
+      const full = await (db as unknown as {
+        from: (t: string) => {
+          select: (c: string) => {
+            eq: (k: string, v: string) => Promise<{ data: unknown; error: unknown }>;
+          };
+        };
+      })
+        .from("symbols")
+        .select("file_id, name, kind, line, end_line, exported")
+        .eq("analysis_id", analysisId);
+      if (!full.error && Array.isArray(full.data)) symbolRows = full.data as Record<string, unknown>[];
+    } catch {
+      symbolRows = [];
+    }
+    if (symbolRows.length === 0) {
+      const { data, error } = await db
+        .from("symbols")
+        .select("file_id, name, kind, line, exported")
+        .eq("analysis_id", analysisId);
+      if (!error && data) symbolRows = data as unknown as Record<string, unknown>[];
+    }
+  }
 
-  if (!symbolsError && symbolsData) {
-    for (const sym of symbolsData) {
+  if (symbolRows.length > 0) {
+    for (const row of symbolRows) {
+      const sym = {
+        file_id: row.file_id as string,
+        name: row.name as string,
+        kind: row.kind as string,
+        line: row.line as number,
+        exported: row.exported as boolean,
+        ...(typeof row.end_line === "number" ? { end_line: row.end_line } : {}),
+      };
       const file = fileMap.get(sym.file_id);
       if (!file) continue;
 
@@ -744,8 +917,9 @@ export async function retrieveGroundedContext(
       let bestGeneric = 0;
       let matchedToken = "";
 
+      const matchedConceptTokens = new Set<string>();
       for (const token of tokens) {
-        const generic = genericTokens.has(token);
+        const generic = genericTokens.has(token) || repoTokens.has(token);
         for (const { text: variant, kind } of tokenVariants(token)) {
           const penalty = KIND_PENALTY[kind];
           let score = 0;
@@ -762,7 +936,10 @@ export async function retrieveGroundedContext(
             const sub = subtokens.some((st) => sameFamily(st, variant));
             if (fullName) score = 75;
             else if (sub) score = 55;
-            else if (variant.length >= 5 && nameLower.includes(variant)) score = 40;
+            else if (variant.length >= 5 && subtokens.some((st) => st.includes(variant))) score = 40;
+          }
+          if (score > 0 && !generic) {
+            matchedConceptTokens.add(token);
           }
           const scored = score - penalty;
           // Concept evidence always outranks generic-verb evidence.
@@ -781,11 +958,42 @@ export async function retrieveGroundedContext(
       // is demoted so verb-named code cannot drown concept-named code.
       const genericOnly = bestConcept === 0 && bestGeneric > 0;
       let bestScore = genericOnly ? bestGeneric - GENERIC_PENALTY : bestConcept;
+      if (bestScore > 0 && matchedConceptTokens.size >= 2) {
+        bestScore += 12;
+      }
+      if (bestScore > 0 && plan.intent === "cli-execution") {
+        const pLower = file.path.toLowerCase();
+        const fn = pLower.split("/").pop() ?? pLower;
+        const isExplicit = rawQuery.toLowerCase().includes(fn) || rawQuery.toLowerCase().includes(pLower);
+        if (!isExplicit) {
+          const isCli = pLower.includes("/cli/") || pLower.startsWith("cli/") || file.role === "cli" || pLower.includes("/bin/") || pLower.startsWith("bin/") || pLower.includes("/commands/") || pLower.includes("/cmd/");
+          if (isCli) {
+            bestScore += 20;
+          } else if (pLower.includes("/components/") || pLower.includes("/ui/") || pLower.includes("/docs/") || pLower.includes("/examples/") || file.role === "frontend") {
+            bestScore = 0;
+          } else {
+            bestScore = Math.min(bestScore, 40);
+          }
+        }
+      }
 
       if (bestScore > 0) {
+        if (domainTokens.has(matchedToken)) {
+          matchedDomainTokens.add(matchedToken);
+        }
         if (sym.exported) bestScore += 5;
-        const startLine = Math.max(1, sym.line - 15);
-        const endLine = Math.min(file.lines, sym.line + 25);
+        const isCliFile = plan.intent === "cli-execution" && (file.path.startsWith("cli/") || file.path.includes("/cli/") || file.role === "cli" || file.path.includes("/bin/"));
+        const padBefore = isCliFile ? 5 : 15;
+        const padAfter = isCliFile ? 20 : 25;
+        const startLine = Math.max(1, sym.line - padBefore);
+        const endLine = Math.min(file.lines, sym.line + padAfter);
+        // The matched evidence core: the symbol's own span, clamped to the
+        // file. Whole-span conservation is a serving invariant — a window
+        // can compact toward the core but never split or omit it.
+        const coreEnd =
+          typeof sym.end_line === "number" && sym.end_line > sym.line
+            ? Math.min(sym.end_line, file.lines)
+            : Math.min(file.lines, sym.line);
         seedWindows.push({
           fileId: file.id,
           path: file.path,
@@ -796,8 +1004,30 @@ export async function retrieveGroundedContext(
           score: bestScore,
           strategies: ["symbol"],
           reason: `symbol "${sym.name}" (${sym.kind}) matches token "${matchedToken}"${genericOnly ? " (generic verb only, demoted)" : ""}`,
+          coreStart: sym.line,
+          coreEnd,
         });
       }
+    }
+  }
+
+  // API-surface appendix per file path, prebuilt from the same symbol rows
+  // Stage A already read. Every new serving phase below includes this block
+  // cost in its budget check, so a full package never has to give up a whole
+  // window just to make room for the appendix the prompt was always going to
+  // attach to its line-1 windows.
+  const apiBlockByPath = new Map<string, string>();
+  {
+    const symbolsByPathAll = new Map<string, NonNullable<RetrievalResult["symbols"]>>();
+    for (const row of symbolRows) {
+      const file = fileMap.get(row.file_id as string);
+      if (!file) continue;
+      const list = symbolsByPathAll.get(file.path) ?? [];
+      list.push(mapSymbolCandidateRow(row, file.path));
+      symbolsByPathAll.set(file.path, list);
+    }
+    for (const [path, syms] of symbolsByPathAll) {
+      apiBlockByPath.set(path, formatApiSurfaceFor(syms));
     }
   }
 
@@ -820,7 +1050,7 @@ export async function retrieveGroundedContext(
       let matchedToken = "";
 
       for (const token of tokens) {
-        const generic = genericTokens.has(token);
+        const generic = genericTokens.has(token) || repoTokens.has(token);
         for (const { text: variant, kind } of tokenVariants(token)) {
           const penalty = KIND_PENALTY[kind];
           let score = 0;
@@ -843,6 +1073,9 @@ export async function retrieveGroundedContext(
       const bestScore = genericOnly ? bestGeneric - GENERIC_PENALTY : bestConcept;
 
       if (bestScore > 0) {
+        if (domainTokens.has(matchedToken)) {
+          matchedDomainTokens.add(matchedToken);
+        }
         const startLine = Math.max(1, route.line - 10);
         const endLine = Math.min(file.lines, route.line + 30);
         seedWindows.push({
@@ -897,7 +1130,7 @@ export async function retrieveGroundedContext(
           score = 85;
         } else if (filenameParts.has(variant)) {
           score = 80;
-        } else if (nameParts.includes(variant)) {
+        } else if (variant.length >= 3 && nameParts.includes(variant)) {
           score = 70;
         } else if (variant.length >= 5 && pathLower.includes(variant)) {
           score = 45;
@@ -925,24 +1158,53 @@ export async function retrieveGroundedContext(
     if (bestScore > 0 && matchedVariants.size >= 2) bestScore += 14;
 
     const isExplicitlyNamed = explicitNamedPaths.has(pathLower) || explicitNamedPaths.has(filename);
+    if (isExplicitlyNamed) {
+      bestScore = 120;
+      matchedToken = filename;
+    } else if (plan.intent === "cli-execution" && bestScore > 0) {
+      const isCli = pathLower.includes("/cli/") || pathLower.startsWith("cli/") || file.role === "cli" || pathLower.includes("/bin/") || pathLower.startsWith("bin/") || pathLower.includes("/commands/") || pathLower.includes("/cmd/");
+      if (isCli) {
+        bestScore += 25;
+      } else if (pathLower.includes("/components/") || pathLower.includes("/ui/") || pathLower.includes("/docs/") || pathLower.includes("/examples/") || file.role === "frontend") {
+        bestScore = 0;
+      } else {
+        bestScore = Math.min(bestScore, 40);
+      }
+    }
     if (hasExplicitFileMatch && !isExplicitlyNamed && matchedKind === "glossary") {
       bestScore = 0;
     }
 
     if (bestScore > 0) {
+      if (isExplicitlyNamed) {
+        for (const dt of domainTokens) matchedDomainTokens.add(dt);
+      } else if (domainTokens.has(matchedToken)) {
+        matchedDomainTokens.add(matchedToken);
+      }
       if (file.role) bestScore += 10;
-      const endLine = Math.min(file.lines, 50);
-      seedWindows.push({
-        fileId: file.id,
-        path: file.path,
-        contentHash: file.hash,
-        totalLines: file.lines,
-        startLine: 1,
-        endLine,
-        score: bestScore,
-        strategies: ["path"],
-        reason: `file path matches token "${matchedToken}"${genericOnly ? " (generic verb only, demoted)" : ""}`,
-      });
+      const existingSymbol = plan.intent === "cli-execution" && seedWindows.find((s) => s.fileId === file.id && s.strategies?.includes("symbol"));
+      if (existingSymbol && !isExplicitlyNamed) {
+        if (!existingSymbol.strategies?.includes("path")) {
+          existingSymbol.strategies = [...(existingSymbol.strategies ?? []), "path"];
+        }
+        existingSymbol.score = Math.max(existingSymbol.score, bestScore);
+        existingSymbol.reason += `; file path matches token "${matchedToken}"`;
+      } else {
+        const endLine = Math.min(file.lines, 50);
+        seedWindows.push({
+          fileId: file.id,
+          path: file.path,
+          contentHash: file.hash,
+          totalLines: file.lines,
+          startLine: 1,
+          endLine,
+          score: bestScore,
+          strategies: isExplicitlyNamed ? ["explicit-path", "path"] : ["path"],
+          reason: isExplicitlyNamed
+            ? `file explicitly named in query ("${filename}")`
+            : `file path matches token "${matchedToken}"${genericOnly ? " (generic verb only, demoted)" : ""}`,
+        });
+      }
     }
   }
 
@@ -951,6 +1213,9 @@ export async function retrieveGroundedContext(
   // that names an architecture concept should find those files even when no
   // path or symbol name echoes the wording. Ranks below name matches so it
   // only carries files into the budget that belong to the named concept.
+  const broadQuery = isOnboardingQuery(rawQuery);
+  const hasDirectSeeds = seedWindows.some((s) => !s.strategies?.includes("role"));
+  if (broadQuery || hasDirectSeeds || budget.isIterativePass) {
   for (const hint of ROLE_HINTS) {
     const tokensForRole = tokens.filter(
       (token) => tokenVariants(token).some((v) => hint.words.includes(v.text)),
@@ -979,7 +1244,7 @@ export async function retrieveGroundedContext(
   // real concept matches. A specific question that matches no concept
   // vocabulary instead short-circuits to insufficient evidence rather than
   // being papered over with bootstrap files.
-  const broadQuery = isOnboardingQuery(rawQuery);
+  }
   if (broadQuery) {
     type FileRecord = { id: string; path: string; hash: string; lines: number; role: string | null };
     const scoredFiles: { file: FileRecord; score: number; reason: string; strategy: string }[] = [];
@@ -1024,6 +1289,16 @@ export async function retrieveGroundedContext(
         strategies: [item.strategy],
         reason: item.reason,
       });
+    }
+  }
+
+  // For specific (non-broad) queries: verify that the matched seeds actually
+  // ground the question's specific domain concepts, rather than matching
+  // only generic architecture vocabulary (e.g. "controller", "handler", "service")
+  // or generic verbs when the core subject is absent from the repository.
+  if (!broadQuery && !budget.isIterativePass && domainTokens.size > 0) {
+    if (matchedDomainTokens.size === 0) {
+      seedWindows.length = 0;
     }
   }
 
@@ -1103,10 +1378,14 @@ export async function retrieveGroundedContext(
         totalLines: neighbour.lines,
         startLine: 1,
         endLine: Math.min(neighbour.lines, 45),
-        score: edge.kind === "call" ? (isOutgoing ? 42 : 37) : (isOutgoing ? 35 : 30),
+        score:
+          (edge.kind === "call" ? (isOutgoing ? 42 : 37) : isOutgoing ? 35 : 30) +
+          (plan.intent === "cli-execution" && (neighbour.path.startsWith("cli/") || neighbour.path.includes("/cli/") || neighbour.role === "cli" || neighbour.path.includes("/bin/")) ? 80 : 0),
         strategies: ["expansion"],
         provenance: "indexed",
         reason: `1-hop dependency connected to seed "${seedFile.path}" (indexed ${edge.kind} edge)`,
+        coreStart: 1,
+        coreEnd: Math.min(neighbour.lines, 20),
       });
     }
 
@@ -1298,7 +1577,10 @@ export async function retrieveGroundedContext(
     for (let i = 0; i < available.length; i++) {
       const slash = available[i].path.lastIndexOf("/");
       const dir = slash === -1 ? "" : available[i].path.slice(0, slash);
-      if ((dirCounts.get(dir) ?? 0) < config.maxFilesPerDirectory) {
+      const isExplicit = available[i].strategies?.includes("explicit-path");
+      const isCliDir = plan.intent === "cli-execution" && (dir === "cli" || dir.endsWith("/cli") || dir.includes("/cli/") || dir.includes("/bin"));
+      const maxDir = isCliDir ? 4 : config.maxFilesPerDirectory;
+      if (isExplicit || (dirCounts.get(dir) ?? 0) < maxDir) {
         picked = i;
         break;
       }
@@ -1320,7 +1602,27 @@ export async function retrieveGroundedContext(
   // Packaging facts ride alongside the code windows. Loaded upfront so the evidence
   // budget accounts for packaging text before candidate window selection.
   const packagingEvidence = await loadPackagingEvidence(db, analysisId, rawQuery);
-  const packagingText = formatPackagingEvidence(packagingEvidence);
+  let packagingText = formatPackagingEvidence(packagingEvidence);
+
+  const hasExplicitCodeTarget = /[a-zA-Z0-9_\-./]+\.(?:tsx?|jsx?|mjs|cjs|py|rs|go)\b/i.test(rawQuery) || hasExplicitFileMatch;
+  const profile = budget.profile ?? (budget.model ? resolveModelProfile(budget.model, resolveBaseUrl()) : undefined);
+  if (profile) {
+    const promptOverhead = QUESTION_SYSTEM.length + rawQuery.length + 1500;
+    const totalEvidenceBudget = Math.max(0, profile.maxInputCharacters - promptOverhead);
+    const minCodeReserved = hasExplicitCodeTarget
+      ? Math.min(3600, Math.floor(totalEvidenceBudget * 0.75))
+      : Math.min(3200, Math.floor(totalEvidenceBudget * 0.65));
+    const maxPkgAllowance = Math.max(0, totalEvidenceBudget - minCodeReserved);
+    if (packagingText.length > maxPkgAllowance) {
+      if (maxPkgAllowance >= 400) {
+        const slice = packagingText.slice(0, maxPkgAllowance);
+        const lastNewline = slice.lastIndexOf("\n");
+        packagingText = lastNewline > 0 ? slice.slice(0, lastNewline) : "";
+      } else {
+        packagingText = "";
+      }
+    }
+  }
 
   const limits = computeEvidenceLimits(budget, rawQuery, packagingText);
 
@@ -1344,7 +1646,7 @@ export async function retrieveGroundedContext(
   // Packaging only enters the package if it fits cleanly within the available evidence budget.
   const pkgChars = packagingText.length;
   const pkgTokens = estimateCodeTokens(packagingText);
-  const includePackaging = packagingText !== "" && pkgChars < limits.maxCharacters && pkgTokens < limits.maxTokens;
+  const includePackaging = packagingText !== "" && (profile ? limits.reservedCharacters <= profile.maxInputCharacters : true);
   const effectivePackagingText = includePackaging ? packagingText : "";
 
   const retrievedWindows: RetrievedWindow[] = [];
@@ -1353,10 +1655,127 @@ export async function retrieveGroundedContext(
     { fileId: string; path: string; contentHash: string; totalLines: number; windows: { startLine: number; endLine: number }[] }
   >();
   const fileWindowCounts = new Map<string, number>();
-  let currentCharacters = includePackaging ? pkgChars : 0;
-  let currentTokens = includePackaging ? pkgTokens : 0;
+  // Exact per-window serving costs (character header included). Every phase
+  // below adds and removes windows through these figures, so character,
+  // token and raw-code accounting can never drift between phases.
+  const servedCosts = new Map<string, { chars: number; tokens: number }>();
+  const servedExplicit = new Set<string>();
+  // Per-served-window serving context: the candidate's original bounds and
+  // its full already-fetched text. Compacted kernels grow back inside those
+  // bounds only, so pad expansion never needs another source read.
+  const servedContext = new Map<string, { candidate: TargetWindow; candidateText: string }>();
+  const windowKey = (w: { fileId: string; startLine: number; endLine: number }): string =>
+    `${w.fileId}|${w.startLine}|${w.endLine}`;
+  const headerCostOf = (path: string, contentHash: string, startLine: number, endLine: number): number =>
+    `--- File: ${path} (lines ${startLine}-${endLine}) [hash: ${contentHash.slice(0, 8)}] ---\n`.length + 2;
+  const windowCostOf = (
+    path: string,
+    contentHash: string,
+    startLine: number,
+    endLine: number,
+    text: string,
+  ): { chars: number; tokens: number } => ({
+    chars: text.length + headerCostOf(path, contentHash, startLine, endLine),
+    tokens: estimateCodeTokens(text) + estimateProseTokens(path) + 15,
+  });
+  // Appendix overhead the final prompt attaches to any window containing
+  // line 1. Ledger costs count window text and header only; fit checks
+  // charge this overhead on top, so the total the prompt sees is exactly
+  // what every serving phase respects.
+  const apiBlockCostOf = (path: string, startLine: number): { chars: number; tokens: number } => {
+    if (startLine !== 1) return { chars: 0, tokens: 0 };
+    const block = apiBlockByPath.get(path) ?? "";
+    return block ? { chars: block.length, tokens: estimateCodeTokens(block) } : { chars: 0, tokens: 0 };
+  };
+  let currentCharacters = 0;
+  let currentTokens = 0;
   let rawCodeCharacters = 0;
 
+  const serveWindow = (
+    candidate: TargetWindow,
+    startLine: number,
+    endLine: number,
+    text: string,
+    candidateText: string,
+  ): void => {
+    const cost = windowCostOf(candidate.path, candidate.contentHash, startLine, endLine, text);
+    const key = windowKey({ fileId: candidate.fileId, startLine, endLine });
+    servedCosts.set(key, cost);
+    if (candidate.strategies?.includes("explicit-path")) servedExplicit.add(key);
+    servedContext.set(key, { candidate, candidateText });
+    currentCharacters += cost.chars;
+    currentTokens += cost.tokens;
+    rawCodeCharacters += text.length;
+    fileWindowCounts.set(candidate.fileId, (fileWindowCounts.get(candidate.fileId) ?? 0) + 1);
+    const existingFile = includedFilesMap.get(candidate.fileId);
+    if (existingFile) {
+      existingFile.windows.push({ startLine, endLine });
+    } else {
+      includedFilesMap.set(candidate.fileId, {
+        fileId: candidate.fileId,
+        path: candidate.path,
+        contentHash: candidate.contentHash,
+        totalLines: candidate.totalLines,
+        windows: [{ startLine, endLine }],
+      });
+    }
+    retrievedWindows.push({
+      fileId: candidate.fileId,
+      path: candidate.path,
+      contentHash: candidate.contentHash,
+      totalLines: candidate.totalLines,
+      startLine,
+      endLine,
+      score: candidate.score,
+      text,
+      reason: candidate.reason,
+      provenance: candidate.provenance,
+    });
+  };
+
+  // Phase B — bounded core compaction (single window, no budget change):
+  // the whole padded candidate does not fit, so serve the matched evidence
+  // core instead. The core — the matched symbol's whole line span — is
+  // served without splitting or omission, and the recorded bounds stay
+  // inside the already-fetched slice, so citation ranges and slice content
+  // always agree. Core-less candidates keep today's atomic rejection and
+  // become a rescue candidate instead.
+  const coreWindowWithin = (
+    candidate: TargetWindow,
+    candidateText: string,
+  ): { startLine: number; endLine: number; text: string } | null => {
+    if (
+      candidate.coreStart === undefined ||
+      candidate.coreEnd === undefined ||
+      candidate.coreStart < candidate.startLine ||
+      candidate.coreEnd > candidate.endLine ||
+      candidate.coreStart > candidate.coreEnd
+    ) {
+      return null;
+    }
+    const lines = candidateText.split("\n");
+    return {
+      startLine: candidate.coreStart,
+      endLine: candidate.coreEnd,
+      text: lines.slice(candidate.coreStart - candidate.startLine, candidate.coreEnd - candidate.startLine + 1).join("\n"),
+    };
+  };
+
+  // The single most valuable candidate that could not fit at all (compact
+  // kernel included). First-in-order candidate wins score ties, keeping the
+  // walk fully deterministic.
+  const missState: { best: { candidate: TargetWindow; text: string } | null } = { best: null };
+  const noteMiss = (candidate: TargetWindow, text: string): void => {
+    if (
+      missState.best === null ||
+      effectiveScore({ score: candidate.score, path: candidate.path }) >
+        effectiveScore({ score: missState.best.candidate.score, path: missState.best.candidate.path })
+    ) {
+      missState.best = { candidate, text };
+    }
+  };
+
+  // Round 1 — same walk as before: full windows in serve priority order.
   for (const win of orderedForBudget) {
     if (currentCharacters >= limits.maxCharacters || currentTokens >= limits.maxTokens) break;
 
@@ -1374,52 +1793,336 @@ export async function retrieveGroundedContext(
       const text = await getFileLines(db, win.fileId, win.startLine, win.endLine, backfillDeps);
       if (text === null) continue;
 
-      const headerCost = `--- File: ${win.path} (lines ${win.startLine}-${win.endLine}) [hash: ${win.contentHash.slice(0, 8)}] ---\n`.length + 2;
-      const candidateChars = text.length + headerCost;
-      const candidateTokens = estimateCodeTokens(text) + estimateProseTokens(win.path) + 15;
-
+      const candidateCost = windowCostOf(win.path, win.contentHash, win.startLine, win.endLine, text);
       if (
-        currentCharacters + candidateChars > limits.maxCharacters ||
-        currentTokens + candidateTokens > limits.maxTokens
+        currentCharacters + candidateCost.chars <= limits.maxCharacters &&
+        currentTokens + candidateCost.tokens <= limits.maxTokens
       ) {
-        // Atomic rejection: window does not fit within remaining budget. Never truncate lines mid-window.
+        serveWindow(win, win.startLine, win.endLine, text, text);
         continue;
       }
 
-      currentCharacters += candidateChars;
-      currentTokens += candidateTokens;
-      rawCodeCharacters += text.length;
-      fileWindowCounts.set(win.fileId, currentWindowsForFile + 1);
-      const existingFile = includedFilesMap.get(win.fileId);
-      if (existingFile) {
-        existingFile.windows.push({ startLine: win.startLine, endLine: win.endLine });
-      } else {
-        includedFilesMap.set(win.fileId, {
-          fileId: win.fileId,
-          path: win.path,
-          contentHash: win.contentHash,
-          totalLines: win.totalLines,
-          windows: [{ startLine: win.startLine, endLine: win.endLine }],
-        });
+      const remainingChars = limits.maxCharacters - currentCharacters;
+      const remainingTokens = limits.maxTokens - currentTokens;
+      const core = coreWindowWithin(win, text);
+      if (core) {
+        const coreCost = windowCostOf(win.path, win.contentHash, core.startLine, core.endLine, core.text);
+        const blockOverhead = apiBlockCostOf(win.path, core.startLine);
+        if (
+          coreCost.chars + blockOverhead.chars <= remainingChars &&
+          coreCost.tokens + blockOverhead.tokens <= remainingTokens
+        ) {
+          serveWindow(win, core.startLine, core.endLine, core.text, text);
+          continue;
+        }
       }
-
-      retrievedWindows.push({
-        fileId: win.fileId,
-        path: win.path,
-        contentHash: win.contentHash,
-        totalLines: win.totalLines,
-        startLine: win.startLine,
-        endLine: win.endLine,
-        score: win.score,
-        text,
-        reason: win.reason,
-        provenance: win.provenance,
-      });
+      noteMiss(win, text);
     } catch {
       // Content unavailable or unreadable, continue to next candidate
       continue;
     }
   }
+
+  // Phase C — pad expansion: leftover budget flows back into the served
+  // windows round-robin (serve order), one line at a time, always inside the
+  // candidate's original bounds. A window grows only while each added line
+  // still fits the remaining budget, so the leftover is shared by all served
+  // files instead of one large file claiming it. Stops when a full round
+  // grows nothing.
+  const expandServedPads = (): void => {
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (let i = 0; i < retrievedWindows.length; i++) {
+        if (currentCharacters >= limits.maxCharacters || currentTokens >= limits.maxTokens) return;
+        const served = retrievedWindows[i]!;
+        const key = windowKey(served);
+        const contextEntry = servedContext.get(key);
+        if (!contextEntry) continue;
+        const candidate = contextEntry.candidate;
+        if (served.startLine <= candidate.startLine && served.endLine >= candidate.endLine) continue;
+        for (const side of ["before", "after"] as const) {
+          if (side === "before" ? served.startLine <= candidate.startLine : served.endLine >= candidate.endLine) {
+            continue;
+          }
+          const nextStart = side === "before" ? served.startLine - 1 : served.startLine;
+          const nextEnd = side === "after" ? served.endLine + 1 : served.endLine;
+          const candidateLines = contextEntry.candidateText.split("\n");
+          const nextText = candidateLines
+            .slice(nextStart - candidate.startLine, nextEnd - candidate.startLine + 1)
+            .join("\n");
+          const nextCost = windowCostOf(served.path, served.contentHash, nextStart, nextEnd, nextText);
+          const prevCost = servedCosts.get(key)!;
+          const deltaChars = nextCost.chars - prevCost.chars;
+          const deltaTokens = nextCost.tokens - prevCost.tokens;
+          // The window's appendix (if grown bounds cover line 1) counts on
+          // top of the window cost, mirroring the final prompt total.
+          let blockChars = 0;
+          let blockTokens = 0;
+          for (const w of retrievedWindows) {
+            const block = apiBlockCostOf(w.path, w === served ? nextStart : w.startLine);
+            blockChars += block.chars;
+            blockTokens += block.tokens;
+          }
+          if (
+            currentCharacters + deltaChars + blockChars > limits.maxCharacters ||
+            currentTokens + deltaTokens + blockTokens > limits.maxTokens
+          ) {
+            continue;
+          }
+          // Apply the one-line growth atomically across the ledgers.
+          const nextKey = windowKey({ fileId: served.fileId, startLine: nextStart, endLine: nextEnd });
+          servedCosts.delete(key);
+          servedCosts.set(nextKey, nextCost);
+          if (servedExplicit.has(key)) {
+            servedExplicit.delete(key);
+            servedExplicit.add(nextKey);
+          }
+          servedContext.delete(key);
+          servedContext.set(nextKey, contextEntry);
+          currentCharacters += deltaChars;
+          currentTokens += deltaTokens;
+          rawCodeCharacters += nextText.length - served.text.length;
+          const record = includedFilesMap.get(served.fileId)!;
+          record.windows = record.windows.map((w) =>
+            w.startLine === served.startLine && w.endLine === served.endLine
+              ? { startLine: nextStart, endLine: nextEnd }
+              : w,
+          );
+          served.startLine = nextStart;
+          served.endLine = nextEnd;
+          served.text = nextText;
+          grew = true;
+          break;
+        }
+      }
+    }
+  };
+  expandServedPads();
+
+  // Phase D — bounded displacement rescue, simulated transactionally before
+  // any mutation: serve the single most valuable starved candidate by
+  // dropping a minimal set of strictly weaker served windows (or, within
+  // SERVING_DISPLACEMENT_MARGIN, windows whose corroboration-inflated score
+  // the ranking layer itself treats as a tie). Cross-file coverage is
+  // preserved by construction: a file's last window is dropped only when the
+  // rescued candidate introduces a new file (net file count preserved, at
+  // most one such swap), and explicit-path windows are never displaced. If
+  // no plan is feasible, nothing changes — the package is exactly as the
+  // walk left it.
+  if (missState.best) {
+    const miss = missState.best.candidate;
+    const missText = missState.best.text;
+    const missEff = effectiveScore({ score: miss.score, path: miss.path });
+    const missIsNewFile = !includedFilesMap.has(miss.fileId);
+    const capsAllow = missIsNewFile
+      ? includedFilesMap.size < limits.maxFiles
+      : (fileWindowCounts.get(miss.fileId) ?? 0) < limits.maxWindowsPerFile;
+    if (capsAllow) {
+      let rescueSucceeded = false;
+      const droppedInRescue = new Set<string>();
+      const dropPool = retrievedWindows
+        .map((w, index) => ({ w, index }))
+        .filter(({ w }) => {
+          if (servedExplicit.has(windowKey(w))) return false;
+          if (plan.intent === "cli-execution" && (w.path.startsWith("cli/") || w.path.includes("/cli/") || w.path.includes("/bin/"))) {
+            return false;
+          }
+          const wEff = effectiveScore({ score: w.score, path: w.path });
+          return wEff < missEff || wEff - missEff <= SERVING_DISPLACEMENT_MARGIN;
+        })
+        // Substitute the costliest evidence first: fewer, larger drops keep
+        // the many small files in the package and free budget fastest.
+        .sort(
+          (a, b) =>
+            b.w.text.length - a.w.text.length ||
+            effectiveScore({ score: b.w.score, path: b.w.path }) -
+              effectiveScore({ score: a.w.score, path: a.w.path }) ||
+            a.w.path.localeCompare(b.w.path) ||
+            a.w.startLine - b.w.startLine,
+        );
+
+      // Serving variants, most complete first: the full candidate window,
+      // then (when available) the compacted evidence core.
+      const missLines = missText.split("\n");
+      const variants: { startLine: number; endLine: number; text: string; cost: { chars: number; tokens: number } }[] = [
+        {
+          startLine: miss.startLine,
+          endLine: miss.endLine,
+          text: missText,
+          cost: windowCostOf(miss.path, miss.contentHash, miss.startLine, miss.endLine, missText),
+        },
+      ];
+      if (miss.coreStart !== undefined && miss.coreEnd !== undefined && miss.coreStart >= miss.startLine && miss.coreEnd <= miss.endLine) {
+        const coreText = missLines
+          .slice(miss.coreStart - miss.startLine, miss.coreEnd - miss.startLine + 1)
+          .join("\n");
+        variants.push({
+          startLine: miss.coreStart,
+          endLine: miss.coreEnd,
+          text: coreText,
+          cost: windowCostOf(miss.path, miss.contentHash, miss.coreStart, miss.coreEnd, coreText),
+        });
+      } else if (miss.coreStart !== undefined && miss.coreEnd !== undefined) {
+        const coreText = await getFileLines(db, miss.fileId, miss.coreStart, miss.coreEnd, backfillDeps);
+        if (coreText !== null) {
+          variants.push({
+            startLine: miss.coreStart,
+            endLine: miss.coreEnd,
+            text: coreText,
+            cost: windowCostOf(miss.path, miss.contentHash, miss.coreStart, miss.coreEnd, coreText),
+          });
+        }
+      }
+
+      for (const variant of variants) {
+        // Simulation over a copied ledger: no mutation happens until a plan
+        // is feasible, so an infeasible rescue restores the exact original
+        // package (nothing was ever changed). Figures include the appendix
+        // overhead of every final line-1 window.
+        const liveCounts = new Map(fileWindowCounts);
+        const variantBlock = apiBlockCostOf(miss.path, variant.startLine);
+        let projectedChars = currentCharacters + variant.cost.chars;
+        let projectedTokens = currentTokens + variant.cost.tokens;
+        let blockChars = variantBlock.chars;
+        let blockTokens = variantBlock.tokens;
+        const chosen: RetrievedWindow[] = [];
+        let emptiedFiles = 0;
+        for (const w of retrievedWindows) {
+          if (w.startLine === 1) {
+            const block = apiBlockCostOf(w.path, 1);
+            blockChars += block.chars;
+            blockTokens += block.tokens;
+          }
+        }
+        if (
+          projectedChars + blockChars > limits.maxCharacters ||
+          projectedTokens + blockTokens > limits.maxTokens
+        ) {
+          for (const entry of dropPool) {
+            if (
+              projectedChars + blockChars <= limits.maxCharacters &&
+              projectedTokens + blockTokens <= limits.maxTokens
+            ) {
+              break;
+            }
+            const w = entry.w;
+            const live = liveCounts.get(w.fileId) ?? 1;
+            const isFileEmptying = live <= 1;
+            if (isFileEmptying && (!missIsNewFile || emptiedFiles >= 1)) continue;
+            const cost = servedCosts.get(windowKey(w));
+            if (!cost) continue;
+            liveCounts.set(w.fileId, live - 1);
+            if (isFileEmptying) emptiedFiles += 1;
+            chosen.push(w);
+            projectedChars -= cost.chars;
+            projectedTokens -= cost.tokens;
+            if (w.startLine === 1) {
+              const block = apiBlockCostOf(w.path, 1);
+              blockChars -= block.chars;
+              blockTokens -= block.tokens;
+            }
+          }
+        }
+        if (
+          projectedChars + blockChars <= limits.maxCharacters &&
+          projectedTokens + blockTokens <= limits.maxTokens
+        ) {
+          // Apply the whole plan atomically: every drop and the add together.
+          for (const w of chosen) {
+            const key = windowKey(w);
+            droppedInRescue.add(key);
+            const cost = servedCosts.get(key)!;
+            servedCosts.delete(key);
+            servedExplicit.delete(key);
+            servedContext.delete(key);
+            currentCharacters -= cost.chars;
+            currentTokens -= cost.tokens;
+            rawCodeCharacters -= w.text.length;
+            fileWindowCounts.set(w.fileId, Math.max(0, (fileWindowCounts.get(w.fileId) ?? 1) - 1));
+            const index = retrievedWindows.indexOf(w);
+            retrievedWindows.splice(index, 1);
+            const record = includedFilesMap.get(w.fileId);
+            if (record) {
+              record.windows = record.windows.filter(
+                (r) => !(r.startLine === w.startLine && r.endLine === w.endLine),
+              );
+              if (record.windows.length === 0) includedFilesMap.delete(w.fileId);
+            }
+          }
+          serveWindow(miss, variant.startLine, variant.endLine, variant.text, missText);
+          rescueSucceeded = true;
+          break;
+        }
+      }
+      // The rescued window takes its effective-score position in the serve
+      // order, so later low-value compaction still pops strictly weaker
+      // windows before it ever reaches the rescue.
+      const last = retrievedWindows[retrievedWindows.length - 1];
+      if (retrievedWindows.length > 1 && last && last.fileId === miss.fileId) {
+        const servedEff = effectiveScore({ score: last.score, path: last.path });
+        let insertAfter = -1;
+        for (let i = 0; i < retrievedWindows.length - 1; i++) {
+          const w = retrievedWindows[i]!;
+          if (effectiveScore({ score: w.score, path: w.path }) >= servedEff) insertAfter = i;
+        }
+        // -1 means the rescue outranks everything still served: it belongs
+        // at the front of the serve order instead of the pop-tail.
+        const insertAt = insertAfter === -1 ? 0 : insertAfter + 1;
+        if (insertAt !== retrievedWindows.length - 1) {
+          retrievedWindows.splice(retrievedWindows.length - 1, 1);
+          retrievedWindows.splice(insertAt === 0 ? 0 : insertAt, 0, last);
+        }
+      }
+
+      // Stage 5 second-chance sweep: after successful R2 rescue frees budget,
+      // candidates that were skipped earlier in the walk get a second chance
+      // to fit into the remaining budget before pad expansion.
+      if (rescueSucceeded && currentCharacters < limits.maxCharacters && currentTokens < limits.maxTokens) {
+        for (const win of orderedForBudget) {
+          if (currentCharacters >= limits.maxCharacters || currentTokens >= limits.maxTokens) break;
+          const key = windowKey(win);
+          if (droppedInRescue.has(key)) continue;
+          if (includedFilesMap.has(win.fileId)) continue;
+
+          const isNewFile = !includedFilesMap.has(win.fileId);
+          if (isNewFile && includedFilesMap.size >= limits.maxFiles) continue;
+
+          try {
+            const text = await getFileLines(db, win.fileId, win.startLine, win.endLine, backfillDeps);
+            if (text === null) continue;
+
+            const candidateCost = windowCostOf(win.path, win.contentHash, win.startLine, win.endLine, text);
+            if (
+              currentCharacters + candidateCost.chars <= limits.maxCharacters &&
+              currentTokens + candidateCost.tokens <= limits.maxTokens
+            ) {
+              serveWindow(win, win.startLine, win.endLine, text, text);
+              continue;
+            }
+
+            const remainingChars = limits.maxCharacters - currentCharacters;
+            const remainingTokens = limits.maxTokens - currentTokens;
+            const core = coreWindowWithin(win, text);
+            if (core) {
+              const coreCost = windowCostOf(win.path, win.contentHash, core.startLine, core.endLine, core.text);
+              const blockOverhead = apiBlockCostOf(win.path, core.startLine);
+              if (
+                coreCost.chars + blockOverhead.chars <= remainingChars &&
+                coreCost.tokens + blockOverhead.tokens <= remainingTokens
+              ) {
+                serveWindow(win, core.startLine, core.endLine, core.text, text);
+                continue;
+              }
+            }
+          } catch {
+            continue;
+          }
+        }
+      }
+    }
+  }
+  expandServedPads();
 
   // Enriched symbol/API surface for the retrieved files (Phase 2). Loaded
   // after budget selection so only retrieved files pay the query cost.
@@ -1445,45 +2148,17 @@ export async function retrieveGroundedContext(
       const pathById = new Map([...includedFilesMap.values()].map((f) => [f.fileId, f.path]));
       retrievedSymbols = symData
         .filter((s: Record<string, unknown>) => retrievedSet.has(s.file_id as string))
-        .map((s: Record<string, unknown>) => ({
-        fileId: s.file_id as string,
-        path: pathById.get(s.file_id as string) ?? "",
-        name: s.name as string,
-        kind: s.kind as string,
-        line: s.line as number,
-        ...(typeof s.end_line === "number" ? { endLine: s.end_line as number } : {}),
-        exported: s.exported as boolean,
-        ...(s.export_kind ? { exportKind: s.export_kind as string } : {}),
-        ...(s.signature ? { signature: s.signature as string } : {}),
-        ...(s.return_type ? { returnType: s.return_type as string } : {}),
-        ...(s.documentation ? { documentation: s.documentation as string } : {}),
-      }))
+        .map((s: Record<string, unknown>) => mapSymbolCandidateRow(s, pathById.get(s.file_id as string) ?? ""))
         .sort((a, b) => a.path.localeCompare(b.path) || a.line - b.line || a.name.localeCompare(b.name));
     }
   }
 
   // Calculate API surface footprint and verify total evidence bounds.
-  // Group symbols by file path to calculate API surface overhead.
-  const symbolsByPath = new Map<string, NonNullable<RetrievalResult["symbols"]>>();
-  for (const sym of retrievedSymbols) {
-    const list = symbolsByPath.get(sym.path) ?? [];
-    list.push(sym);
-    symbolsByPath.set(sym.path, list);
-  }
+  // The per-file appendix itself is precomputed above (apiBlockByPath) from
+  // the same symbol rows; here it is attached to line-1 windows of the final
+  // package, which is why every serving-phase budget check reserves it.
 
-  const getApiSurfaceBlock = (path: string): string => {
-    const syms = symbolsByPath.get(path);
-    if (!syms || syms.length === 0) return "";
-    const api = syms
-      .filter((s) => s.exported)
-      .map((s) => {
-        const sig = s.signature ?? s.name;
-        const doc = s.documentation ? ` — ${s.documentation.split("\n")[0]}` : "";
-        return `- ${s.name} (${s.kind})${s.exportKind && s.exportKind !== "named" ? ` [${s.exportKind}]` : ""}: ${sig}${doc}`;
-      })
-      .join("\n");
-    return api ? `\n\n[API surface]\n${api}` : "";
-  };
+  const getApiSurfaceBlock = (path: string): string => apiBlockByPath.get(path) ?? "";
 
   let totalEvidenceChars = currentCharacters;
   let totalEvidenceTokens = currentTokens;
@@ -1528,7 +2203,7 @@ export async function retrieveGroundedContext(
       );
       if (fileRecord.windows.length === 0) {
         includedFilesMap.delete(dropped.fileId);
-        symbolsByPath.delete(dropped.path);
+        apiBlockByPath.delete(dropped.path);
         retrievedSymbols = retrievedSymbols.filter((s) => s.fileId !== dropped.fileId);
       }
     }
@@ -1580,6 +2255,19 @@ export function mergeCandidateWindows(windows: TargetWindow[]): TargetWindow[] {
       // If windows overlap or are within 5 lines of each other, merge them
       if (next.startLine <= current.endLine + 5) {
         const strategies = [...new Set([...(current.strategies ?? []), ...(next.strategies ?? [])])];
+        // The merged window must keep every input core whole: union of the
+        // spans (candidates carry at most one core each; a core-less input
+        // contributes nothing).
+        const cores = [current, next].filter(
+          (w) => w.coreStart !== undefined && w.coreEnd !== undefined,
+        );
+        const core =
+          cores.length === 0
+            ? {}
+            : {
+                coreStart: Math.min(...cores.map((w) => w.coreStart!)),
+                coreEnd: Math.max(...cores.map((w) => w.coreEnd!)),
+              };
         const corroboration = Math.min(8, Math.max(0, strategies.length - 1) * 4);
         // Provenance stays honest under merging: a window is "derived" only
         // when every input was derived, and treats any undefined input as
@@ -1589,6 +2277,10 @@ export function mergeCandidateWindows(windows: TargetWindow[]): TargetWindow[] {
           current.provenance === "indexed" || next.provenance === "indexed"
             ? ("indexed" as const)
             : (current.provenance ?? next.provenance);
+        const tokensMatched = new Set(
+          Array.from(`${current.reason}; ${next.reason}`.matchAll(/matches token "([^"]+)"/g)).map((m) => m[1]),
+        );
+        const multiTokenBonus = tokensMatched.size >= 2 ? 8 : 0;
         current = {
           fileId: current.fileId,
           path: current.path,
@@ -1596,14 +2288,13 @@ export function mergeCandidateWindows(windows: TargetWindow[]): TargetWindow[] {
           totalLines: current.totalLines,
           startLine: Math.min(current.startLine, next.startLine),
           endLine: Math.max(current.endLine, next.endLine),
-          score: Math.max(current.score, next.score) + corroboration,
+          score: Math.max(current.score, next.score) + corroboration + multiTokenBonus,
           strategies,
           provenance,
+          ...core,
           reason: next.reason === current.reason
             ? current.reason
-            : corroboration > 0
-              ? `${current.reason}; ${next.reason} (+${corroboration} from ${strategies.length} strategies)`
-              : `${current.reason}; ${next.reason}`,
+            : `${current.reason}; ${next.reason}${corroboration > 0 ? ` (+${corroboration} from ${strategies.length} strategies)` : ""}${multiTokenBonus > 0 ? ` (+${multiTokenBonus} from multiple query concepts)` : ""}`,
         };
       } else {
         merged.push(current);

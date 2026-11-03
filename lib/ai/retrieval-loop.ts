@@ -130,7 +130,7 @@ function missingCategories(coverage: CoverageEvaluation): MissingPair[] {
 }
 
 function focusedQuery(pair: MissingPair): string {
-  const words = CATEGORY_QUERY_WORDS[pair.category] ?? pair.category;
+  const words = CATEGORY_QUERY_WORDS[pair.category] ?? (pair.category === "cli" ? "cli command subcommand" : pair.category);
   return `${pair.token} ${words}`;
 }
 
@@ -212,34 +212,29 @@ export function mergeIterationWindows(
         rejectedBudget += 1;
         continue; // weak relationship-only padding
       }
-      if (files.size >= limits.maxFiles) {
-        // File budget full. Displace only when explicitly allowed and only
-        // the weakest, non-protected existing file that is strictly weaker
-        // than the candidate: stronger direct evidence is never displaced,
-        // and a file that is the sole source-text contributor to a currently
-        // verified category is protected.
+      while (
+        (files.size >= limits.maxFiles ||
+          totalCharacters + cand.text.length > limits.maxCharacters ||
+          (limits.maxTokens !== undefined && totalTokens + estimateCodeTokens(cand.text) > limits.maxTokens)) &&
+        options?.allowReplacement
+      ) {
         let victim: string | null = null;
         let victimScore = Infinity;
-        if (options?.allowReplacement) {
-          const fileBest = new Map<string, number>();
-          for (const w of windows) {
-            const cur = fileBest.get(w.fileId) ?? 0;
-            if (w.score > cur) fileBest.set(w.fileId, w.score);
-          }
-          for (const [fid, best] of fileBest) {
-            if (options.protectedFiles?.has(fid)) continue;
-            if (best >= cand.score - margin) continue;
-            if (best < victimScore || (best === victimScore && (victim === null || fid < victim))) {
-              victim = fid;
-              victimScore = best;
-            }
+        const fileBest = new Map<string, number>();
+        for (const w of windows) {
+          const cur = fileBest.get(w.fileId) ?? 0;
+          if (w.score > cur) fileBest.set(w.fileId, w.score);
+        }
+        for (const [fid, best] of fileBest) {
+          if (options.protectedFiles?.has(fid)) continue;
+          if (best >= cand.score - margin) continue;
+          if (best < victimScore || (best === victimScore && (victim === null || fid < victim))) {
+            victim = fid;
+            victimScore = best;
           }
         }
-        if (victim === null) {
-          rejectedBudget += 1;
-          continue; // file budget full, no eligible displacement
-        }
-        // Remove the displaced file's windows and free its slot/chars.
+        if (victim === null) break;
+        // Remove the displaced file's windows and free its slot/chars/tokens.
         for (const w of windows.filter((w) => w.fileId === victim)) {
           totalCharacters -= w.text.length;
           totalTokens -= estimateCodeTokens(w.text);
@@ -251,22 +246,54 @@ export function mergeIterationWindows(
         perFile.delete(victim);
         replacedFiles += 1;
       }
+      if (files.size >= limits.maxFiles) {
+        rejectedBudget += 1;
+        continue; // file budget still full
+      }
     }
-    const candTokens = estimateCodeTokens(cand.text);
-    if (totalCharacters + cand.text.length > limits.maxCharacters) {
-      rejectedBudget += 1;
-      continue;
+    let finalCand = cand;
+    let candTokens = estimateCodeTokens(finalCand.text);
+    const exceedsChar = totalCharacters + finalCand.text.length > limits.maxCharacters;
+    const exceedsToken = limits.maxTokens !== undefined && totalTokens + candTokens > limits.maxTokens;
+    if (exceedsChar || exceedsToken) {
+      const remainingChars = limits.maxCharacters - totalCharacters;
+      const remainingTokens = limits.maxTokens !== undefined ? limits.maxTokens - totalTokens : Infinity;
+      if (remainingChars >= 250 && remainingTokens >= 60) {
+        const lines = cand.text.split("\n");
+        let accum = "";
+        let lineCount = 0;
+        for (let i = 0; i < lines.length; i++) {
+          const next = accum === "" ? lines[i]! : accum + "\n" + lines[i]!;
+          if (next.length > remainingChars || estimateCodeTokens(next) > remainingTokens) break;
+          accum = next;
+          lineCount++;
+        }
+        if (lineCount >= 8 && accum.length > 0) {
+          finalCand = {
+            ...cand,
+            endLine: cand.startLine + lineCount - 1,
+            text: accum,
+          };
+          candTokens = estimateCodeTokens(finalCand.text);
+        } else {
+          rejectedBudget += 1;
+          continue;
+        }
+      } else {
+        rejectedBudget += 1;
+        continue;
+      }
     }
     if (limits.maxTokens !== undefined && totalTokens + candTokens > limits.maxTokens) {
       rejectedBudget += 1;
       continue;
     }
-    windows.push(cand);
-    totalCharacters += cand.text.length;
+    windows.push(finalCand);
+    totalCharacters += finalCand.text.length;
     totalTokens += candTokens;
-    perFile.set(cand.fileId, (perFile.get(cand.fileId) ?? 0) + 1);
+    perFile.set(finalCand.fileId, (perFile.get(finalCand.fileId) ?? 0) + 1);
     if (isNewFile) {
-      files.add(cand.fileId);
+      files.add(finalCand.fileId);
       addedFiles += 1;
     }
     added += 1;
@@ -332,8 +359,8 @@ export async function retrieveWithCoverageLoop(
   const retrievalLimits = computeEvidenceLimits(retrievalBudget, rawQuery, base.packaging ?? "");
   const pkgChars = base.packaging ? base.packaging.length : 0;
   const pkgTokens = base.packaging ? estimateCodeTokens(base.packaging) : 0;
-  const availableCodeChars = Math.max(0, retrievalLimits.maxCharacters - pkgChars);
-  const availableCodeTokens = Math.max(0, retrievalLimits.maxTokens - pkgTokens);
+  const availableCodeChars = retrievalLimits.maxCharacters;
+  const availableCodeTokens = retrievalLimits.maxTokens;
 
   const limits = {
     maxFiles: retrievalBudget.maxFiles ?? DEFAULT_BUDGET.maxFiles,
@@ -378,7 +405,7 @@ export async function retrieveWithCoverageLoop(
     if (useAdaptiveCoverage) {
       if (categoryToFiles.get(category)?.has(win.fileId)) return true;
       const roleMatch = ROLE_IN_REASON.exec(win.reason);
-      return roleMatch !== null && roleMatch[1] === category;
+      if (roleMatch !== null && roleMatch[1] === category) return true;
     }
     const aff = CATEGORY_AFFILIATION[category];
     if (!aff) return false;
@@ -445,7 +472,13 @@ export async function retrieveWithCoverageLoop(
     const candidates: RetrievedWindow[] = [];
 
     for (const query of queries) {
-      const focused = await retrieveGroundedContext(db, analysisId, query, retrievalBudget, conceptIndex);
+      const focused = await retrieveGroundedContext(
+        db,
+        analysisId,
+        query,
+        { ...retrievalBudget, isIterativePass: true },
+        conceptIndex,
+      );
       for (const win of focused.windows) {
         let aff: string | null = null;
         if (useAdaptiveCoverage) {
