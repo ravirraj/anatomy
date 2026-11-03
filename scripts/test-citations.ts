@@ -12,6 +12,7 @@ import {
   isRouteStylePath,
   findMatchingPath,
   type FileEvidence,
+  type ManifestFile,
 } from "../lib/ai/citations.ts";
 import { explainFile } from "../lib/ai/tasks.ts";
 import type { FileInput } from "../lib/ai/prompts.ts";
@@ -375,7 +376,14 @@ The repository is organized as follows:
 You can run tests (e.g. pnpm test) to verify changes.
 Check \`lib/ai/tasks.ts#L10-L25\` for task execution.
 `;
-  const repro = verifyCitations(failingAnswer, evidenceMap, { allAnalysisFiles });
+  const manifestsByPath = new Map<string, ManifestFile>([
+    ["package.json", { path: "package.json", content_status: "stored", analysis_id: "test-analysis", rendered: true }],
+  ]);
+  const repro = verifyCitations(failingAnswer, evidenceMap, {
+    allAnalysisFiles,
+    manifestsByPath,
+    analysisId: "test-analysis",
+  });
   if (repro.paths.length === 0) {
     pass("exact onboarding failure text passes cleanly without false positives");
   } else {
@@ -557,12 +565,16 @@ console.log("=== CI-4 allowlist tier: quarantined, absent and stored paths ===")
     fail(`read absent flagged: ${JSON.stringify(readAbsent.paths)}`);
   }
 
-  // Stored-but-not-retrieved stays eligible through the general allowlist.
+  // CI-9D: Stored-but-unretrieved files are strictly rejected as unretrieved evidence.
   const storedUnretrieved = verifyCitations("Set up in `lib/stored/not-retrieved.ts`.", evidenceMap, { allAnalysisFiles });
-  if (storedUnretrieved.paths.length === 0) {
-    pass("a stored path retrieval missed stays citable through the general allowlist");
+  if (
+    storedUnretrieved.paths.length === 1 &&
+    storedUnretrieved.paths[0] === "lib/stored/not-retrieved.ts" &&
+    storedUnretrieved.details?.[0]?.includes("Unretrieved repository file")
+  ) {
+    pass("a stored path that retrieval did not reach is strictly rejected as unretrieved evidence");
   } else {
-    fail(`stored-not-retrieved flagged: ${JSON.stringify(storedUnretrieved.paths)}`);
+    fail(`stored-not-retrieved rejection wrong: ${JSON.stringify(storedUnretrieved)}`);
   }
 }
 

@@ -472,19 +472,23 @@ export function verifyCitations(
       continue;
     }
 
-    // Bare file mentions without line numbers: check against allowed evidence,
-    // all analysis files (including extensionless TS import paths and relative suffixes),
-    // or standard root manifest files
+    // Bare file mentions without line numbers: must strictly be present in
+    // retrieved evidence (allowedEvidence) or authorized rendered manifests.
+    // Unretrieved repository files are rejected with a clear error.
     const allowedFiles = new Set(allowed instanceof Map ? Array.from(allowed.keys()) : Array.from(allowed));
     const existsInAllowed = findMatchingPath(normalizedPath, (p) => allowed.has(p), allowedFiles);
-    const existsInAllFiles = options?.allAnalysisFiles
-      ? findMatchingPath(normalizedPath, (p) => options.allAnalysisFiles!.has(p), options.allAnalysisFiles)
-      : null;
     const isStandard = isManifestFileGrounded(normalizedPath, options?.manifestsByPath, options?.analysisId);
 
-    if (!existsInAllowed && !existsInAllFiles && !isStandard) {
+    if (!existsInAllowed && !isStandard) {
       offending.add(token);
-      details.push(`Unknown file path: "${token}"`);
+      const existsInAllFiles = options?.allAnalysisFiles
+        ? findMatchingPath(normalizedPath, (p) => options.allAnalysisFiles!.has(p), options.allAnalysisFiles)
+        : null;
+      if (existsInAllFiles) {
+        details.push(`Unretrieved repository file in "${token}": "${normalizedPath}" exists in the repository but was not retrieved into evidence`);
+      } else {
+        details.push(`Unknown file path: "${token}"`);
+      }
     }
   }
 
