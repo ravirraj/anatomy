@@ -416,14 +416,14 @@ const GLOSSARY: Record<string, string[]> = {
   queue: ["job", "worker", "background"],
   webhooks: ["webhook", "event"],
   sdk: ["client", "package", "packages", "library"],
-  dependencies: ["dependency", "package", "packages", "manifest", "requirements"],
-  dependency: ["dependencies", "package", "packages", "manifest", "requirements"],
-  package: ["packages", "dependency", "dependencies", "manifest"],
-  packages: ["package", "dependency", "dependencies", "manifest", "workspace"],
-  manifest: ["manifests", "package", "cargo", "pyproject", "dependencies"],
-  manifests: ["manifest", "package", "cargo", "pyproject", "dependencies"],
-  requirements: ["requirement", "dependencies", "package", "manifest"],
-  requirement: ["requirements", "dependencies", "package", "manifest"],
+  dependencies: ["dependency", "manifest", "package"],
+  dependency: ["dependencies", "manifest", "package"],
+  package: ["packages", "manifest"],
+  packages: ["package", "workspace"],
+  manifest: ["manifests", "cargo", "pyproject", "dependencies"],
+  manifests: ["manifest", "cargo", "pyproject", "dependencies"],
+  requirements: ["requirement", "manifest"],
+  requirement: ["requirements", "manifest"],
   workspace: ["workspaces", "pnpm", "packages", "monorepo"],
   workspaces: ["workspace", "pnpm", "packages", "monorepo"],
 };
@@ -864,6 +864,15 @@ export async function retrieveGroundedContext(
   // path segment, using the same concept variants and identifier subtokens,
   // so "authentication" finds src/middlewares/auth.middleware.js and
   // "database" finds src/database/connectDB.js without substring noise.
+  const explicitNamedPaths = new Set(
+    (rawQuery.match(/[a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+/g) ?? []).map((p) => p.toLowerCase()),
+  );
+  const hasExplicitFileMatch = [...fileMap.values()].some((f) => {
+    const p = f.path.toLowerCase();
+    const fn = p.split("/").pop() ?? p;
+    return explicitNamedPaths.has(p) || explicitNamedPaths.has(fn);
+  });
+
   for (const file of fileMap.values()) {
     const pathLower = file.path.toLowerCase();
     const filename = pathLower.split("/").pop() ?? pathLower;
@@ -876,6 +885,7 @@ export async function retrieveGroundedContext(
     let bestConcept = 0;
     let bestGeneric = 0;
     let matchedToken = "";
+    let matchedKind: TokenVariant["kind"] = "original";
     let genericOnly = false;
 
     for (const token of tokens) {
@@ -900,6 +910,7 @@ export async function retrieveGroundedContext(
             genericOnly = false;
           }
           matchedToken = token;
+          matchedKind = kind;
         }
         if (score > 0) matchedVariants.add(variant);
       }
@@ -912,6 +923,11 @@ export async function retrieveGroundedContext(
     // Ranks the public client surface into the same band as weaker exact
     // matches rather than below every loosely-related support file.
     if (bestScore > 0 && matchedVariants.size >= 2) bestScore += 14;
+
+    const isExplicitlyNamed = explicitNamedPaths.has(pathLower) || explicitNamedPaths.has(filename);
+    if (hasExplicitFileMatch && !isExplicitlyNamed && matchedKind === "glossary") {
+      bestScore = 0;
+    }
 
     if (bestScore > 0) {
       if (file.role) bestScore += 10;
@@ -1102,7 +1118,7 @@ export async function retrieveGroundedContext(
     // keeps the choice deterministic. Score 18 keeps every transitive
     // window below all direct and 1-hop evidence; deeper hops are never
     // followed.
-    if (hop1Files.length > 0) {
+    if (hop1Files.length > 0 && plan.intent !== "locate-implementation") {
       const focus = [...topSeedFiles, ...hop1Files].slice(0, 60);
       const hop2IdSeen = new Set(seenIds);
       const hop2Candidates: {
@@ -1441,7 +1457,8 @@ export async function retrieveGroundedContext(
         ...(s.signature ? { signature: s.signature as string } : {}),
         ...(s.return_type ? { returnType: s.return_type as string } : {}),
         ...(s.documentation ? { documentation: s.documentation as string } : {}),
-      }));
+      }))
+        .sort((a, b) => a.path.localeCompare(b.path) || a.line - b.line || a.name.localeCompare(b.name));
     }
   }
 
@@ -1614,7 +1631,10 @@ export function formatRetrievedContext(result: RetrievalResult): string {
   if (result.packaging) sections.push(result.packaging);
   // Group symbols by file for an API-surface appendix (Phase 2 enrichment).
   const symbolsByFile = new Map<string, NonNullable<RetrievalResult["symbols"]>>();
-  for (const sym of result.symbols ?? []) {
+  const sortedSymbols = [...(result.symbols ?? [])].sort(
+    (a, b) => a.path.localeCompare(b.path) || a.line - b.line || a.name.localeCompare(b.name),
+  );
+  for (const sym of sortedSymbols) {
     const list = symbolsByFile.get(sym.path) ?? [];
     list.push(sym);
     symbolsByFile.set(sym.path, list);
