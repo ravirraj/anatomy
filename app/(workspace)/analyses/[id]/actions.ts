@@ -1,12 +1,12 @@
 "use server";
 
 import { createHash } from "node:crypto";
-import { tracingStatus, type TracingStatus } from "@/lib/ai/client";
+import { MODELS, tracingStatus, type TracingStatus } from "@/lib/ai/client";
 import { type ManifestFile, type ParsedCitation } from "@/lib/ai/citations";
 import { type QuestionInput } from "@/lib/ai/prompts";
 import { formatRetrievedContext } from "@/lib/ai/retrieval";
 import { retrieveWithCoverageLoop, type IterativeRetrievalResult } from "@/lib/ai/retrieval-loop";
-import { answerQuestion, classifyFile, explainFile, explainFolder } from "@/lib/ai/tasks";
+import { answerQuestion, classifyFile, explainFile, explainFolder, INSUFFICIENT_EVIDENCE_ANSWER } from "@/lib/ai/tasks";
 import { allowedAnalysisPaths, loadFileInput, loadFolderInput } from "@/lib/analysis/context";
 import { getFileContent } from "@/lib/content/read";
 import { fetchFileAt, resolveHeadCommit } from "@/lib/pipeline/github";
@@ -121,6 +121,33 @@ export async function askQuestionAction(analysisId: string, question: string): P
     const loop = await retrieveWithCoverageLoop(db, analysis.id, trimmed);
     const retrieved = loop.result;
     const tRetrieval = performance.now();
+
+    // Deterministic abstention: when retrieval finds genuinely no usable evidence
+    // (zero code windows AND zero packaging facts), return immediately without
+    // dispatching an LLM request or writing to cache.
+    if (retrieved.insufficientEvidence) {
+      const tTotal = performance.now();
+      console.log(
+        `[Q&A Timing] analysisId=${analysisId} retrievalMs=${Math.round(tRetrieval - t0)} llmMs=0 totalMs=${Math.round(tTotal - t0)} retrievedFiles=0 insufficientEvidence=true passes=${loop.passes.length} stop=${loop.stoppedBecause} (abstained)`,
+      );
+      return {
+        ok: true,
+        body: INSUFFICIENT_EVIDENCE_ANSWER,
+        model: MODELS.question,
+        cached: false,
+        tracing: tracingStatus(),
+        citations: [],
+        retrieval: {
+          totalCharacters: 0,
+          files: [],
+          insufficientEvidence: true,
+          coverage: loop.coverage.summary,
+          stoppedBecause: loop.stoppedBecause,
+          passes: loop.passes.length,
+        },
+      };
+    }
+
     const contextText = formatRetrievedContext(retrieved);
 
     // Coverage -> synthesis-friendly layer lists (concept-agnostic union).
@@ -164,6 +191,7 @@ export async function askQuestionAction(analysisId: string, question: string): P
         unknown: [...coverageLayers.unknown].sort(),
         unknownNote: loop.coverage.unknownNote,
       },
+      insufficientEvidence: retrieved.insufficientEvidence,
     };
 
     const cache = cacheFor(db, analysis.organizationId);

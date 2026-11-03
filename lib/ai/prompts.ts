@@ -67,6 +67,11 @@ export type QuestionInput = {
     unknown: string[];
     unknownNote: string;
   };
+  /**
+   * True when retrieval found genuinely no usable evidence (zero windows and
+   * zero packaging facts) for the query, triggering deterministic abstention.
+   */
+  insufficientEvidence?: boolean;
 };
 
 // The pane is narrow: headings would cut a few short paragraphs into labelled

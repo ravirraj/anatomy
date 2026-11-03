@@ -103,6 +103,9 @@ export type Cache = {
 export type Explanation = { body: string; model: string; cached: boolean };
 export type QuestionAnswer = { body: string; model: string; cached: boolean; citations: ParsedCitation[] };
 
+export const INSUFFICIENT_EVIDENCE_ANSWER =
+  "No relevant code snippets or repository evidence were found in the stored analysis for this query.";
+
 // The source is only fetched on a miss: a hit answers from the stored hash alone.
 export type SourceOf = () => Promise<string>;
 
@@ -181,6 +184,23 @@ export async function answerQuestion(
   }
 
   const run = traceable(async (question: QuestionInput): Promise<QuestionAnswer> => {
+    // Deterministic abstention: when retrieval has genuinely found no usable evidence,
+    // return an honest abstention response without calling the model or caching.
+    const isExplicitlyInsufficient =
+      question.insufficientEvidence ||
+      (question.files.length === 0 &&
+        (!deps.manifestsByPath || deps.manifestsByPath.size === 0) &&
+        question.contextText.includes("No relevant code snippets were found in the stored analysis for this query"));
+
+    if (isExplicitlyInsufficient) {
+      return {
+        body: INSUFFICIENT_EVIDENCE_ANSWER,
+        model,
+        cached: false,
+        citations: [],
+      };
+    }
+
     // Cache identity is the exact input the model sees: the system prompt and
     // the rendered user message. The message carries the question, the whole
     // formatted context (windows, packaging, API surface, formatting) and the
@@ -348,6 +368,36 @@ function readRole(content: string | null): string {
   return role;
 }
 
+/**
+ * Resolves deterministic sampling parameters (temperature: 0, seed: 42) for models
+ * that support them.
+ *
+ * Compatibility note:
+ * - OpenAI reasoning models (e.g. o1, o3 families) reject temperature != 1 (or reject
+ *   temperature entirely) and may reject custom seeds.
+ * - Standard completion models (e.g. GPT-4o, GPT-4o-mini, GPT-4, generic test endpoints)
+ *   support temperature: 0 and seed: 42 for greedy, best-effort deterministic sampling.
+ * - Determinism is best-effort: upstream providers, architecture differences (e.g. MoE),
+ *   and backend cluster routing mean output reproducibility is not guaranteed across providers.
+ */
+export function deterministicSamplingParams(
+  model: string,
+  provider?: "openai" | "openrouter" | "custom",
+): { temperature?: number; seed?: number } {
+  const normalized = model.toLowerCase().replace(/^(openai\/|openrouter\/)/, "");
+  if (/^o[13](-|$)/i.test(normalized)) {
+    return {};
+  }
+  const supportsSeed = provider === "openai" || (provider === "openrouter" && model.toLowerCase().startsWith("openai/"));
+  if (!supportsSeed) {
+    return { temperature: 0 };
+  }
+  return {
+    temperature: 0,
+    seed: 42,
+  };
+}
+
 export type CompleteOptions = {
   task?: Task;
   maxTokens?: number;
@@ -378,6 +428,7 @@ async function complete(
         ],
         reasoning_effort: "low",
         max_completion_tokens,
+        ...deterministicSamplingParams(model, profile.provider),
         ...openAIOnly(),
       });
       const elapsed = Math.round(performance.now() - t0);
@@ -489,6 +540,7 @@ async function askForRole(model: string, system: string, user: string): Promise<
     ],
     reasoning_effort: "low" as const,
     max_completion_tokens,
+    ...deterministicSamplingParams(model, profile.provider),
     ...openAIOnly(),
   };
 

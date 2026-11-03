@@ -173,7 +173,10 @@ export function mergeIterationWindows(
   // on the most relevant evidence; sort by effective score (support files
   // demoted) to mirror the base pipeline's prioritization.
   const sortedCandidates = [...candidates].sort(
-    (a, b) => (b.score - supportFilePenalty(b.path)) - (a.score - supportFilePenalty(a.path)) || a.path.localeCompare(b.path),
+    (a, b) =>
+      b.score - supportFilePenalty(b.path) - (a.score - supportFilePenalty(a.path)) ||
+      a.path.localeCompare(b.path) ||
+      a.startLine - b.startLine,
   );
   const perFile = new Map<string, number>();
   const files = new Set<string>();
@@ -542,7 +545,8 @@ export async function retrieveWithCoverageLoop(
             ...(s.signature ? { signature: s.signature as string } : {}),
             ...(s.return_type ? { returnType: s.return_type as string } : {}),
             ...(s.documentation ? { documentation: s.documentation as string } : {}),
-          }));
+          }))
+          .sort((a, b) => a.path.localeCompare(b.path) || a.line - b.line || a.name.localeCompare(b.name));
       } catch {
         symbolsState = base.symbols ?? [];
       }
