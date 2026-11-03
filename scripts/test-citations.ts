@@ -578,6 +578,113 @@ console.log("=== CI-4 allowlist tier: quarantined, absent and stored paths ===")
   }
 }
 
+// --- Focused regression tests: Directory configs and in-code quoted literals ---
+console.log("");
+console.log("=== Quoted directory configs and in-code string literals ===");
+
+{
+  const evidenceMap = new Map<string, FileEvidence>([
+    ["src/cli/utils.ts", { lines: 70, contentHash: "hash-utils" }],
+    ["src/cli/add.ts", { lines: 50, contentHash: "hash-add" }],
+  ]);
+  const allAnalysisFiles = new Set([
+    "src/cli/utils.ts",
+    "src/cli/add.ts",
+    "core/AccentColorContext.ts",
+    "core/useAccentColor.tsx",
+    "components/ui/icons/IconBase.tsx",
+  ]);
+  const contextText = `
+--- File: src/cli/utils.ts (lines 1-70) [hash: hash-utils] ---
+export const DEFAULT_CONFIG = {
+  components: './src/components/ui',
+  utils: './src/utils',
+  css: './src/index.css',
+};
+const configPath = path.join(root, 'lithos.json');
+
+--- File: src/cli/add.ts (lines 1-50) [hash: hash-add] ---
+if (req.includes('components/ui/icons/') && req !== 'components/ui/icons/IconBase.tsx') {
+  deps.add('components/ui/icons/IconBase.tsx');
+}
+if (req === 'core/useAccentColor.tsx' || req === 'core/useAccentColor.ts') {
+  deps.add('core/AccentColorContext.ts');
+}
+`;
+
+  // 1. Quoted directory/config paths (e.g. './src/components/ui') are not misclassified as citations
+  const dirTokens = pathTokens("Defaults to `'./src/components/ui'` and `'./src/utils'`.");
+  if (dirTokens.length === 0) {
+    pass("quoted directory config paths are not misclassified as file citations");
+  } else {
+    fail(`quoted directory configs misclassified as citations: ${JSON.stringify(dirTokens)}`);
+  }
+
+  // 2. lithos.json discussed as a downstream config filename present in evidence text
+  const configRes = verifyCitations(
+    "Defaults are configured in `src/cli/utils.ts#L33-L42` which checks for `lithos.json`.",
+    evidenceMap,
+    { allAnalysisFiles, contextText },
+  );
+  if (configRes.paths.length === 0) {
+    pass("downstream config file mentioned verbatim in evidence text passes");
+  } else {
+    fail(`downstream config file rejected: ${JSON.stringify(configRes)}`);
+  }
+
+  // 3. String literals in retrieved source code discussed without unretrieved-file error
+  const literalRes = verifyCitations(
+    "In `src/cli/add.ts#L16-L42`, dependencies on `components/ui/icons/IconBase.tsx` and `core/AccentColorContext.ts` are injected.",
+    evidenceMap,
+    { allAnalysisFiles, contextText },
+  );
+  if (literalRes.paths.length === 0) {
+    pass("bare path string literal quoted from evidence text passes without unretrieved-file error");
+  } else {
+    fail(`in-code string literal rejected: ${JSON.stringify(literalRes)}`);
+  }
+
+  // 4. An explicit citation to an unretrieved file remains strictly rejected
+  const explicitUnretrieved = verifyCitations(
+    "See `core/AccentColorContext.ts#L10-L20` for implementation.",
+    evidenceMap,
+    { allAnalysisFiles, contextText },
+  );
+  if (
+    explicitUnretrieved.paths.length === 1 &&
+    explicitUnretrieved.paths[0] === "core/AccentColorContext.ts#L10-L20" &&
+    explicitUnretrieved.details?.[0]?.includes("not in retrieved evidence")
+  ) {
+    pass("explicit citation to unretrieved file remains strictly rejected");
+  } else {
+    fail(`explicit unretrieved citation not rejected properly: ${JSON.stringify(explicitUnretrieved)}`);
+  }
+
+  // 5. Invented unretrieved paths not in evidence text remain strictly rejected
+  const inventedRes = verifyCitations(
+    "See `lib/fake/nonexistent.ts` for details.",
+    evidenceMap,
+    { allAnalysisFiles, contextText },
+  );
+  if (inventedRes.paths.length === 1 && inventedRes.paths[0] === "lib/fake/nonexistent.ts") {
+    pass("invented unretrieved path not in evidence text remains strictly rejected");
+  } else {
+    fail(`invented unretrieved path not rejected: ${JSON.stringify(inventedRes)}`);
+  }
+
+  // 6. Existing valid citations and line-range checks remain strict
+  const validStrict = verifyCitations(
+    "Defined in `src/cli/utils.ts#L10-L25`.",
+    evidenceMap,
+    { allAnalysisFiles, contextText },
+  );
+  if (validStrict.paths.length === 0) {
+    pass("valid line-range citation remains accepted");
+  } else {
+    fail(`valid line-range citation rejected: ${JSON.stringify(validStrict)}`);
+  }
+}
+
 console.log("");
 for (const line of results) console.log(line);
 const failed = results.filter((r) => r.startsWith("FAIL")).length;

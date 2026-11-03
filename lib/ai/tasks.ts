@@ -222,7 +222,7 @@ export async function answerQuestion(
     const hit = await deps.cache.read(key);
     if (hit !== null) {
       try {
-        verifyCitationsEvidence(hit, allowedEvidence, deps.allAnalysisFiles, deps.manifestsByPath, deps.analysisId);
+        verifyCitationsEvidence(hit, allowedEvidence, deps.allAnalysisFiles, deps.manifestsByPath, deps.analysisId, question.contextText);
         return {
           body: hit,
           model,
@@ -260,7 +260,7 @@ export async function answerQuestion(
 
     const completer = deps.complete ?? ((m, s, u) => complete(m, s, u, { task: "answer-question" }));
     const body = await completer(model, system, user);
-    verifyCitationsEvidence(body, allowedEvidence, deps.allAnalysisFiles, deps.manifestsByPath, deps.analysisId);
+    verifyCitationsEvidence(body, allowedEvidence, deps.allAnalysisFiles, deps.manifestsByPath, deps.analysisId, question.contextText);
     await deps.cache.write({ key, task: "answer-question", model, body });
     return {
       body,
@@ -277,14 +277,22 @@ export async function answerQuestion(
   return run(input);
 }
 
+// Verifies a Q&A body against the evidence the generation stage actually saw:
+// the structured per-file evidence map, the analysis-wide path set for error
+// classification, rendered manifests — and `contextText`, the exact rendered
+// snippet text embedded in the user message. A bare path quoted verbatim in
+// that text is a discussion reference (e.g. a config filename string literal
+// inside retrieved source), not a fabricated citation, so it must be verified
+// against the same text the model was shown.
 function verifyCitationsEvidence(
   body: string,
   allowed: Map<string, FileEvidence>,
   allAnalysisFiles?: Set<string>,
   manifestsByPath?: Map<string, ManifestFile>,
   analysisId?: string,
+  contextText?: string,
 ): void {
-  const failing = verifyCitations(body, allowed, { allAnalysisFiles, manifestsByPath, analysisId });
+  const failing = verifyCitations(body, allowed, { allAnalysisFiles, manifestsByPath, analysisId, contextText });
   if (failing.paths.length) throw new CitationError(failing.paths, failing.details);
 }
 

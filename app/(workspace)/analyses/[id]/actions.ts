@@ -118,7 +118,9 @@ export async function askQuestionAction(analysisId: string, question: string): P
 
     // 1. Deterministic retrieval, then bounded targeted passes for any
     //    category the coverage evaluation could not establish. No model call.
-    const loop = await retrieveWithCoverageLoop(db, analysis.id, trimmed);
+    const loop = await retrieveWithCoverageLoop(db, analysis.id, trimmed, {
+      model: MODELS.question,
+    });
     const retrieved = loop.result;
     const tRetrieval = performance.now();
 

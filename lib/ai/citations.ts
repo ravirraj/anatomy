@@ -25,12 +25,12 @@ const LATIN_ABBREVIATIONS = new Set([
 ]);
 
 export function isDirectoryReference(token: string): boolean {
-  const stripped = stripLineSuffix(token.trim());
+  const stripped = stripLineSuffix(token.trim().replace(/^['"]|['"]$/g, ""));
   return stripped.endsWith("/") || stripped.endsWith("\\");
 }
 
 export function isNpmPackage(token: string): boolean {
-  const stripped = stripLineSuffix(token.trim());
+  const stripped = stripLineSuffix(token.trim().replace(/^['"]|['"]$/g, ""));
   return stripped.startsWith("@") || stripped.startsWith("npm:") || stripped.startsWith("pnpm:");
 }
 
@@ -39,7 +39,7 @@ export function isPlaceholderPath(token: string): boolean {
 }
 
 export function isAbbreviation(token: string): boolean {
-  const clean = token.trim().toLowerCase();
+  const clean = token.trim().replace(/^['"]|['"]$/g, "").toLowerCase();
   return LATIN_ABBREVIATIONS.has(clean);
 }
 
@@ -103,7 +103,10 @@ export function isCitationCandidate(
   inCodeSpan: boolean,
   isLegacySet = false,
 ): boolean {
-  const raw = token.trim();
+  let raw = token.trim();
+  if (inCodeSpan) {
+    raw = raw.replace(/^['"]|['"]$/g, "");
+  }
   if (!raw || /\s/.test(raw)) return false;
   if (isAbbreviation(raw)) return false;
   if (raw.startsWith("http://") || raw.startsWith("https://")) return false;
@@ -167,7 +170,8 @@ export function pathTokens(body: string, isLegacySet = false): string[] {
     if (at > last) tokens.push(...proseTokens(cleanedBody.slice(last, at)));
     if (m[1] !== undefined) {
       // A code span: check if the inner text is a valid citation candidate
-      const inner = m[1].trim();
+      let inner = m[1].trim();
+      inner = inner.replace(/^['"]|['"]$/g, "").trim();
       if (inner && isCitationCandidate(inner, true, isLegacySet)) tokens.push(inner);
     } else {
       // Bold: recurse so code spans and bare words inside it are found too
@@ -203,7 +207,7 @@ function proseTokens(text: string): string[] {
 // Stored paths (from the parser) are already clean, so only the token side is
 // normalized.
 export function normalize(token: string): string {
-  let p = stripLineSuffix(token);
+  let p = stripLineSuffix(token.trim().replace(/^['"]|['"]$/g, ""));
   if (p.startsWith("./")) p = p.slice(2);
   if (p.endsWith("/") && p.length > 1) p = p.slice(0, -1);
   return p;
@@ -320,6 +324,8 @@ export type CitationOptions = {
    * excluded and legacy-unclassified manifests are not eligible through this
    * exception. */
   manifestsByPath?: Map<string, ManifestFile>;
+  /** Optional rendered evidence context text to check for literal in-code quotes. */
+  contextText?: string;
 };
 
 const RESOLVE_EXTENSIONS = [
@@ -480,6 +486,17 @@ export function verifyCitations(
     const isStandard = isManifestFileGrounded(normalizedPath, options?.manifestsByPath, options?.analysisId);
 
     if (!existsInAllowed && !isStandard) {
+      // If the bare path appears verbatim within the retrieved source context text,
+      // the model was quoting or discussing a string literal / configuration name
+      // directly present in evidence rather than fabricating a file citation.
+      // Standard manifest filenames are excluded from this rescue: packaging
+      // blocks always render their names, so textual presence cannot
+      // distinguish an authorized manifest from an absent, quarantined or
+      // foreign one — those stay governed solely by isManifestFileGrounded.
+      const isStandardManifestName = STANDARD_PROJECT_FILES.has(normalizedPath);
+      if (!isStandardManifestName && options?.contextText && options.contextText.includes(token)) {
+        continue;
+      }
       offending.add(token);
       const existsInAllFiles = options?.allAnalysisFiles
         ? findMatchingPath(normalizedPath, (p) => options.allAnalysisFiles!.has(p), options.allAnalysisFiles)
