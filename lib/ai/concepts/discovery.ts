@@ -562,9 +562,14 @@ export function buildConceptIndex(input: DiscoveryInput): ConceptIndex {
 
     // Discovered categories: architectural roles from the concept's files
     const discoveredCategories = new Set<string>();
+    const fileRoles: Record<string, string> = {};
     for (const fid of raw.fileIds) {
       const file = fileById.get(fid);
-      if (file?.role) discoveredCategories.add(file.role);
+      // Recorded role data only — a role is never inferred from the filename.
+      if (file?.role) {
+        discoveredCategories.add(file.role);
+        fileRoles[fid] = file.role;
+      }
     }
 
     return {
@@ -573,6 +578,7 @@ export function buildConceptIndex(input: DiscoveryInput): ConceptIndex {
       normalizedTerms,
       fileIds: orderedFileIds,
       filePaths: orderedFileIds.map((fid) => fileById.get(fid)?.path ?? ""),
+      fileRoles,
       evidence,
       confidence: raw.confidence,
       discoveredCategories: [...discoveredCategories],

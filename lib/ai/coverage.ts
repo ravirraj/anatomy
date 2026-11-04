@@ -237,43 +237,16 @@ export function evaluateCoverage(plan: QuestionPlan, result: RetrievalResult): C
 // ── Adaptive coverage ─────────────────────────────────────────────────────────
 
 /**
- * Builds a dynamic affiliation map for the categories discovered in the
- * concept index. Unlike CATEGORY_AFFILIATION (which is generic and repo-agnostic),
- * this derives affiliation directly from the concept's own file paths and roles.
- *
- * Returns a map from category label (e.g. "controller", "middleware") to
- * the set of fileIds in the concept that carry that role. Used by
- * evaluateCoverageAdaptive to check affiliation without any hardcoded category list.
- */
-function buildConceptAffiliationMap(
-  mapping: QuestionConceptMapping,
-  result: RetrievalResult,
-): Map<string, { filePaths: Set<string>; roles: Set<string> }> {
-  const affiliationMap = new Map<string, { filePaths: Set<string>; roles: Set<string> }>();
-
-  for (const concept of mapping.topConcepts) {
-    // Use the concept's own discoveredCategories (architectural roles from the
-    // analysis's existing file_roles table — not hardcoded)
-    for (const category of concept.discoveredCategories) {
-      if (!affiliationMap.has(category)) {
-        affiliationMap.set(category, { filePaths: new Set(), roles: new Set() });
-      }
-      const entry = affiliationMap.get(category)!;
-      // Files in this concept that carry this role
-      for (const fp of concept.filePaths) {
-        entry.filePaths.add(fp);
-      }
-      entry.roles.add(category);
-    }
-  }
-
-  return affiliationMap;
-}
-
-/**
  * Adaptive coverage evaluation that uses the ConceptIndex and QuestionConceptMapping
  * to derive expected evidence categories from the REPOSITORY's own structure,
  * not from a hardcoded glossary.
+ *
+ * Affiliation is exact: a concept file affiliates only with the category that
+ * matches its recorded role (concept.fileRoles, populated by concept discovery
+ * from the existing indexed role data). A service file can therefore never
+ * establish controller or repository coverage merely because all three belong
+ * to the same concept. Windows may still affiliate through the retrieval
+ * reason's recorded role.
  *
  * Falls back to evaluateCoverage() when the concept mapping produces no
  * top concepts (e.g. for queries about entirely unknown subsystems).
@@ -310,16 +283,31 @@ export function evaluateCoverageAdaptive(
       ? concept.discoveredCategories
       : ["unclassified"];
 
+    // Category → files of this concept whose recorded role is that category.
+    // Files without a recorded role affiliate only with "unclassified".
+    const categoryToFiles = new Map<string, { fileIds: Set<string>; paths: Set<string> }>();
+    for (let i = 0; i < concept.fileIds.length; i++) {
+      const fid = concept.fileIds[i]!;
+      const role = concept.fileRoles[fid] ?? "unclassified";
+      const entry = categoryToFiles.get(role)
+        ?? { fileIds: new Set<string>(), paths: new Set<string>() };
+      entry.fileIds.add(fid);
+      const path = concept.filePaths[i];
+      if (path) entry.paths.add(path);
+      categoryToFiles.set(role, entry);
+    }
+
     const categories: CategoryCoverage[] = [];
 
     for (const category of expectedCategories) {
-      // Affiliation: windows whose file path is in this concept's file list,
-      // OR whose role matches this category. All derived from the index — no
-      // hardcoded segment names.
-      const conceptFilePaths = new Set(concept.filePaths);
+      // Affiliation: windows whose file conceptually belongs to this role
+      // (by recorded fileId or the concept's own path for it), OR whose
+      // retrieval reason records the matching role. All derived from the
+      // index and role data — no hardcoded segment names.
+      const affiliatedFiles = categoryToFiles.get(category)
+        ?? { fileIds: new Set<string>(), paths: new Set<string>() };
       const affiliated = result.windows.filter((win) => {
-        if (conceptFilePaths.has(win.path)) return true;
-        // Also check if the window's reason records the matching role
+        if (affiliatedFiles.fileIds.has(win.fileId) || affiliatedFiles.paths.has(win.path)) return true;
         const roleMatch = ROLE_IN_REASON.exec(win.reason);
         return roleMatch !== null && roleMatch[1] === category;
       });

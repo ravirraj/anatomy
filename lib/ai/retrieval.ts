@@ -79,10 +79,12 @@ function mapSymbolCandidateRow(row: Record<string, unknown>, path: string): NonN
 
 /**
  * The `[API surface]` appendix a prompt attaches under a file's line-1
- * window: exported symbols of that file. Shared by the post-serving block
- * and the serving-phase budget checks, which must reserve the same text.
+ * window: exported symbols of that file. Shared by the post-serving block,
+ * the serving-phase budget checks (which must reserve the same text), and
+ * the iterative merge's appendix accounting, which must reserve what the
+ * final prompt renders.
  */
-function formatApiSurfaceFor(syms: NonNullable<RetrievalResult["symbols"]>): string {
+export function formatApiSurfaceFor(syms: NonNullable<RetrievalResult["symbols"]>): string {
   const api = syms
     .filter((s) => s.exported)
     .map((s) => {

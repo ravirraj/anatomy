@@ -10,11 +10,18 @@ import {
 } from "../lib/ai/planner.ts";
 import {
   evaluateCoverage,
+  evaluateCoverageAdaptive,
   CATEGORY_AFFILIATION,
   UNKNOWN_NOTE,
   type CoverageEvaluation,
   type CoverageStatus,
 } from "../lib/ai/coverage.ts";
+import {
+  buildConceptIndex,
+  type ConceptIndex,
+  type QuestionConceptMapping,
+} from "../lib/ai/concepts/index.ts";
+import type { RepositoryConcept } from "../lib/ai/concepts/types.ts";
 import type { RetrievalResult, RetrievedWindow } from "../lib/ai/retrieval.ts";
 
 const results: string[] = [];
@@ -415,6 +422,186 @@ function categoryEval(
     "planner output types flow into the evaluator unchanged",
     "planner types broken",
   );
+}
+
+// ---- 15. Adaptive affiliation: a file belongs only to its own role/category ----
+{
+  // One concept spanning three architectural layers. Discovery must record
+  // each file's actual indexed role so affiliation is exact.
+  const index: ConceptIndex = buildConceptIndex({
+    analysisId: "affiliation_test",
+    files: [
+      { id: "s1", path: "src/services/authService.js", role: "service" },
+      { id: "c1", path: "src/controllers/authController.js", role: "controller" },
+      { id: "r1", path: "src/repositories/authRepository.js", role: "repository" },
+    ],
+    symbols: [
+      { fileId: "s1", name: "verifyAuthSession", kind: "function", exported: true },
+      { fileId: "c1", name: "submitAuthRequest", kind: "function", exported: true },
+      { fileId: "r1", name: "saveAuthRecord", kind: "function", exported: true },
+    ],
+    routes: [],
+    edges: [],
+  });
+  const spanning = index.concepts.filter(
+    (c) => c.fileIds.length === 3 && c.normalizedTerms.includes("auth"),
+  );
+  const authConcept: RepositoryConcept | undefined = spanning[0];
+  check(
+    spanning.length === 1 && authConcept !== undefined,
+    "the auth concept spans the service/controller/repository files as one concept",
+    `spanning: ${JSON.stringify(index.concepts.map((c) => [c.displayName, c.fileIds]))}`,
+  );
+  check(
+    authConcept !== undefined &&
+      authConcept.fileRoles["s1"] === "service" &&
+      authConcept.fileRoles["c1"] === "controller" &&
+      authConcept.fileRoles["r1"] === "repository" &&
+      Object.keys(authConcept.fileRoles).length === 3,
+    "discovery records each file's indexed role in fileRoles (no filename inference)",
+    `fileRoles: ${JSON.stringify(authConcept?.fileRoles)}`,
+  );
+
+  // Concept-specific scenario harness: the concept discovery index determines
+  // affiliation; windows only contribute evidence.
+  const query = "How does the auth layer work?";
+  const plan = planQuestion(query, index);
+  const mapping: QuestionConceptMapping = {
+    query,
+    matches: new Map(),
+    topConcepts: [authConcept!],
+  };
+  type FileCraftedWindow = CraftedWindow & { fileId?: string };
+  function adaptiveScenario(windows: FileCraftedWindow[]): CoverageEvaluation {
+    const retrieved: RetrievedWindow[] = windows.map((w, i) => ({
+      fileId: w.fileId ?? `w${i}`,
+      path: w.path,
+      contentHash: `hash${i}`,
+      totalLines: 140,
+      startLine: w.startLine ?? 1,
+      endLine: w.endLine ?? 45,
+      score: 80,
+      text: w.text,
+      reason: w.reason ?? `file path matches token "x"`,
+      ...(w.provenance !== undefined ? { provenance: w.provenance } : {}),
+    }));
+    const result: RetrievalResult = {
+      analysisId: "affiliation_test",
+      query,
+      tokens: plan.concepts.map((c) => c.token),
+      plan,
+      windows: retrieved,
+      files: retrieved.map((w) => ({
+        fileId: w.fileId,
+        path: w.path,
+        contentHash: w.contentHash,
+        totalLines: w.totalLines,
+      })),
+      totalCharacters: retrieved.reduce((acc, w) => acc + w.text.length, 0),
+      insufficientEvidence: retrieved.length === 0,
+    };
+    return evaluateCoverageAdaptive(plan, result, mapping, index);
+  }
+  function adaptiveCategory(evaluation: CoverageEvaluation, category: string) {
+    return evaluation.concepts
+      .find((c) => c.categories.some((cat) => cat.category === category))
+      ?.categories.find((c) => c.category === category);
+  }
+
+  // 15a. The service file's concept text must found ONLY the service category.
+  {
+    const evaluation = adaptiveScenario([
+      {
+        path: "src/services/authService.js",
+        fileId: "s1",
+        text: "module.exports.verifyAuthToken = (token) => authDecoded(token);",
+      },
+    ]);
+    const service = adaptiveCategory(evaluation, "service");
+    const controller = adaptiveCategory(evaluation, "controller");
+    const repository = adaptiveCategory(evaluation, "repository");
+    check(
+      service?.status === "found" && service.evidence.every((e) => e.path === "src/services/authService.js"),
+      "a service file with concept text founds only the service category",
+      `service wrong: ${JSON.stringify(service)}`,
+    );
+    check(
+      controller?.status === "unknown" && controller.evidence.length === 0,
+      "service source text cannot falsely establish controller coverage",
+      `controller wrong: ${JSON.stringify(controller)}`,
+    );
+    check(
+      repository?.status === "unknown" && repository.evidence.length === 0,
+      "service source text cannot falsely establish repository coverage",
+      `repository wrong: ${JSON.stringify(repository)}`,
+    );
+  }
+
+  // 15b. The controller file's own concept text founds the controller category.
+  {
+    const evaluation = adaptiveScenario([
+      {
+        path: "src/controllers/authController.js",
+        fileId: "c1",
+        text: "export async function handleSubmit(req) { return authSignup(req.body); }",
+      },
+    ]);
+    const controller = adaptiveCategory(evaluation, "controller");
+    const service = adaptiveCategory(evaluation, "service");
+    const repository = adaptiveCategory(evaluation, "repository");
+    check(
+      controller?.status === "found" && controller.evidence.every((e) => e.path === "src/controllers/authController.js"),
+      "retrieving the actual controller file with concept source text founds controller coverage",
+      `controller wrong: ${JSON.stringify(controller)}`,
+    );
+    check(
+      service?.status === "unknown" && repository?.status === "unknown",
+      "controller source text does not leak into service/repository categories",
+      `leak: ${JSON.stringify([service, repository])}`,
+    );
+  }
+
+  // 15c. The repository file must be affiliated with exactly its own category.
+  {
+    const evaluation = adaptiveScenario([
+      {
+        path: "src/repositories/authRepository.js",
+        fileId: "r1",
+        text: "module.exports.saveAuthSession = (row) => authPersist(row);",
+      },
+    ]);
+    const repository = adaptiveCategory(evaluation, "repository");
+    const service = adaptiveCategory(evaluation, "service");
+    const controller = adaptiveCategory(evaluation, "controller");
+    check(
+      repository?.status === "found" && repository.evidence.every((e) => e.path === "src/repositories/authRepository.js"),
+      "a repository file with concept text founds only the repository category",
+      `repository wrong: ${JSON.stringify(repository)}`,
+    );
+    check(
+      service?.status === "unknown" && controller?.status === "unknown",
+      "repository source text does not leak into service/controller categories",
+      `leak: ${JSON.stringify([service, controller])}`,
+    );
+  }
+
+  // 15d. The retrieval reason's recorded role keeps affiliating (fallback kept).
+  {
+    const evaluation = adaptiveScenario([
+      {
+        path: "src/anything.js",
+        fileId: "z9",
+        text: "const rate = 5; // slice without concept vocabulary",
+        reason: `file holds the "controller" role, which the question's topic names`,
+      },
+    ]);
+    const controller = adaptiveCategory(evaluation, "controller");
+    check(
+      controller?.status === "partial" && controller.evidence[0]?.signal === "filename-or-role",
+      "the role-reason fallback still affiliates its category (partial without text)",
+      `controller wrong: ${JSON.stringify(controller)}`,
+    );
+  }
 }
 
 // Summary

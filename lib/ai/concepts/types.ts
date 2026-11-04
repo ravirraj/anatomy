@@ -111,6 +111,15 @@ export type RepositoryConcept = {
    */
   fileIds: string[];
   filePaths: string[];
+  /**
+   * The architectural role recorded for each of this concept's files by the
+   * existing indexed role data (files.file_roles), keyed by file ID.
+   * Only files with an indexed role appear here — roles are never inferred
+   * from file names. Downstream consumers use this to bind a concept file to
+   * exactly the category matching its role, instead of affiliating every
+   * concept file with every category the concept spans.
+   */
+  fileRoles: Record<string, string>;
   /** The supporting evidence for each file membership. */
   evidence: ConceptEvidence[];
   /**

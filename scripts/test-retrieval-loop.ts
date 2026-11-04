@@ -5,6 +5,7 @@
 // Phase 3/4 engine plus the loop's targeted passes, merging and stopping.
 
 import { createHash } from "node:crypto";
+import { estimateCodeTokens, estimateProseTokens } from "../lib/ai/budget.ts";
 import {
   CATEGORY_QUERY_WORDS,
   mergeIterationWindows,
@@ -137,6 +138,440 @@ const mk8 = mergeIterationWindows(
   limits,
 );
 check(mk8.added === 0 && mk8.rejectedBudget === 1, "character budget enforced", "character budget failed");
+
+// ---- Section 1b: atomic replacement (mergeIterationWindows) ---------------
+console.log("");
+console.log("=== 1b. mergeIterationWindows: atomic replacement ===");
+
+// Serving-cost mirroring of lib/ai/retrieval.ts's windowCostOf: every window
+// occupies its header-inclusive character cost and its code + prose + 15
+// token cost. The merge must budget candidates by these figures.
+const servingTokens = (w: RetrievedWindow): number =>
+  estimateCodeTokens(w.text) + estimateProseTokens(w.path) + 15;
+const servingHeaderLen = (w: { path: string; contentHash: string; startLine: number; endLine: number }): number =>
+  `--- File: ${w.path} (lines ${w.startLine}-${w.endLine}) [hash: ${w.contentHash.slice(0, 8)}] ---\n`.length + 2;
+const mkDuplicate = (win: RetrievedWindow): RetrievedWindow => ({ ...win });
+// When the merge receives a token ledger (as the real pipeline passes
+// base.totalTokens down), the ledger already contains the existing windows'
+// full serving tokens — the contract's accounting shape.
+const ledgerFor = (wins: RetrievedWindow[]): { windows: RetrievedWindow[]; totalCharacters: number; totalTokens: number } => ({
+  windows: wins,
+  totalCharacters: wins.reduce((acc, w) => acc + w.text.length, 0),
+  totalTokens: wins.reduce((acc, w) => acc + servingTokens(w), 0),
+});
+
+const replacementLimits = {
+  maxFiles: 16,
+  maxWindowsPerFile: 2,
+  maxCharacters: 28000,
+  maxTokens: 499,
+  scoreFloor: 50,
+};
+
+// Old implementation failing point: it removed the victim window while
+// planning the replacement, then learned the candidate still did not fit —
+// leaving the package without its old evidence and without the new window.
+// The atomic merge must reject the plan and preserve the original result.
+const tokVictim = mkWindow({
+  fileId: "v1",
+  path: "src/services/victim.js",
+  contentHash: "hashV",
+  startLine: 1,
+  endLine: 40,
+  score: 60,
+  text: "y".repeat(400),
+});
+const tokCand = mkWindow({
+  fileId: "c1",
+  path: "src/controllers/candidate.js",
+  contentHash: "hashC",
+  startLine: 1,
+  endLine: 60,
+  score: 95,
+  text: "z".repeat(2000),
+});
+const tokAccounting = ledgerFor([tokVictim]);
+const tokMerge = mergeIterationWindows(
+  tokAccounting,
+  [tokCand],
+  replacementLimits,
+  { allowReplacement: true, replacementMargin: 10 },
+);
+check(
+  tokMerge.added === 0 && tokMerge.rejectedBudget === 1,
+  "candidate exceeding the token budget is rejected as a whole",
+  `token-reject merge wrong: ${JSON.stringify(tokMerge)}`,
+);
+check(
+  tokMerge.windows.length === 1 && tokMerge.windows[0] === tokVictim,
+  "token-budget rejection keeps the existing window in place",
+  `windows: ${JSON.stringify(tokMerge.windows.map((w) => w.fileId))}`,
+);
+check(
+  tokMerge.totalCharacters === tokVictim.text.length && tokMerge.totalTokens === servingTokens(tokVictim),
+  "token-budget rejection leaves all accounting unchanged (no accounting corruption)",
+  `accounting: ${tokMerge.totalCharacters}/${tokMerge.totalTokens}`,
+);
+check(
+  tokMerge.replacedFiles === 0 && tokMerge.addedFiles === 0,
+  "token-budget rejection does not count any replacement",
+  `replaced: ${tokMerge.replacedFiles}, addedFiles: ${tokMerge.addedFiles}`,
+);
+
+// Character-budget flavour of the same failure: even after evicting the
+// eligible victim, the candidate's header-inclusive serving cost exceeds the
+// character limit — the plan stays uncommitted.
+const charVictim = mkWindow({
+  fileId: "v1",
+  path: "src/services/victim.js",
+  contentHash: "hashV",
+  startLine: 1,
+  endLine: 40,
+  score: 60,
+  text: "y".repeat(1200),
+});
+const charCand = mkWindow({
+  fileId: "c1",
+  path: "src/controllers/candidate.js",
+  contentHash: "hashC",
+  startLine: 1,
+  endLine: 60,
+  score: 95,
+  text: "z".repeat(1400),
+});
+const charLimits = { maxFiles: 16, maxWindowsPerFile: 2, maxCharacters: 1400, scoreFloor: 50 };
+const charMerge = mergeIterationWindows(
+  { windows: [charVictim], totalCharacters: charVictim.text.length },
+  [charCand],
+  charLimits,
+  { allowReplacement: true, replacementMargin: 10 },
+);
+check(
+  charMerge.added === 0 && charMerge.rejectedBudget === 1,
+  "candidate exceeding the character budget is rejected as a whole",
+  `char-reject merge wrong: ${JSON.stringify(charMerge)}`,
+);
+check(
+  charMerge.windows.length === 1 && charMerge.windows[0] === charVictim,
+  "character-budget rejection keeps the existing window in place",
+  `windows: ${JSON.stringify(charMerge.windows.map((w) => w.fileId))}`,
+);
+check(
+  charMerge.totalCharacters === charVictim.text.length && charMerge.totalTokens === servingTokens(charVictim),
+  "character-budget rejection leaves all accounting unchanged (fallback ledger keeps serving-token convention)",
+  `accounting: ${charMerge.totalCharacters}/${charMerge.totalTokens}`,
+);
+
+// A feasible plan commits atomically: the strictly weaker victim is swapped
+// for the stronger candidate, with window-level accounting that mirrors the
+// serving contract.
+const repVictim = mkWindow({
+  fileId: "v1",
+  path: "src/services/victim.js",
+  contentHash: "hashV",
+  startLine: 1,
+  endLine: 40,
+  score: 60,
+  text: "y".repeat(3000),
+});
+const repCand = mkWindow({
+  fileId: "n1",
+  path: "src/controllers/newnice.js",
+  contentHash: "hashN",
+  startLine: 1,
+  endLine: 20,
+  score: 95,
+  text: "z".repeat(200),
+});
+const repMerge = mergeIterationWindows(
+  ledgerFor([repVictim]),
+  [repCand],
+  { maxFiles: 16, maxWindowsPerFile: 2, maxCharacters: 3200, scoreFloor: 50 },
+  { allowReplacement: true, replacementMargin: 10 },
+);
+check(
+  repMerge.added === 1 && repMerge.replacedFiles === 1 && repMerge.windows.length === 1 && repMerge.windows[0] === repCand,
+  "a fitting candidate replaces the strictly weaker window",
+  `replace merge wrong: added=${repMerge.added} replaced=${repMerge.replacedFiles} windows=${JSON.stringify(repMerge.windows.map((w) => w.fileId))}`,
+);
+check(
+  repMerge.totalCharacters === repCand.text.length && repMerge.totalTokens === servingTokens(repCand),
+  "the committed replacement moves raw and serving accounting together",
+  `accounting: ${repMerge.totalCharacters}/${repMerge.totalTokens}`,
+);
+
+// Multiple equally eligible victims: victim selection stays deterministic
+// (lowest best score, then lowest fileId) and only the chosen victim moves.
+const tieHigh = mkWindow({ fileId: "v2", path: "src/services/second.js", contentHash: "hash2", startLine: 1, endLine: 40, score: 60, text: "a".repeat(400) });
+const tieLow = mkWindow({ fileId: "v1", path: "src/services/first.js", contentHash: "hash1", startLine: 1, endLine: 40, score: 60, text: "a".repeat(400) });
+const tieCand = mkWindow({ fileId: "n1", path: "src/controllers/newnice.js", contentHash: "hashN", startLine: 1, endLine: 20, score: 95, text: "z".repeat(400) });
+const tieMerge = mergeIterationWindows(
+  ledgerFor([tieLow, tieHigh]),
+  [tieCand],
+  { maxFiles: 16, maxWindowsPerFile: 2, maxCharacters: 1200, scoreFloor: 50 },
+  { allowReplacement: true, replacementMargin: 10 },
+);
+check(
+  tieMerge.replacedFiles === 1 && tieMerge.windows.length === 2,
+  "one deterministic victim is removed when one removal makes the candidate fit",
+  `tie merge wrong: replaced=${tieMerge.replacedFiles} windows=${JSON.stringify(tieMerge.windows.map((w) => w.fileId))}`,
+);
+check(
+  tieMerge.windows.some((w) => w.fileId === "v2") && !tieMerge.windows.some((w) => w.fileId === "v1"),
+  "equal scores select the lowest fileId as the victim (deterministic)",
+  `victim pick wrong: ${JSON.stringify(tieMerge.windows.map((w) => w.fileId))}`,
+);
+check(
+  tieMerge.totalTokens === servingTokens(tieHigh) + servingTokens(tieCand) &&
+    tieMerge.totalCharacters === tieHigh.text.length + tieCand.text.length,
+  "the committed replacement rebalances serving and raw accounting exactly",
+  `tie accounting: ${tieMerge.totalCharacters}/${tieMerge.totalTokens}`,
+);
+
+// A failed replacement never rearranges the package: window references keep
+// their original order and identity.
+const orderFirst = mkWindow({ fileId: "f1", path: "src/services/first.js", contentHash: "hashF1", startLine: 1, endLine: 40, score: 60, text: "y".repeat(400) });
+const orderSecond = mkWindow({ fileId: "f2", path: "src/models/second.js", contentHash: "hashF2", startLine: 1, endLine: 40, score: 99, text: "b".repeat(400) });
+const orderMerge = mergeIterationWindows(
+  ledgerFor([orderFirst, orderSecond]),
+  [tokCand],
+  replacementLimits,
+  { allowReplacement: true, replacementMargin: 10 },
+);
+check(
+  orderMerge.windows.length === 2 && orderMerge.windows[0] === orderFirst && orderMerge.windows[1] === orderSecond,
+  "a failed replacement leaves window order and identity unchanged",
+  `order merge wrong: ${JSON.stringify(orderMerge.windows.map((w) => w.fileId))}`,
+);
+
+// Duplicate candidates: the first copy may trigger a committed replacement;
+// further copies must dedupe against the already-added window without
+// double-counting any accounting. One candidate and three identical
+// candidates produce the exact same package.
+const singleMerge = mergeIterationWindows(
+  ledgerFor([repVictim]),
+  [repCand],
+  { maxFiles: 16, maxWindowsPerFile: 2, maxCharacters: 3200, scoreFloor: 50 },
+  { allowReplacement: true, replacementMargin: 10 },
+);
+const tripleMerge = mergeIterationWindows(
+  ledgerFor([repVictim]),
+  [repCand, mkDuplicate(repCand), mkDuplicate(repCand)],
+  { maxFiles: 16, maxWindowsPerFile: 2, maxCharacters: 3200, scoreFloor: 50 },
+  { allowReplacement: true, replacementMargin: 10 },
+);
+check(
+  singleMerge.added === tripleMerge.added && singleMerge.replacedFiles === tripleMerge.replacedFiles &&
+    singleMerge.totalCharacters === tripleMerge.totalCharacters && singleMerge.totalTokens === tripleMerge.totalTokens &&
+    singleMerge.windows.length === tripleMerge.windows.length &&
+    singleMerge.windows.every((w, i) => w === tripleMerge.windows[i]),
+  "duplicate candidates never corrupt accounting (identical package with one or three copies)",
+  `dup mismatch: ${JSON.stringify([singleMerge.replacedFiles, tripleMerge.replacedFiles, singleMerge.totalCharacters, tripleMerge.totalCharacters, singleMerge.windows.length, tripleMerge.windows.length])}`,
+);
+
+// ---- Section 1c: totalTokens fallback + line-1 API appendix accounting ----
+console.log("");
+console.log("=== 1c. mergeIterationWindows: fallback ledger + [API surface] appendix ===");
+
+const fallbackLimits = { maxFiles: 16, maxWindowsPerFile: 2, maxCharacters: 28000, scoreFloor: 50 };
+
+// Existing windows with no supplied token ledger: the fallback is the same
+// convention the additions use — the windows' full served token cost — never
+// a raw-characters heuristic.
+const fbA = mkWindow({ fileId: "fbA", path: "src/services/fallOne.js", contentHash: "hash1", startLine: 2, endLine: 40, score: 90, text: "a".repeat(300) });
+const fbB = mkWindow({ fileId: "fbB", path: "src/models/fallTwo.js", contentHash: "hash2", startLine: 3, endLine: 40, score: 90, text: "b".repeat(300) });
+const fbExisting = mergeIterationWindows(
+  { windows: [fbA, fbB], totalCharacters: 600 },
+  [],
+  fallbackLimits,
+);
+check(
+  fbExisting.totalTokens === servingTokens(fbA) + servingTokens(fbB),
+  "fallback token ledger uses the serving-token convention for existing windows",
+  `fallback: ${fbExisting.totalTokens} vs ${servingTokens(fbA) + servingTokens(fbB)}`,
+);
+check(
+  fbExisting.renderedCharacters === 600 + servingHeaderLen(fbA) + servingHeaderLen(fbB),
+  "fallback character ledger covers the existing windows' headers",
+  `fallback rendered: ${fbExisting.renderedCharacters}`,
+);
+
+// Successful project-candidate addition without a supplied ledger.
+const fbCand = mkWindow({ fileId: "fbC", path: "src/controllers/fallNew.js", contentHash: "hash3", startLine: 2, endLine: 20, score: 95, text: "c".repeat(200) });
+const fbAdd = mergeIterationWindows(
+  { windows: [fbA, fbB], totalCharacters: 600 },
+  [fbCand],
+  fallbackLimits,
+);
+check(
+  fbAdd.added === 1 && fbAdd.totalTokens === servingTokens(fbA) + servingTokens(fbB) + servingTokens(fbCand) &&
+    fbAdd.renderedCharacters === 600 + fbCand.text.length + servingHeaderLen(fbA) + servingHeaderLen(fbB) + servingHeaderLen(fbCand),
+  "successful addition without a supplied ledger extends the serving-convention figures",
+  `fbAdd: ${fbAdd.totalTokens}/${fbAdd.renderedCharacters}`,
+);
+
+// Replacement without a supplied ledger: the victim's full served cost —
+// including its header — is reclaimed, so the final ledger is exactly the
+// surviving package's own served cost.
+const fbVictim = mkWindow({ fileId: "fbV", path: "src/services/fallOld.js", contentHash: "hash4", startLine: 2, endLine: 40, score: 60, text: "v".repeat(3000) });
+const fbRep = mergeIterationWindows(
+  { windows: [fbVictim], totalCharacters: 3000 },
+  [fbCand],
+  { maxFiles: 16, maxWindowsPerFile: 2, maxCharacters: 3200, scoreFloor: 50 },
+  { allowReplacement: true, replacementMargin: 10 },
+);
+check(
+  fbRep.replacedFiles === 1 && fbRep.added === 1 &&
+    fbRep.totalTokens === servingTokens(fbCand) &&
+    fbRep.renderedCharacters === fbCand.text.length + servingHeaderLen(fbCand),
+  "replacement without a supplied ledger reclaims the victim's served cost exactly",
+  `fbRep: ${fbRep.totalTokens}/${fbRep.renderedCharacters}`,
+);
+
+// Rejected candidate without a supplied ledger: nothing moves.
+const fbRejCand = mkWindow({ fileId: "fbR", path: "src/controllers/fallBig.js", contentHash: "hash5", startLine: 2, endLine: 60, score: 95, text: "r".repeat(4000) });
+const fbRej = mergeIterationWindows(
+  { windows: [fbA, fbB], totalCharacters: 600 },
+  [fbRejCand],
+  { maxFiles: 16, maxWindowsPerFile: 2, maxCharacters: 1000, scoreFloor: 50 },
+);
+check(
+  fbRej.added === 0 && fbRej.rejectedBudget === 1 &&
+    fbRej.totalTokens === servingTokens(fbA) + servingTokens(fbB) &&
+    fbRej.renderedCharacters === 600 + servingHeaderLen(fbA) + servingHeaderLen(fbB),
+  "rejected candidate without a supplied ledger leaves both fallback figures unchanged",
+  `fbRej: ${fbRej.totalTokens}/${fbRej.renderedCharacters}`,
+);
+
+// Line-1 `[API surface]` appendix accounting. The final prompt assembly
+// (formatRetrievedContext) attaches the appendix text to every window that
+// contains line 1 of a file whose exported symbols are known, so the merge
+// must reserve exactly that cost through `options.appendixOf`.
+const appendices = new Map<string, { chars: number; tokens: number }>();
+const appendixProvider = (w: { path: string }): { chars: number; tokens: number } =>
+  appendices.get(w.path) ?? { chars: 0, tokens: 0 };
+const apxLimits = { maxFiles: 16, maxWindowsPerFile: 2, maxCharacters: 28000, scoreFloor: 50 };
+
+// An existing base window with an appendix: its appendix cost is already in
+// the inherited ledgers (renderedCharacters + totalTokens) and is preserved —
+// never re-added — by an accounting-only merge.
+const apxVictim = mkWindow({ fileId: "v1", path: "src/services/one.js", contentHash: "hashV", startLine: 1, endLine: 40, score: 60, text: "y".repeat(1000) });
+const apxChars = 400;
+const apxTokens = 120;
+appendices.set(apxVictim.path, { chars: apxChars, tokens: apxTokens });
+const apxInherited = {
+  windows: [apxVictim],
+  totalCharacters: apxVictim.text.length,
+  totalTokens: servingTokens(apxVictim) + apxTokens,
+  renderedCharacters: apxVictim.text.length + servingHeaderLen(apxVictim) + apxChars,
+};
+const apxPreserve = mergeIterationWindows(
+  apxInherited,
+  [mkDuplicate({ ...apxVictim, score: 95 })],
+  apxLimits,
+  { appendixOf: appendixProvider },
+);
+check(
+  apxPreserve.added === 0 &&
+    apxPreserve.totalTokens === apxInherited.totalTokens &&
+    apxPreserve.renderedCharacters === apxInherited.renderedCharacters &&
+    apxPreserve.totalCharacters === apxInherited.totalCharacters,
+  "accounting-only merge preserves inherited appendix costs without double counting",
+  `apxPreserve: ${apxPreserve.totalTokens}/${apxPreserve.renderedCharacters}`,
+);
+
+// Replacing a line-1 window with an appendix is feasible only when the
+// replacement plan reclaims the whole served cost — window text + header +
+// appendix. Text-only planning (the old implementation, which had no
+// appendix accounting) cannot make the plan feasible here.
+const apxCand = mkWindow({ fileId: "c1", path: "src/services/two.js", contentHash: "hashC", startLine: 2, endLine: 60, score: 95, text: "z".repeat(1100) });
+const apxSwap = mergeIterationWindows(
+  apxInherited,
+  [apxCand],
+  { maxFiles: 16, maxWindowsPerFile: 2, maxCharacters: 2000, scoreFloor: 50 },
+  { allowReplacement: true, replacementMargin: 10, appendixOf: appendixProvider },
+);
+check(
+  apxSwap.added === 1 && apxSwap.replacedFiles === 1 && apxSwap.windows.length === 1 && apxSwap.windows[0] === apxCand,
+  "a line-1 window's appendix is reclaimed when it is replaced (appendix-aware plan commits)",
+  `apxSwap: added=${apxSwap.added} replaced=${apxSwap.replacedFiles}`,
+);
+check(
+  apxSwap.totalTokens === servingTokens(apxCand) &&
+    apxSwap.renderedCharacters === apxCand.text.length + servingHeaderLen(apxCand) &&
+    apxSwap.totalCharacters === apxCand.text.length,
+  "after the swap the ledgers equal the surviving package's served cost exactly",
+  `apxSwap ledgers: ${apxSwap.totalTokens}/${apxSwap.renderedCharacters}/${apxSwap.totalCharacters}`,
+);
+
+// A failed replacement against appendix-inclusive figures preserves the
+// original package and every ledger figure exactly.
+const apxBuffer = mkWindow({ fileId: "v2", path: "src/services/four.js", contentHash: "hash2", startLine: 5, endLine: 40, score: 99, text: "b".repeat(400) });
+const apxInheritedBuffer = {
+  windows: [apxVictim, apxBuffer],
+  totalCharacters: apxVictim.text.length + apxBuffer.text.length,
+  totalTokens: servingTokens(apxVictim) + servingTokens(apxBuffer) + apxTokens,
+  renderedCharacters: apxVictim.text.length + apxBuffer.text.length + servingHeaderLen(apxVictim) + servingHeaderLen(apxBuffer) + apxChars,
+};
+appendices.set("src/services/four.js", { chars: 0, tokens: 0 });
+const apxFailCand = mkWindow({ fileId: "c1", path: "src/services/two.js", contentHash: "hashC", startLine: 2, endLine: 60, score: 95, text: "z".repeat(1100) });
+const apxFail = mergeIterationWindows(
+  apxInheritedBuffer,
+  [apxFailCand],
+  { maxFiles: 16, maxWindowsPerFile: 2, maxCharacters: 1162, scoreFloor: 50 },
+  { allowReplacement: true, replacementMargin: 10, appendixOf: appendixProvider },
+);
+check(
+  apxFail.added === 0 && apxFail.replacedFiles === 0 && apxFail.rejectedBudget >= 1 &&
+    apxFail.windows.length === 2 && apxFail.windows[0] === apxVictim && apxFail.windows[1] === apxBuffer &&
+    apxFail.totalTokens === apxInheritedBuffer.totalTokens &&
+    apxFail.renderedCharacters === apxInheritedBuffer.renderedCharacters &&
+    apxFail.totalCharacters === apxInheritedBuffer.totalCharacters,
+  "a failed appendix-aware replacement preserves the package and all three ledger figures exactly",
+  `apxFail: ${JSON.stringify(apxFail)}`,
+);
+
+// A newly introduced line-1 window carries its own appendix: the merge
+// reserves the appendix the final prompt will attach, so the candidate only
+// enters when its full served cost fits.
+const apxNew = mkWindow({ fileId: "n1", path: "src/controllers/newOne.js", contentHash: "hashN", startLine: 1, endLine: 60, score: 95, text: "n".repeat(700) });
+const apxNewChars = 400;
+const apxNewTokens = 120;
+appendices.set(apxNew.path, { chars: apxNewChars, tokens: apxNewTokens });
+const nonLineOne = mkWindow({ fileId: "f2", path: "src/models/two.js", contentHash: "hashF2", startLine: 3, endLine: 40, score: 99, text: "f".repeat(500) });
+const baseRendered = nonLineOne.text.length + servingHeaderLen(nonLineOne);
+appendices.set(nonLineOne.path, { chars: 0, tokens: 0 });
+const candServedChars = apxNew.text.length + servingHeaderLen(apxNew) + apxNewChars;
+const apxAdd = mergeIterationWindows(
+  { windows: [nonLineOne], totalCharacters: nonLineOne.text.length, totalTokens: servingTokens(nonLineOne), renderedCharacters: baseRendered },
+  [apxNew],
+  { ...apxLimits, maxCharacters: baseRendered + candServedChars },
+  { appendixOf: appendixProvider },
+);
+check(
+  apxAdd.added === 1 &&
+    apxAdd.renderedCharacters === baseRendered + candServedChars &&
+    apxAdd.totalTokens === servingTokens(nonLineOne) + servingTokens(apxNew) + apxNewTokens,
+  "a new line-1 window's appendix is charged exactly once on entry",
+  `apxAdd: ${apxAdd.renderedCharacters} (expected ${baseRendered + candServedChars})`,
+);
+
+// The same candidate with no room for its appendix is rejected whole — the
+// header + appendix overhead makes room checks as rendered, not just as text.
+const apxReject = mergeIterationWindows(
+  { windows: [nonLineOne], totalCharacters: nonLineOne.text.length, totalTokens: servingTokens(nonLineOne), renderedCharacters: baseRendered },
+  [mkDuplicate(apxNew)],
+  { ...apxLimits, maxCharacters: baseRendered + candServedChars - 5 },
+  { appendixOf: appendixProvider },
+);
+check(
+  apxReject.added === 0 && apxReject.rejectedBudget >= 1 &&
+    apxReject.renderedCharacters === baseRendered &&
+    apxReject.totalTokens === servingTokens(nonLineOne),
+  "a line-1 candidate whose appendix exceeds the rendered budget is rejected with accounting unchanged",
+  `apxReject: ${JSON.stringify(apxReject)}`,
+);
+
 
 // ---- Section 2: windowAffiliation (pure) ---------------------------------
 console.log("");
@@ -359,6 +794,10 @@ function assertBudgetInvariants(
   }
   check(result.files.length <= 16, `${label}: file budget respected (${result.files.length})`, `${label}: ${result.files.length} files exceed budget`);
   check(result.totalCharacters <= 28000, `${label}: character budget respected (${result.totalCharacters})`, `${label}: characters ${result.totalCharacters} exceed budget`);
+  if (result.renderedCharacters !== undefined) {
+    check(result.renderedCharacters >= result.totalCharacters, `${label}: rendered ledger covers raw characters (${result.renderedCharacters}/${result.totalCharacters})`, `${label}: rendered ledger below raw characters`);
+    check(result.renderedCharacters <= 28000, `${label}: rendered (header- and appendix-inclusive) budget respected (${result.renderedCharacters})`, `${label}: rendered characters ${result.renderedCharacters} exceed budget`);
+  }
   check([...perFile.values()].every((n) => n <= 2), `${label}: per-file window cap respected`, `${label}: per-file cap violated`);
   check(ok, `${label}: no duplicate windows`, `${label}: duplicate window found`);
   check(overlapOk, `${label}: no overlapping windows on the same file`, `${label}: overlapping windows found`);
@@ -650,6 +1089,135 @@ console.log("=== 8. Provenance and hashes preserved through the loop ===");
     check(loop.result.files.length > 0, "retrieval returns evidence for the unfamiliar concept", `files: ${loop.result.files.length}`);
     check(loop.stoppedBecause !== undefined, "loop reports a stop reason", `stop: ${loop.stoppedBecause}`);
     assertBudgetInvariants("adaptive", loop.result);
+  }
+
+  // Section 10: adaptive affiliation in the loop — role-guarded evidence.
+  console.log("");
+  console.log("=== 10. Adaptive affiliation: role-guarded targeted retrieval ===");
+  {
+    // One auth concept spanning service, controller and repository files; the
+    // controller/repository membership comes from /auth routes, and only the
+    // service file's retrieved slice carries the concept vocabulary.
+    const roles = buildMock("loop_roles",
+      [
+        {
+          id: "roles_service",
+          path: "backend/src/services/authService.js",
+          role: "service",
+          lines: 160,
+          symbols: [["verifyAuthSession", 30, true]],
+          text: (n) => (n === 30 ? "function verifyAuthSession(token) { return authDecode(token); }" : null),
+        },
+        {
+          id: "roles_controller",
+          path: "backend/src/controllers/accessRules.js",
+          role: "controller",
+          lines: 160,
+          routes: [{ method: "POST", path: "/auth/submit", line: 15 }],
+        },
+        {
+          id: "roles_repository",
+          path: "backend/src/repositories/accessRows.js",
+          role: "repository",
+          lines: 160,
+          routes: [{ method: "POST", path: "/auth/persist", line: 20 }],
+        },
+      ],
+      [
+        { source: "roles_controller", target: "roles_service" },
+        { source: "roles_service", target: "roles_repository" },
+      ]);
+
+    const loop = await retrieveWithCoverageLoop(roles.db as unknown as Db, "loop_roles", "How does authentication work in this project?");
+    const guardConcept = loop.coverage.concepts.find((c) => c.token === "auth")!;
+    const guardCategory = (category: string) => guardConcept.categories.find((cat) => cat.category === category);
+    const service = guardCategory("service");
+    const controller = guardCategory("controller");
+    const repository = guardCategory("repository");
+
+    check(
+      service?.status === "found" && service.evidence.every((e) => e.path === "backend/src/services/authService.js"),
+      "the service file's concept text founds only the service category",
+      `service wrong: ${JSON.stringify(service)}`,
+    );
+    check(
+      controller !== undefined && controller.status !== "found" &&
+        controller.evidence.every((e) => e.path === "backend/src/controllers/accessRules.js"),
+      "the unrelated service file is never accepted as controller evidence (controller stays missing)",
+      `controller wrong: ${JSON.stringify(controller)}`,
+    );
+    check(
+      repository !== undefined && repository.status !== "found" &&
+        repository.evidence.every((e) => e.path === "backend/src/repositories/accessRows.js"),
+      "the unrelated service file is never accepted as repository evidence (repository stays missing)",
+      `repository wrong: ${JSON.stringify(repository)}`,
+    );
+    check(
+      loop.stoppedBecause !== "sufficient-coverage" && loop.passes.length >= 1 &&
+        loop.passes[0]!.categories.includes("controller"),
+      "false coverage did not stop the loop: the controller category stayed missing and was targeted",
+      `stop: ${loop.stoppedBecause}, passes: ${JSON.stringify(loop.passes)}`,
+    );
+    assertBudgetInvariants("roles", loop.result);
+
+    // Same repository, but the controller file carries a real auth slice deep
+    // in the file. Retrieving that slice can legitimately mark controller
+    // coverage found — via the controller file, never the service file.
+    const rolesFound = buildMock("loop_roles_found",
+      [
+        {
+          id: "froles_service",
+          path: "backend/src/services/authService.js",
+          role: "service",
+          lines: 160,
+          symbols: [["verifyAuthSession", 30, true]],
+          text: (n) => (n === 30 ? "function verifyAuthSession(token) { return authDecode(token); }" : null),
+        },
+        {
+          id: "froles_controller",
+          path: "backend/src/controllers/accessRules.js",
+          role: "controller",
+          lines: 160,
+          symbols: [["submitAuthRequest", 96, true]],
+          text: (n) => (n === 96 ? "async function submitAuthRequest(req) { return authSubmit(req.body); }" : null),
+        },
+        {
+          id: "froles_repository",
+          path: "backend/src/repositories/accessRows.js",
+          role: "repository",
+          lines: 160,
+          routes: [{ method: "POST", path: "/auth/persist", line: 20 }],
+        },
+      ],
+      [
+        { source: "froles_controller", target: "froles_service" },
+        { source: "froles_service", target: "froles_repository" },
+      ]);
+
+    const loopFound = await retrieveWithCoverageLoop(rolesFound.db as unknown as Db, "loop_roles_found", "How does authentication work in this project?");
+    const foundConcept = loopFound.coverage.concepts.find((c) => c.token === "auth")!;
+    const foundCategory = (category: string) => foundConcept.categories.find((cat) => cat.category === category);
+    const foundService = foundCategory("service");
+    const foundController = foundCategory("controller");
+    const foundRepository = foundCategory("repository");
+
+    check(
+      foundController?.status === "found" &&
+        foundController.evidence.every((e) => e.path === "backend/src/controllers/accessRules.js" && e.signal === "source-text"),
+      "retrieving the controller file with relevant source evidence marks controller coverage found (its own file only)",
+      `controller wrong: ${JSON.stringify(foundController)}`,
+    );
+    check(
+      foundService?.status === "found" && foundService.evidence.every((e) => e.path === "backend/src/services/authService.js"),
+      "the service category stays grounded in the service file alone",
+      `service wrong: ${JSON.stringify(foundService)}`,
+    );
+    check(
+      foundRepository !== undefined && foundRepository.status !== "found",
+      "the repository category is never marked found without repository evidence",
+      `repository wrong: ${JSON.stringify(foundRepository)}`,
+    );
+    assertBudgetInvariants("roles-found", loopFound.result);
   }
 
 // ---- Summary ----

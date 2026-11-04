@@ -7,11 +7,14 @@
  * relationship machinery, never an LLM.
  *
  * Guarantees:
- *  - Append-only merging: nothing is duplicated (exact or overlapping
- *    ranges skip; per-file window cap and global caps hold). Existing
- *    stronger evidence is never displaced by weaker targeted candidates.
+ *  - Duplicate-free merging: exact or overlapping ranges skip; per-file
+ *    window cap and global caps hold; existing stronger (or protected)
+ *    evidence is never displaced by weaker targeted candidates. Weaker
+ *    evidence moves out only through an atomic, simulate-then-commit
+ *    replacement that leaves the package untouched when infeasible.
  *  - The 16-file / 28k-character budget and the per-file window cap stay
- *    intact across all passes.
+ *    intact across all passes, including the window headers and line-1
+ *    `[API surface]` appendices the final prompt renders.
  *  - At most `maxPasses` (default 3) additional retrieval passes; stops
  *    early on sufficient coverage, on missing useful candidates, or on an
  *    exhausted budget. "unknown" is treated as unproven, never as
@@ -31,6 +34,7 @@ import {
 import {
   DEFAULT_BUDGET,
   computeEvidenceLimits,
+  formatApiSurfaceFor,
   retrieveGroundedContext,
   supportFilePenalty,
   type Db,
@@ -38,7 +42,7 @@ import {
   type RetrievalResult,
   type RetrievedWindow,
 } from "./retrieval.ts";
-import { estimateCodeTokens } from "./budget.ts";
+import { estimateCodeTokens, estimateProseTokens } from "./budget.ts";
 import { buildConceptIndexForAnalysis } from "./concepts/loader.ts";
 import { matchConceptsForQuery } from "./concepts/mapping.ts";
 import type { ConceptIndex } from "./concepts/types.ts";
@@ -147,19 +151,71 @@ function windowOverlaps(a: RetrievedWindow, b: RetrievedWindow): boolean {
 /**
  * Pure merge step of one iteration: folds candidate windows of a targeted
  * pass into the current evidence package without duplication, respecting
- * per-file window, file, and character caps. Candidates never displace
- * existing windows — the merge is append-only and drops everything that
- * does not fit.
+ * per-file window, file, and character caps. Weak existing evidence moves
+ * out only through atomic replacement: when `options.allowReplacement` is
+ * set and the candidate does not fit as served, eligible strictly weaker
+ * windows are removed only inside a simulated plan, and the plan commits
+ * in one step only if the incoming candidate then fits — so a failed
+ * replacement can never leave the package gutted without its replacement.
+ * Every fit decision is made on the retrieval contract's served figures
+ * (window text + header + the line-1 `[API surface]` appendix the final
+ * prompt attaches), never on raw text alone.
  */
+
+// ── Per-window serving costs (retrieval contract accounting) ────────────────
+
+/**
+ * The exact per-window serving costs the base pipeline enforces
+ * (lib/ai/retrieval.ts `windowCostOf`): the rendered package charges every
+ * window its header line plus its code text, in characters, and its code
+ * tokens plus the header's prose tokens. Iterative merging must respect the
+ * same figures so it can never drift past the budget the base path enforced.
+ */
+const windowHeaderCost = (
+  w: { path: string; contentHash: string; startLine: number; endLine: number },
+): number =>
+  `--- File: ${w.path} (lines ${w.startLine}-${w.endLine}) [hash: ${w.contentHash.slice(0, 8)}] ---\n`.length + 2;
+
+const windowServingCost = (
+  w: { path: string; contentHash: string; startLine: number; endLine: number; text: string },
+): { chars: number; tokens: number } => ({
+  chars: w.text.length + windowHeaderCost(w),
+  tokens: estimateCodeTokens(w.text) + estimateProseTokens(w.path) + 15,
+});
 export function mergeIterationWindows(
-  current: { windows: RetrievedWindow[]; totalCharacters: number; totalTokens?: number },
+  current: {
+    windows: RetrievedWindow[];
+    totalCharacters: number;
+    totalTokens?: number;
+    /**
+     * Enforced as-served character ledger (the base result's
+     * `renderedCharacters`): window text + header + line-1 appendix
+     * characters, exactly what the base pipeline finished counting. When
+     * given, it starts the ledger directly — appendix costs already present
+     * in it are preserved, not re-added.
+     */
+    renderedCharacters?: number;
+  },
   candidates: RetrievedWindow[],
   limits: { maxFiles: number; maxWindowsPerFile: number; maxCharacters: number; scoreFloor: number; maxTokens?: number },
-  options?: { allowReplacement?: boolean; protectedFiles?: Set<string>; replacementMargin?: number },
+  options?: {
+    allowReplacement?: boolean;
+    protectedFiles?: Set<string>;
+    replacementMargin?: number;
+    /**
+     * Exact cost of a file's `[API surface]` appendix as the final prompt
+     * attaches it (the appendix is appended to every window containing
+     * line 1 of a file that has exported symbols). Provide it whenever
+     * symbol rows are known so line-1 windows reserve the appendix the
+     * final assembly will render; omitted → no appendix accounting.
+     */
+    appendixOf?: (w: { path: string }) => { chars: number; tokens: number };
+  },
 ): {
   windows: RetrievedWindow[];
   totalCharacters: number;
   totalTokens: number;
+  renderedCharacters: number;
   added: number;
   addedFiles: number;
   replacedFiles: number;
@@ -168,7 +224,43 @@ export function mergeIterationWindows(
 } {
   const windows = [...current.windows];
   let totalCharacters = current.totalCharacters;
-  let totalTokens = current.totalTokens ?? Math.ceil(totalCharacters / 3.0);
+  // Enforcement ledger mirrors the base pipeline's serving contract: every
+  // window occupies its header-inclusive character cost, its serving token
+  // cost, and — for windows containing line 1 — the `[API surface]`
+  // appendix cost the final prompt attaches (lib/ai/retrieval.ts
+  // `formatRetrievedContext`). The merge therefore cannot drift past the
+  // budget the base path itself enforced, even when the final prompt adds
+  // appendix text on top of the windows. `totalCharacters` keeps its raw
+  // code-character semantics for callers; `renderedCharacters` carries the
+  // enforced ledger forward between passes.
+  const appendixOf = options?.appendixOf;
+  const appendixCostOf = (
+    w: { path: string; startLine: number },
+  ): { chars: number; tokens: number } =>
+    w.startLine === 1 && appendixOf !== undefined ? appendixOf(w) : { chars: 0, tokens: 0 };
+  const servedCostOf = (
+    w: { path: string; contentHash: string; startLine: number; endLine: number; text: string },
+  ): { chars: number; tokens: number } => {
+    const cost = windowServingCost(w);
+    const appendix = appendixCostOf(w);
+    return { chars: cost.chars + appendix.chars, tokens: cost.tokens + appendix.tokens };
+  };
+  // The character ledger starts from the caller's enforced figure when given
+  // (base.renderedCharacters is header- and appendix-inclusive — exactly
+  // what the base pipeline already counted) and otherwise derives it from
+  // the caller's raw character figure plus each window's non-text overheads
+  // (header + appendix). The raw figure already owns the window text, so
+  // text is never added twice, and appendix costs inherited in the caller's
+  // figures are preserved, never re-added (no double counting).
+  let ledgerCharacters = current.renderedCharacters
+    ?? totalCharacters
+      + windows.reduce((acc, w) => acc + windowHeaderCost(w) + appendixCostOf(w).chars, 0);
+  // Same convention for tokens: either the caller's ledger (base.totalTokens
+  // already counts header and appendix serving tokens) or the consistent
+  // sum of the windows' served token costs — never a raw-characters heuristic
+  // mixed with served-token additions.
+  let totalTokens = current.totalTokens
+    ?? windows.reduce((acc, w) => acc + servedCostOf(w).tokens, 0);
   // Fold stronger candidates first so the budget (char/file caps) is spent
   // on the most relevant evidence; sort by effective score (support files
   // demoted) to mirror the base pipeline's prioritization.
@@ -212,39 +304,77 @@ export function mergeIterationWindows(
         rejectedBudget += 1;
         continue; // weak relationship-only padding
       }
-      while (
-        (files.size >= limits.maxFiles ||
-          totalCharacters + cand.text.length > limits.maxCharacters ||
-          (limits.maxTokens !== undefined && totalTokens + estimateCodeTokens(cand.text) > limits.maxTokens)) &&
-        options?.allowReplacement
-      ) {
-        let victim: string | null = null;
-        let victimScore = Infinity;
-        const fileBest = new Map<string, number>();
-        for (const w of windows) {
-          const cur = fileBest.get(w.fileId) ?? 0;
-          if (w.score > cur) fileBest.set(w.fileId, w.score);
-        }
-        for (const [fid, best] of fileBest) {
-          if (options.protectedFiles?.has(fid)) continue;
-          if (best >= cand.score - margin) continue;
-          if (best < victimScore || (best === victimScore && (victim === null || fid < victim))) {
-            victim = fid;
-            victimScore = best;
+      const candCost = servedCostOf(cand);
+      const candidateFits = (): boolean =>
+        files.size + 1 <= limits.maxFiles &&
+        ledgerCharacters + candCost.chars <= limits.maxCharacters &&
+        (limits.maxTokens === undefined || totalTokens + candCost.tokens <= limits.maxTokens);
+      if (!candidateFits() && options?.allowReplacement) {
+        // Atomic replacement planning: identify eligible victims and simulate
+        // their removal against copied ledger figures until the candidate
+        // fits. No existing window, counter or ledger figure is touched
+        // during planning — the commit below happens only when the plan
+        // succeeds (the base pipeline's Phase D rescue follows the same
+        // simulate-then-commit pattern), so an infeasible replacement
+        // preserves the original result exactly.
+        const removedFileIds: string[] = [];
+        let simChars = ledgerCharacters;
+        let simTokens = totalTokens;
+        let simFiles = files.size;
+        let feasible = true;
+        while (
+          simFiles + 1 > limits.maxFiles ||
+          simChars + candCost.chars > limits.maxCharacters ||
+          (limits.maxTokens !== undefined && simTokens + candCost.tokens > limits.maxTokens)
+        ) {
+          let victim: string | null = null;
+          let victimScore = Infinity;
+          const fileBest = new Map<string, number>();
+          const removedSet = new Set(removedFileIds);
+          for (const w of windows) {
+            if (removedSet.has(w.fileId)) continue;
+            const cur = fileBest.get(w.fileId) ?? 0;
+            if (w.score > cur) fileBest.set(w.fileId, w.score);
           }
+          for (const [fid, best] of fileBest) {
+            if (options.protectedFiles?.has(fid)) continue;
+            if (best >= cand.score - margin) continue;
+            if (best < victimScore || (best === victimScore && (victim === null || fid < victim))) {
+              victim = fid;
+              victimScore = best;
+            }
+          }
+          if (victim === null) {
+            feasible = false;
+            break; // no strictly weaker victim left — the package stays as it is
+          }
+          removedFileIds.push(victim);
+          for (const w of windows) {
+            if (w.fileId !== victim) continue;
+            const cost = servedCostOf(w);
+            simChars -= cost.chars;
+            simTokens -= cost.tokens;
+          }
+          simFiles -= 1;
         }
-        if (victim === null) break;
-        // Remove the displaced file's windows and free its slot/chars/tokens.
-        for (const w of windows.filter((w) => w.fileId === victim)) {
-          totalCharacters -= w.text.length;
-          totalTokens -= estimateCodeTokens(w.text);
+        if (feasible) {
+          // Commit the whole plan in one step: windows, file set, per-file
+          // counts, raw characters and both ledger figures move together.
+          const removedSet = new Set(removedFileIds);
+          for (const w of windows) {
+            if (removedSet.has(w.fileId)) totalCharacters -= w.text.length;
+          }
+          const kept = windows.filter((w) => !removedSet.has(w.fileId));
+          windows.length = 0;
+          windows.push(...kept);
+          for (const fid of removedFileIds) {
+            files.delete(fid);
+            perFile.delete(fid);
+            replacedFiles += 1;
+          }
+          ledgerCharacters = simChars;
+          totalTokens = simTokens;
         }
-        const remaining = windows.filter((w) => w.fileId !== victim);
-        windows.length = 0;
-        windows.push(...remaining);
-        files.delete(victim);
-        perFile.delete(victim);
-        replacedFiles += 1;
       }
       if (files.size >= limits.maxFiles) {
         rejectedBudget += 1;
@@ -252,19 +382,25 @@ export function mergeIterationWindows(
       }
     }
     let finalCand = cand;
-    let candTokens = estimateCodeTokens(finalCand.text);
-    const exceedsChar = totalCharacters + finalCand.text.length > limits.maxCharacters;
-    const exceedsToken = limits.maxTokens !== undefined && totalTokens + candTokens > limits.maxTokens;
+    let finalCost = servedCostOf(finalCand);
+    const exceedsChar = ledgerCharacters + finalCost.chars > limits.maxCharacters;
+    const exceedsToken = limits.maxTokens !== undefined && totalTokens + finalCost.tokens > limits.maxTokens;
     if (exceedsChar || exceedsToken) {
-      const remainingChars = limits.maxCharacters - totalCharacters;
+      const remainingChars = limits.maxCharacters - ledgerCharacters;
       const remainingTokens = limits.maxTokens !== undefined ? limits.maxTokens - totalTokens : Infinity;
       if (remainingChars >= 250 && remainingTokens >= 60) {
+        // Truncation reserves the candidate's fixed as-served overhead first —
+        // header text and the line-1 appendix the final prompt attaches — so
+        // the fitting slice plus its served overhead stays inside the
+        // remaining budget.
+        const overheadChars = windowHeaderCost(finalCand) + appendixCostOf(finalCand).chars;
+        const overheadTokens = estimateProseTokens(finalCand.path) + 15 + appendixCostOf(finalCand).tokens;
         const lines = cand.text.split("\n");
         let accum = "";
         let lineCount = 0;
         for (let i = 0; i < lines.length; i++) {
           const next = accum === "" ? lines[i]! : accum + "\n" + lines[i]!;
-          if (next.length > remainingChars || estimateCodeTokens(next) > remainingTokens) break;
+          if (next.length + overheadChars > remainingChars || estimateCodeTokens(next) + overheadTokens > remainingTokens) break;
           accum = next;
           lineCount++;
         }
@@ -274,7 +410,18 @@ export function mergeIterationWindows(
             endLine: cand.startLine + lineCount - 1,
             text: accum,
           };
-          candTokens = estimateCodeTokens(finalCand.text);
+          // The re-headered slice must still fit as served (the header text
+          // changes with the recomputed line range; the line-1 appendix cost
+          // is unchanged — the slice still contains line 1); otherwise
+          // reject whole.
+          finalCost = servedCostOf(finalCand);
+          if (
+            ledgerCharacters + finalCost.chars > limits.maxCharacters ||
+            (limits.maxTokens !== undefined && totalTokens + finalCost.tokens > limits.maxTokens)
+          ) {
+            rejectedBudget += 1;
+            continue;
+          }
         } else {
           rejectedBudget += 1;
           continue;
@@ -284,13 +431,14 @@ export function mergeIterationWindows(
         continue;
       }
     }
-    if (limits.maxTokens !== undefined && totalTokens + candTokens > limits.maxTokens) {
+    if (limits.maxTokens !== undefined && totalTokens + finalCost.tokens > limits.maxTokens) {
       rejectedBudget += 1;
       continue;
     }
     windows.push(finalCand);
     totalCharacters += finalCand.text.length;
-    totalTokens += candTokens;
+    ledgerCharacters += finalCost.chars;
+    totalTokens += finalCost.tokens;
     perFile.set(finalCand.fileId, (perFile.get(finalCand.fileId) ?? 0) + 1);
     if (isNewFile) {
       files.add(finalCand.fileId);
@@ -299,7 +447,17 @@ export function mergeIterationWindows(
     added += 1;
   }
 
-  return { windows, totalCharacters, totalTokens, added, addedFiles, replacedFiles, rejectedBudget, candidatesConsidered };
+  return {
+    windows,
+    totalCharacters,
+    totalTokens,
+    renderedCharacters: ledgerCharacters,
+    added,
+    addedFiles,
+    replacedFiles,
+    rejectedBudget,
+    candidatesConsidered,
+  };
 }
 
 /**
@@ -351,7 +509,32 @@ export async function retrieveWithCoverageLoop(
   const base = await retrieveGroundedContext(db, analysisId, rawQuery, retrievalBudget, conceptIndex);
   let windows: RetrievedWindow[] = [...base.windows];
   let totalCharacters = base.totalCharacters;
-  let totalTokens = base.totalTokens ?? Math.ceil(totalCharacters / 3.0);
+  // Symbol knowledge for appendix accounting: every retrieval pass (base and
+  // focused alike) loads the symbol rows of the files it served, and
+  // `formatRetrievedContext` attaches the same `[API surface]` text under
+  // every line-1 window whose file has exported symbols in the final result.
+  // Keep the best-known rows per path so the merge can reserve exactly what
+  // the final prompt will render. Base rows win: rows for an already-served
+  // file are identical in every later load, so the first entry is kept and
+  // no appendix is ever counted twice.
+  const symbolKnowledge = new Map<string, NonNullable<RetrievalResult["symbols"]>>();
+  for (const sym of base.symbols ?? []) {
+    const list = symbolKnowledge.get(sym.path) ?? [];
+    list.push(sym);
+    symbolKnowledge.set(sym.path, list);
+  }
+  const appendixOf = (w: { path: string }): { chars: number; tokens: number } => {
+    const syms = symbolKnowledge.get(w.path);
+    if (!syms || syms.length === 0) return { chars: 0, tokens: 0 };
+    const block = formatApiSurfaceFor(syms);
+    return block ? { chars: block.length, tokens: estimateCodeTokens(block) } : { chars: 0, tokens: 0 };
+  };
+  let totalTokens = base.totalTokens
+    ?? [...base.windows].reduce((acc, w) => acc + windowServingCost(w).tokens + appendixOf(w).tokens, 0);
+  // Enforced as-served character ledger (headers + line-1 appendices), the
+  // exact figure the base pipeline finished counting; threaded through every
+  // merge pass so no appendix cost already paid for is counted twice.
+  let renderedCharacters: number | undefined = base.renderedCharacters ?? undefined;
   let symbolsState: RetrievalResult["symbols"] = base.symbols ?? [];
   let symbolsStale = false;
 
@@ -381,14 +564,19 @@ export async function retrieveWithCoverageLoop(
     ? matchConceptsForQuery(base.tokens, genericTokens, conceptIndex)
     : null;
 
-  // Category -> file set for affiliation (adaptive only).
+  // Category -> file set for affiliation (adaptive only). A concept file
+  // belongs to exactly the category that matches its recorded role
+  // (concept.fileRoles, from the indexed role data) — never to every
+  // category the concept spans.
   const categoryToFiles = new Map<string, Set<string>>();
   const useAdaptiveCoverage = !!mapping && mapping.topConcepts.length > 0;
   if (useAdaptiveCoverage && mapping) {
     for (const c of mapping.topConcepts) {
       for (const cat of c.discoveredCategories) {
         const set = categoryToFiles.get(cat) ?? new Set<string>();
-        for (const fid of c.fileIds) set.add(fid);
+        for (const fid of c.fileIds) {
+          if (c.fileRoles[fid] === cat) set.add(fid);
+        }
         categoryToFiles.set(cat, set);
       }
     }
@@ -438,6 +626,7 @@ export async function retrieveWithCoverageLoop(
     symbols: symbolsState,
     totalCharacters,
     totalTokens,
+    ...(renderedCharacters !== undefined ? { renderedCharacters } : {}),
     insufficientEvidence: windows.length === 0 && !base.packaging,
     // Packaging evidence is query-level, not window-level: it does not change
     // as the loop adds windows, so it is carried through unchanged.
@@ -479,6 +668,19 @@ export async function retrieveWithCoverageLoop(
         { ...retrievalBudget, isIterativePass: true },
         conceptIndex,
       );
+      // Absorb the focused pass's symbol rows so files newly introduced by
+      // this pass carry their exact appendix cost at merge time (appendix
+      // text is only attached when a file's exported symbols are known, and
+      // `formatRetrievedContext` renders exactly `formatApiSurfaceFor`).
+      const focusedByPath = new Map<string, NonNullable<RetrievalResult["symbols"]>>();
+      for (const sym of focused.symbols ?? []) {
+        const list = focusedByPath.get(sym.path) ?? [];
+        list.push(sym);
+        focusedByPath.set(sym.path, list);
+      }
+      for (const [path, list] of focusedByPath) {
+        if (!symbolKnowledge.has(path)) symbolKnowledge.set(path, list);
+      }
       for (const win of focused.windows) {
         let aff: string | null = null;
         if (useAdaptiveCoverage) {
@@ -510,10 +712,15 @@ export async function retrieveWithCoverageLoop(
     }
 
     const merged = mergeIterationWindows(
-      { windows, totalCharacters, totalTokens },
+      {
+        windows,
+        totalCharacters,
+        totalTokens,
+        ...(renderedCharacters !== undefined ? { renderedCharacters } : {}),
+      },
       candidates,
       limits,
-      { allowReplacement: true, protectedFiles, replacementMargin: 10 },
+      { allowReplacement: true, protectedFiles, replacementMargin: 10, appendixOf },
     );
 
     passes.push({
@@ -539,6 +746,7 @@ export async function retrieveWithCoverageLoop(
     windows = merged.windows;
     totalCharacters = merged.totalCharacters;
     totalTokens = merged.totalTokens;
+    renderedCharacters = merged.renderedCharacters;
     symbolsStale = true;
     coverage = evaluateCurrent(buildResult());
 
