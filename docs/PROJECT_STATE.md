@@ -20,22 +20,29 @@ The product's shipped capability set matches [features.md](features.md).
 Development is in **Phase 1 of the delivery programme**
 ([ROADMAP.md](ROADMAP.md)): retrieval & answer reliability for
 JavaScript/TypeScript repositories, on branch `ravi`, done as a sequence of
-audit-driven subphases (1A, 1B, 1C, …).
+audit-driven subphases (1A, 1B, 1C …). **Phases 1C and 1D are implemented,
+verified and committed locally (2026-11-06); push approved 2026-11-06.**
 
 ## 2. Verified Git state
 
-Verified 2026-11-06 via `git log --oneline`, `git branch --show-current`,
-`git status --porcelain` (re-verified after the Phase 1D work):
+Verified 2026-11-06 after the commit step, via `git log --oneline`,
+`git branch --show-current`, `git status --porcelain`:
 
 | Fact | Value |
 |---|---|
 | Branch | `ravi` |
-| HEAD | `c1ac975` — *fix(retrieval): role-scoped concept affiliation, atomic iterative merge replacement, and served-cost accounting* (Phases 1A + 1B) |
+| HEAD | `c51f018` — *feat(qa): Phase 1D Q&A reliability — retrieval loop, concept discovery, evaluation (batches B/E/C/A/D/G/F)* |
+| Commits | `7262316` fix(retrieval): align retrieval with the parser role taxonomy (Phase 1C) · `c51f018` feat(qa): Phase 1D … · `c1ac975` Phases 1A+1B (preserved, untouched) |
 | Remote | `https://github.com/ravirraj/anatomy.git` (`origin`) |
-| Unpushed commits | **1** (`c1ac975` is ahead of `origin/ravi`) |
+| Unpushed commits | At follow-up-commit time (pre-push): **4** (`7262316`, `c51f018`, the docs/eval follow-up, and pre-existing `c1ac975` are all ahead of `origin/ravi`) |
+| Working tree | Clean after the docs/eval follow-up commit: `eval-answer-baseline-fresh.txt` (raw output of the 2026-11-06 fresh answer-stage attempt, secret-scanned) and this document's follow-up edits were committed together |
 | Previous commits | `f05af36` (CLI flow/budget), `3fa177c` (cli-execution intent), `913e9d0`, `d1098bc`, `159dede`, `df85638` |
-| Working tree | 23 modified files (Phase 1C, Phase 1D lib/scripts/docs, `package.json`, `.env.example`, `AGENTS.md`) and 5 new untracked files: `docs/DECISIONS.md`, `docs/PROJECT_STATE.md`, `docs/phase-1d-qa-audit.md`, `scripts/eval-answer-quality.ts`, `eval-answer-baseline.txt` (raw answer-stage run output, UTF-16LE) |
-| Commits | **None made during Phase 1C/1D** — per-batch approvals covered implementation only; commit/push still require explicit user approval |
+
+Commit-integrity note: before partitioning, the full intended state
+(including then-untracked files) was snapshotted as a dangling stash commit
+`342458e`; `git diff 342458e HEAD` differs only in four deliberately deleted
+review-temp files, proving the committed content equals the gate-certified
+working state.
 
 ## 3. Work state
 
@@ -47,7 +54,7 @@ Verified 2026-11-06 via `git log --oneline`, `git branch --show-current`,
   listed in its message scope (`lib/ai/retrieval-loop.ts`,
   `lib/ai/coverage.ts`, `lib/ai/retrieval.ts` and their test scripts).
 
-### Implemented and verified, NOT committed (Phase 1C)
+### Implemented and verified, committed as `7262316` (Phase 1C, 2026-11-06)
 
 Audit fixes F1–F4 aligning retrieval with the parser role taxonomy
 (`lib/roles.ts`, 28 roles), plus their regression tests — 6 modified files,
@@ -75,12 +82,14 @@ uncommitted in the working tree:
 **Explicitly out of scope in 1C (recorded, not forgotten):** F5 (a planner
 `guards` category) was deferred — planner semantics outside Phase 1C scope.
 
-### Uncommitted documentation (this task)
+### Uncommitted documentation (historical note, resolved)
 
-The project-documentation files themselves (this document, ROADMAP/AGENTS/
-DECISIONS/architecture/README updates) are also uncommitted. They should be
-committed together with, or after, the Phase 1C fix — see the pending
-decisions below.
+The documentation files (PROJECT_STATE/ROADMAP/DECISIONS/architecture/README/
+AGENTS updates) were uncommitted during the 1C/1D implementation window per
+the per-batch approval rule; they now live in commit `c51f018`
+(1C-era doc state was folded into the approved "associated documentation"
+scope of the same commit — the documents at HEAD describe both 1C and 1D
+states).
 
 ### Phase 1D Q&A quality audit — completed (2026-11-04, read-only)
 
@@ -98,7 +107,7 @@ the audit itself; the only audit-time repo changes are this document and the
 audit file. Links verified via
 `node scripts/check-links.mjs` (235 links / 35 files, all resolve).
 
-### Implemented and verified, NOT committed (Phase 1D, 2026-11-05–06)
+### Implemented and verified, committed as `c51f018` (Phase 1D, 2026-11-05–06)
 
 Executed as the approved consolidated batch plan **B → E → C → A → D → G →
 F** (scope: [phase-1d-qa-audit.md](phase-1d-qa-audit.md) §14 findings V1–V10
@@ -182,6 +191,22 @@ model `gemini-3.5-flash`, fallback profile):
   fresh generation). Caveat recorded: a fresh full-16 run on the fixed
   scorer would replace the mixed-vintage numbers above; LLM variance means
   single-case re-runs are not a full baseline.
+- **Fresh full-16 attempt (2026-11-06, post-commit, `--no-cache --budget-csv`,
+  raw output `eval-answer-baseline-fresh.txt`, UTF-8):** verdict
+  **7 PASS / 0 WARN / 9 FAIL, but the 9 FAILs are provider artifacts, not
+  answer-quality verdicts.** QA-01–05 and QA-13/14 passed with fresh bodies
+  (1/1, 1/1, 2/2, 3/3, 2/2 facts; abstentions deterministic; retrieval
+  identical to the frozen golden baseline: same windows, same stop reasons
+  incl. `explicit-anchor` and `no-candidates`). From QA-06 onward every
+  generation failed with 429 `RESOURCE_EXHAUSTED` — Gemini's free tier
+  enforces **20 requests/day** on the resolved model `gemini-3.6-flash`
+  (`GenerateRequestsPerDayPerProjectPerModel-FreeTier`), and the scorer-fix
+  rechecks plus this run's per-case retries exhausted the daily budget
+  mid-run; QA-12 additionally met a plain request timeout in the same
+  congested window. Consequence: the committed first baseline
+  (`eval-answer-baseline.txt`, model vintage `gemini-3.5-flash`) remains the
+  current answer-stage reference; a genuine full-16 run needs a fresh daily
+  quota window and ~16 sequential model calls.
 
 **Verification evidence (2026-11-06, after the last relevant change):**
 
@@ -199,19 +224,24 @@ model `gemini-3.5-flash`, fallback profile):
 
 ## 4. Exact next approved task
 
-**Phase 1D implementation is complete; the repository awaits one user
-decision: commit (and optionally push) the verified Phase 1C + Phase 1D
-changes together with the documentation.** Nothing else is in progress. All
-verification gates for every batch are recorded in §3; the working tree is
-the exact state those gates certify.
+**Phase 1D implementation is complete; push is approved (2026-11-06):
+after one small docs/eval follow-up commit, push `ravi` to `origin`,
+covering `c1ac975`, `7262316`, `c51f018`, and the follow-up commit — then
+stop (Phase 2 is not started).** Nothing else is in progress. All
+verification gates for every batch are recorded in §3; the committed trees
+were verified against the gate-certified working state via the `342458e`
+snapshot diff, and commit `7262316` additionally passed all four patched
+suites plus typecheck in an isolated worktree.
 
 Optional follow-ups, **not approved and not started** (each needs its own
 approval):
 
-- A fresh full-16 run of `scripts/eval-answer-quality.ts` on the fixed
-  scorer, to replace the mixed-vintage answer-stage baseline (§3, Batch F).
-- A QA-07 single-case answer-stage retry, to replace its first-run state
-  (the FAIL there was pure provider 429 quota exhaustion).
+- A quota-free full-16 run of `scripts/eval-answer-quality.ts` on the fixed
+  scorer, after the Gemini free-tier **daily** quota resets (20 requests/day
+  on the resolved `gemini-3.6-flash`; the 2026-11-06 attempt spent the
+  budget — see §3 Batch F). A QA-07 retry is part of that run; the
+  2026-11-06 first-run QA-07 FAIL was pure quota, so no separate retry was
+  attempted while the daily cap was already tripped.
 - Retrieval-side precision work for QA-05 (18.8% WARN) and QA-08 (24.2%),
   if the user wants the frozen-baseline WARN count reduced — this would be
   a new mini-batch, not a reopening of 1D.
@@ -220,10 +250,10 @@ approval):
 
 | Item | Type | Note |
 |---|---|---|
-| Commit approval for 1C + 1D + docs | **Pending user decision** | Working tree holds verified, uncommitted work (§2, §3). |
-| Push approval for `c1ac975` (+ whatever is committed next) | Pending user decision | `origin/ravi` is 1 behind. |
+| Commit approval for 1C + 1D + docs | Resolved 2026-11-06 | `7262316` (1C), `c51f018` (1D), plus one small docs/eval follow-up commit. |
+| Push approval for `ravi` → `origin` | Approved 2026-11-06 | Push covers `c1ac975`, `7262316`, `c51f018`, and the follow-up commit; remote HEAD verified after push via `git ls-remote origin ravi`. |
 | Retrieval-side precision for QA-05 / QA-08 | Awaiting approval | QA-05 is the one frozen WARN (18.8% < 20%); QA-08 passes but is adjacent (24.2%). Not 1D scope. |
-| LLM provider quota (`429`, 5 req/min free tier) | Environmental | Limited the Batch F answer-stage run (QA-07's FAIL was pure quota; several cases needed retries). Deterministic suites and the golden retrieval eval are unaffected. |
+| LLM provider quota (Gemini free tier: 5 req/min **and 20 req/day** on the resolved flash model) | Environmental | Tripped the 2026-11-06 fresh full-16 answer-stage attempt from QA-06 onward (QA-06/07/08/09/10/11/12/15/16 FAILs are quota/timeout artifacts, not answer verdicts). Deterministic suites and the golden retrieval eval are unaffected. |
 | `authorize` → `authorization` cross-concept prefix leak | Known defect, pre-existing | [coverage-audit.md](coverage-audit.md) §6.2 — bidirectional prefix matching at length ≥ 4. Candidate for a later Phase 1 subphase. |
 | Graph islands (`packages/src/*`) unreachable by edges | Known limitation | Only reachable via concept vocabulary; see [coverage-audit.md](coverage-audit.md) §6.1. |
 | Explicit-anchor under-coverage beyond the named file | Accepted limitation (D9) | A question naming a file gets that file's scope; unestablished claims render honestly unknown. Drilling resumes when no file is named. |
