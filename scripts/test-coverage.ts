@@ -604,6 +604,74 @@ function categoryEval(
   }
 }
 
+// ---- 16. Non-adaptive role affiliation matches the parser taxonomy (Phase 1C F3) ----
+{
+  // The taxonomy's frontend roles affiliate the frontend category even when
+  // the path carries no conventional UI segment ("components", "hooks", …).
+  const { evaluation } = evaluateScenario("How does the profile card component render?", [
+    {
+      path: "src/panels/ProfileCard.tsx",
+      text: "const rate = 5; // slice without concept vocabulary",
+      reason: `file holds the "component" role, which the question's topic names`,
+    },
+    {
+      path: "src/panels/Portrait.tsx",
+      text: "const rate = 5; // slice without concept vocabulary",
+      reason: `file holds the "frontend" role, which the question's topic names`,
+    },
+  ]);
+  const frontend = categoryEval(evaluation, "profile", "frontend")
+    ?? evaluation.concepts.flatMap((c) => c.categories).find((c) => c.category === "frontend");
+  check(
+    frontend?.status === "partial" && frontend.evidence.every((e) => e.signal === "filename-or-role")
+      && frontend.evidence.some((e) => e.path === "src/panels/ProfileCard.tsx"),
+    "modern frontend roles (component) and the legacy value affiliate the frontend category",
+    `frontend wrong: ${JSON.stringify(frontend)}`,
+  );
+}
+
+{
+  // The taxonomy's routable roles affiliate the routes category for endpoint
+  // wording, including the persisted legacy "route" value.
+  const { evaluation } = evaluateScenario("Which endpoint serves the profile updates?", [
+    {
+      path: "src/handlers/profileUpdate.ts",
+      text: "const rate = 5; // slice without concept vocabulary",
+      reason: `file holds the "api-endpoint" role, which the question's topic names`,
+    },
+    {
+      path: "src/handlers/profileRouter.ts",
+      text: "const rate = 5; // slice without concept vocabulary",
+      reason: `file holds the "route" role, which the question's topic names`,
+    },
+  ]);
+  const routes = evaluation.concepts.flatMap((c) => c.categories).filter((c) => c.category === "routes");
+  check(
+    routes.length > 0 && routes.every((c) => c.status === "partial" && c.evidence.every((e) => e.signal === "filename-or-role"))
+      && routes.some((c) => c.evidence.some((e) => e.path === "src/handlers/profileUpdate.ts")),
+    "modern route roles (api-endpoint) and the legacy value affiliate the routes category",
+    `routes wrong: ${JSON.stringify(routes)}`,
+  );
+}
+
+{
+  // No CLI role exists in the taxonomy; the legacy value still affiliates and
+  // path segments remain the real affiliation for CLI categories.
+  const { evaluation } = evaluateScenario("How does the CLI dispatch subcommands?", [
+    {
+      path: "src/ops/dispatcher.ts",
+      text: "const rate = 5; // slice without concept vocabulary",
+      reason: `file holds the "cli" role, which the question's topic names`,
+    },
+  ]);
+  const cli = evaluation.concepts.flatMap((c) => c.categories).find((c) => c.category === "cli");
+  check(
+    cli?.status === "partial" && cli.evidence[0]?.signal === "filename-or-role",
+    "the persisted legacy cli role keeps affiliating the cli category",
+    `cli wrong: ${JSON.stringify(cli)}`,
+  );
+}
+
 // Summary
 console.log("");
 for (const line of results) console.log(line);

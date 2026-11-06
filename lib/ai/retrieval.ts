@@ -528,15 +528,42 @@ const GLOSSARY: Record<string, string[]> = {
   workspaces: ["workspace", "pnpm", "packages", "monorepo"],
 };
 
+// Role seeding hints: a query word that names an architecture concept maps to
+// the pipe's recorded role for it. Every role listed here is one the parser
+// can actually produce (lib/roles.ts) or a persisted legacy value legacy
+// stored analyses may still carry (see FRONTEND_ROLES). One entry per role:
+// the same file must never be pushed twice for the same hint words. Words are
+// kept conservative — only words that name the architecture concept itself,
+// so unrelated files cannot be seeded by accident.
 const ROLE_HINTS: { words: string[]; role: string }[] = [
   { words: ["model", "schema", "database", "db", "query"], role: "model" },
   { words: ["route", "router", "endpoint", "api"], role: "router" },
+  { words: ["page", "route"], role: "page-route" },
+  { words: ["endpoint", "api"], role: "api-endpoint" },
+  { words: ["action"], role: "server-action" },
   { words: ["middleware"], role: "middleware" },
   { words: ["controller", "handler"], role: "controller" },
+  { words: ["resolver"], role: "resolver" },
+  { words: ["gateway"], role: "gateway" },
+  { words: ["guard", "authorization"], role: "guard" },
+  { words: ["interceptor"], role: "interceptor" },
   { words: ["service"], role: "service" },
+  { words: ["module"], role: "module" },
+  { words: ["entity"], role: "entity" },
+  { words: ["dto"], role: "dto" },
+  { words: ["repository"], role: "repository" },
+  { words: ["component", "widget"], role: "component" },
+  // The client-side state words ("store", "state") name the hook layer in the
+  // taxonomy — the taxonomy has no "store" role.
+  { words: ["hook", "state", "store"], role: "hook" },
+  { words: ["layout"], role: "layout" },
   { words: ["config", "configuration", "env"], role: "config" },
-  { words: ["store", "state"], role: "store" },
 ];
+
+// Roles whose carriers behave like frontend files for the CLI-execution decay:
+// rule-based UI and presentation code, plus the persisted legacy value for
+// analyses stored under an older taxonomy ("frontend" is no longer producible).
+const FRONTEND_ROLES = new Set(["component", "hook", "layout", "route-ui", "frontend"]);
 
 /**
  * Splits an identifier into case/separator subtokens:
@@ -971,7 +998,7 @@ export async function retrieveGroundedContext(
           const isCli = pLower.includes("/cli/") || pLower.startsWith("cli/") || file.role === "cli" || pLower.includes("/bin/") || pLower.startsWith("bin/") || pLower.includes("/commands/") || pLower.includes("/cmd/");
           if (isCli) {
             bestScore += 20;
-          } else if (pLower.includes("/components/") || pLower.includes("/ui/") || pLower.includes("/docs/") || pLower.includes("/examples/") || file.role === "frontend") {
+          } else if (pLower.includes("/components/") || pLower.includes("/ui/") || pLower.includes("/docs/") || pLower.includes("/examples/") || (file.role !== null && FRONTEND_ROLES.has(file.role))) {
             bestScore = 0;
           } else {
             bestScore = Math.min(bestScore, 40);
@@ -1167,7 +1194,7 @@ export async function retrieveGroundedContext(
       const isCli = pathLower.includes("/cli/") || pathLower.startsWith("cli/") || file.role === "cli" || pathLower.includes("/bin/") || pathLower.startsWith("bin/") || pathLower.includes("/commands/") || pathLower.includes("/cmd/");
       if (isCli) {
         bestScore += 25;
-      } else if (pathLower.includes("/components/") || pathLower.includes("/ui/") || pathLower.includes("/docs/") || pathLower.includes("/examples/") || file.role === "frontend") {
+      } else if (pathLower.includes("/components/") || pathLower.includes("/ui/") || pathLower.includes("/docs/") || pathLower.includes("/examples/") || (file.role !== null && FRONTEND_ROLES.has(file.role))) {
         bestScore = 0;
       } else {
         bestScore = Math.min(bestScore, 40);
@@ -1260,7 +1287,13 @@ export async function retrieveGroundedContext(
         score = 30;
         strategy = "entry";
         reason = "primary application entry point / core module";
-      } else if (file.role === "route" || file.role === "entry") {
+      // Modern taxonomy roles name the repository's routable surfaces; they
+      // seed like entry points for broad queries. "route"/"entry" stay for
+      // analyses stored under an older taxonomy.
+      } else if (
+        file.role === "router" || file.role === "page-route" || file.role === "api-endpoint" ||
+        file.role === "route" || file.role === "entry"
+      ) {
         score = 28;
         strategy = "entry";
         reason = `core role "${file.role}"`;

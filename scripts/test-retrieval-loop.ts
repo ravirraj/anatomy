@@ -578,16 +578,35 @@ console.log("");
 console.log("=== 2. windowAffiliation mirrors coverage semantics ===");
 {
   // The focused-vocabulary table must stay aligned with the planner's
-  // category set: every planner category maps to focused query words.
+  // category set: every planner category maps to focused query words. It also
+  // carries curated words for adaptive coverage categories that are taxonomy
+  // role ids (Phase 1C F4); unknown role ids keep the raw-name fallback.
   const categories = new Set([
     ...Object.values(CATEGORY_QUERY_WORDS),
   ]);
   check(
-    Object.keys(CATEGORY_QUERY_WORDS).sort().join(",") === "config,controllers,frontend,middleware,models,routes,services"
+    Object.keys(CATEGORY_QUERY_WORDS).sort().join(",") ===
+      "api-endpoint,component,config,controller,controllers,dto,entity,frontend,gateway,guard,hook,interceptor,middleware,model,models,page-route,repository,resolver,routes,server-action,service,services"
       && CATEGORY_QUERY_WORDS.routes === "route router endpoint"
-      && categories.size === 7,
-    "focused query words exist for every planner category",
+      && categories.size === 19,
+    "focused query words exist for every planner category and taxonomy role",
     `category words: ${JSON.stringify(CATEGORY_QUERY_WORDS)}`,
+  );
+  check(
+    CATEGORY_QUERY_WORDS["page-route"] === "page route"
+      && CATEGORY_QUERY_WORDS["api-endpoint"] === "api endpoint route"
+      && CATEGORY_QUERY_WORDS["server-action"] === "server action"
+      && CATEGORY_QUERY_WORDS.repository === "repository persistence"
+      && CATEGORY_QUERY_WORDS["dto"] === "data transfer object"
+      && CATEGORY_QUERY_WORDS.component === "component ui"
+      && CATEGORY_QUERY_WORDS.hook === "hook state",
+    "taxonomy-role categories have curated focused-query vocabulary",
+    `role words: ${{ "page-route": CATEGORY_QUERY_WORDS["page-route"], "api-endpoint": CATEGORY_QUERY_WORDS["api-endpoint"], "server-action": CATEGORY_QUERY_WORDS["server-action"], repository: CATEGORY_QUERY_WORDS.repository, dto: CATEGORY_QUERY_WORDS["dto"], component: CATEGORY_QUERY_WORDS.component, hook: CATEGORY_QUERY_WORDS.hook }}`,
+  );
+  check(
+    CATEGORY_QUERY_WORDS["theme-override"] === undefined,
+    "unknown role ids keep the raw-name fallback (absent from the table)",
+    `unexpected entry: ${CATEGORY_QUERY_WORDS["theme-override"]}`,
   );
 }
 

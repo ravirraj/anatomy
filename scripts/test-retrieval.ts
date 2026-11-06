@@ -1156,7 +1156,294 @@ const CRS = ["src/quarantine/excludedFlow.js", "src/quarantine/legacyProbe.js", 
   }
 }
 
-// Concept-expansion unit checks: plain vocabulary, no repo knowledge.
+// --- Section 6: Role taxonomy consistency (Phase 1C F1/F2) ---------------
+console.log("");
+console.log("=== 6. Role taxonomy hints: seeding, entry routing, CLI decay ===");
+
+// A pristine single-analysis database per scenario, mirroring the section 3
+// mock: enough tables for a complete retrieveGroundedContext pass.
+type RoleSpec = {
+  id: string;
+  path: string;
+  role?: string;
+  symbols?: [name: string, line: number, exported?: boolean][];
+};
+
+class RoleFixtureDb {
+  files: {
+    id: string;
+    path: string;
+    hash: string;
+    lines: number;
+    content_status: string;
+    analysis_id: string;
+    file_roles: { role: string; source: string }[];
+  }[];
+  symbols: { file_id: string; name: string; kind: string; line: number; exported: boolean }[];
+  routes: { file_id: string; method: string; path: string; line: number }[] = [];
+  edges: { source_file_id: string; target_file_id: string; kind: string }[] = [];
+  fileTexts = new Map<string, string>();
+
+  constructor(specs: RoleSpec[]) {
+    this.files = specs.map((f) => {
+      const text = Array.from({ length: 70 }, (_, i) => `// line ${i + 1} of ${f.path}\n`).join("");
+      const hash = createHash("sha256").update(text).digest("hex");
+      this.fileTexts.set(f.id, text);
+      return {
+        id: f.id,
+        path: f.path,
+        hash,
+        lines: 70,
+        content_status: "stored",
+        analysis_id: "role_analysis",
+        file_roles: f.role ? [{ role: f.role, source: "convention" }] : [],
+      };
+    });
+    this.symbols = specs.flatMap((f) =>
+      (f.symbols ?? []).map(([name, line, exported]) => ({
+        file_id: f.id,
+        name,
+        kind: name[0] === name[0]!.toUpperCase() ? "class" : "function",
+        line,
+        exported: exported ?? false,
+      })),
+    );
+  }
+
+  from(table: string) {
+    if (table === "files") {
+      return {
+        select: () => ({
+          eq: (_f: string, val: string) => ({
+            is: () => Promise.resolve({ data: this.files.filter((f) => f.analysis_id === val), error: null }),
+            maybeSingle: async () => {
+              const file = this.files.find((f) => f.id === val);
+              if (!file) return { data: null, error: null };
+              return {
+                data: {
+                  ...file,
+                  organization_id: "org_test",
+                  analysis: { commit_sha: "sha1", project: { repo_owner: "o", repo_name: "r" } },
+                },
+                error: null,
+              };
+            },
+          }),
+        }),
+      };
+    }
+    if (table === "symbols") {
+      return {
+        select: () => ({
+          eq: () => Promise.resolve({ data: this.symbols, error: null }),
+        }),
+      };
+    }
+    if (table === "routes") {
+      return {
+        select: () => ({
+          eq: () => Promise.resolve({ data: this.routes, error: null }),
+        }),
+      };
+    }
+    if (table === "edges") {
+      return {
+        select: () => ({
+          eq: () => ({
+            or: (orFilter: string) => {
+              const seedIds = new Set<string>();
+              for (const m of orFilter.matchAll(/in\.\(([^)]*)\)/g)) {
+                for (const id of (m[1] ?? "").split(",")) {
+                  if (id.trim()) seedIds.add(id.trim());
+                }
+              }
+              const filtered = this.edges.filter(
+                (edge) => seedIds.has(edge.source_file_id) || seedIds.has(edge.target_file_id),
+              );
+              return Promise.resolve({ data: filtered, error: null });
+            },
+          }),
+        }),
+      };
+    }
+    if (table === "file_contents") {
+      return {
+        select: () => ({
+          eq: () => ({
+            eq: (_f2: string, hash: string) => ({
+              maybeSingle: async () => {
+                const f = this.files.find((file) => file.hash === hash);
+                if (!f) return { data: null, error: null };
+                const text = this.fileTexts.get(f.id) ?? "";
+                const hex = Buffer.from(text, "utf8").toString("hex");
+                return {
+                  data: {
+                    payload: `\\x${hex}`,
+                    size: Buffer.byteLength(text, "utf8"),
+                  },
+                  error: null,
+                };
+              },
+            }),
+          }),
+        }),
+      };
+    }
+    if (table === "manifests" || table === "dependencies" || table === "config_references" || table === "entry_points") {
+      return {
+        select: () => ({
+          eq: () => Promise.resolve({ data: [], error: null }),
+        }),
+      };
+    }
+    throw new Error(`Unexpected table ${table}`);
+  }
+}
+
+async function roleAsk(db: RoleFixtureDb, question: string) {
+  return retrieveGroundedContext(db as unknown as Db, "role_analysis", question);
+}
+
+// F1: a repository-role file is role-seeded even though nothing in its path
+// or symbol names echoes the question's wording. The anchor file carries the
+// query's concept on its path so role seeding has a direct seed to ride on.
+const repoDb = new RoleFixtureDb([
+  { id: "repo_anchor", path: "src/users/userService.ts", role: "service", symbols: [["saveUser", 6, true]] },
+  { id: "repo_target", path: "src/access/keeper.ts", role: "repository", symbols: [["AccountKeeper", 8, true]] },
+]);
+const repoAsk = await roleAsk(repoDb, "Where does the user repository persist data?");
+{
+  const win = repoAsk.windows.find((w) => w.path === "src/access/keeper.ts");
+  if (win && win.reason.includes(`holds the "repository" role`) && repoAsk.files.some((f) => f.path === "src/access/keeper.ts")) {
+    pass("repository-role file is found via role seeding with the recorded reason");
+  } else {
+    fail(`repository role seeding failed: ${JSON.stringify(repoAsk.windows.map((w) => ({ path: w.path, reason: w.reason })))}`);
+  }
+  if (win && win.score === 55) {
+    pass("role seeding keeps the existing score (55), no inflation");
+  } else if (win) {
+    fail(`role seed score changed: ${win.score}`);
+  }
+}
+
+// F1: an api-endpoint-role file is role-seeded for endpoint/api wording. Both
+// hint words match the same single hint, so the file must appear exactly once
+// at the role score — multiple matching words must not duplicate or stack.
+const apiDb = new RoleFixtureDb([
+  { id: "api_anchor", path: "src/api/shipping.ts", role: "controller", symbols: [["shipParcel", 6, true]] },
+  { id: "api_target", path: "src/transport/lorry.ts", role: "api-endpoint", symbols: [["LorryService", 8, true]] },
+]);
+const apiAsk = await roleAsk(apiDb, "Which api endpoint ships a parcel?");
+{
+  const roleWins = apiAsk.windows.filter(
+    (w) => w.path === "src/transport/lorry.ts" && w.reason.includes(`holds the "api-endpoint" role`),
+  );
+  if (roleWins.length === 1 && roleWins[0]!.score === 55) {
+    pass("api-endpoint file seeds exactly once at score 55 across both hint words");
+  } else {
+    fail(`api-endpoint seeding wrong: ${JSON.stringify(apiAsk.windows.filter((w) => w.path === "src/transport/lorry.ts"))}`);
+  }
+}
+
+// F1: the hook role carries the state-layer wording ("state"/"store") that the
+// dead "store" hint used to claim; a persisted legacy "store" role must NOT be
+// seeded by any hint (it is not producible and the dead hint was removed).
+const hookDb = new RoleFixtureDb([
+  { id: "hook_anchor", path: "src/session/state.ts" },
+  { id: "hook_target", path: "src/session/providers.ts", role: "hook", symbols: [["hydrateProviders", 8, true]] },
+  { id: "legacy_store", path: "src/legacy/bin.ts", role: "store" },
+]);
+const hookAsk = await roleAsk(hookDb, "How does the live state work?");
+{
+  const win = hookAsk.windows.find((w) => w.path === "src/session/providers.ts");
+  if (win && win.reason.includes(`holds the "hook" role`)) {
+    pass("hook role seeds for state-layer wording");
+  } else {
+    fail(`hook role seeding failed: ${JSON.stringify(hookAsk.windows.map((w) => ({ path: w.path, reason: w.reason })))}`);
+  }
+  const storeWin = hookAsk.windows.find((w) => w.reason.includes(`holds the "store" role`));
+  if (!storeWin && !hookAsk.windows.some((w) => w.path === "src/legacy/bin.ts")) {
+    pass("the dead \"store\" hint is removed: no legacy store-role seed");
+  } else {
+    fail(`dead store hint fired: ${storeWin ? storeWin.reason : "window present"}`);
+  }
+}
+
+// F1: the component role seeds for component wording.
+const compDb = new RoleFixtureDb([
+  { id: "comp_anchor", path: "src/widgets/meters.tsx" },
+  { id: "comp_target", path: "src/widgets/gauge.tsx", role: "component", symbols: [["GaugeView", 8, true]] },
+]);
+const compAsk = await roleAsk(compDb, "Which component draws the meter?");
+{
+  const win = compAsk.windows.find((w) => w.path === "src/widgets/gauge.tsx");
+  if (win && win.reason.includes(`holds the "component" role`)) {
+    pass("component role seeds for component wording");
+  } else {
+    fail(`component role seeding failed: ${JSON.stringify(compAsk.windows.map((w) => ({ path: w.path, reason: w.reason })))}`);
+  }
+}
+
+// F2: broad/onboarding queries seed the taxonomy's routable surfaces as entry
+// points. Each file's path and filename deliberately avoid the entry-point
+// patterns and the depth cutoff so the role branch is the only route in.
+const entryDb = new RoleFixtureDb([
+  { id: "entry_modern", path: "app/dashboard/Overview.tsx", role: "page-route" },
+  { id: "entry_router", path: "routes/v1/Routes.js", role: "router" },
+  { id: "entry_legacy", path: "routes/legacy/Legacy.js", role: "route" },
+]);
+const entryAsk = await roleAsk(entryDb, "Give me a repository walkthrough");
+{
+  const modern = entryAsk.windows.find((w) => w.path === "app/dashboard/Overview.tsx");
+  if (modern && modern.reason.includes(`core role "page-route"`) && modern.score === 28) {
+    pass("page-route file enters via the broad-query role seed (modern taxonomy)");
+  } else {
+    fail(`page-route entry seeding failed: ${JSON.stringify(entryAsk.windows.map((w) => ({ path: w.path, reason: w.reason })))}`);
+  }
+  const router = entryAsk.windows.find((w) => w.path === "routes/v1/Routes.js");
+  if (router && router.reason.includes(`core role "router"`)) {
+    pass("router file enters via the broad-query role seed");
+  } else {
+    fail("router entry seeding failed");
+  }
+  // Legacy compatibility: "route" kept for stored analyses under the old
+  // taxonomy (and "entry" the same way — exercised by the role name below).
+  const legacy = entryAsk.windows.find((w) => w.path === "routes/legacy/Legacy.js");
+  if (legacy && legacy.reason.includes(`core role "route"`)) {
+    pass("legacy route role still enters (backward compatibility)");
+  } else {
+    fail("legacy route role entry seeding failed");
+  }
+}
+
+// F2: for CLI-execution intent, hook/component/layout files are demoted like
+// frontend UI even when they live outside conventional UI directories; the
+// persisted legacy "frontend" role keeps the same behavior it always had.
+const cliDb = new RoleFixtureDb([
+  { id: "cli_hook", path: "src/features/useSubcommandBus.ts", role: "hook", symbols: [["useSubcommandDispatch", 4, true]] },
+  { id: "cli_component", path: "src/features/SubcommandPanel.tsx", role: "component", symbols: [["SubcommandPanel", 4, true]] },
+  { id: "cli_legacy_fe", path: "src/legacy/FrontendThing.ts", role: "frontend", symbols: [["FrontendSubcommand", 4, true]] },
+  { id: "cli_real", path: "src/cli/dispatchCli.ts", role: "cli", symbols: [["dispatchSubcommand", 4, true]] },
+]);
+const cliAsk = await roleAsk(cliDb, "How does the CLI dispatch subcommands?");
+{
+  const demoted = !cliAsk.windows.some((w) => w.path === "src/features/useSubcommandBus.ts")
+    && !cliAsk.windows.some((w) => w.path === "src/features/SubcommandPanel.tsx")
+    && !cliAsk.windows.some((w) => w.path === "src/legacy/FrontendThing.ts");
+  if (demoted) {
+    pass("hook and component (and legacy-frontend) files decay for CLI-execution intent outside conventional UI dirs");
+  } else {
+    fail(`CLI decay failed: ${JSON.stringify(cliAsk.windows.map((w) => w.path))}`);
+  }
+  const real = cliAsk.windows.find((w) => w.path === "src/cli/dispatchCli.ts");
+  if (real && real.score > 50) {
+    pass("the real CLI file stays strongly seeded for CLI-execution intent");
+  } else {
+    fail(`CLI positive control failed: ${JSON.stringify(cliAsk.windows.find((w) => w.path === "src/cli/dispatchCli.ts"))}`);
+  }
+}
+
+// --- Concept-expansion unit checks: plain vocabulary, no repo knowledge. ---
 {
   const t = tokenVariants("authentication");
   const auth = t.map((v) => v.text);

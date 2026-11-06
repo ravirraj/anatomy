@@ -89,13 +89,18 @@ export const CATEGORY_AFFILIATION: Record<string, { segments: string[]; roles: s
   models: { segments: ["models", "model"], roles: ["model"] },
   services: { segments: ["services", "service"], roles: ["service"] },
   config: { segments: ["config", "configs", "configuration", "settings", "env"], roles: ["config"] },
-  routes: { segments: ["routes", "routers", "route"], roles: ["router", "route"] },
+  // Role lists hold roles the parser produces (lib/roles.ts) plus the values
+  // legacy stored analyses may still carry ("route", "frontend", "cli") —
+  // kept for older analyses, never produced by the current parser.
+  routes: { segments: ["routes", "routers", "route"], roles: ["router", "page-route", "api-endpoint", "route"] },
   frontend: {
     segments: ["frontend", "components", "pages", "hooks", "store", "views", "screens", "ui", "client"],
-    roles: ["frontend"],
+    roles: ["component", "hook", "layout", "route-ui", "frontend"],
   },
   cli: {
     segments: ["cli", "bin", "commands", "cmd"],
+    // No CLI role exists in the taxonomy; this list carries only the legacy
+    // value, and path segments do the real work.
     roles: ["cli"],
   },
 };

@@ -75,15 +75,34 @@ const DEFAULT_LOOP: Required<Pick<RetrievalLoopBudget, "maxPasses" | "scoreFloor
   scoreFloor: 50,
 };
 
-/** Category vocabulary that drives the focused retrieval queries. */
+/** Category vocabulary that drives the focused retrieval queries. Planner
+ * categories (plural) and adaptive coverage categories (raw role ids from the
+ * concept index) both land here. Role ids without an entry still fall back to
+ * the raw category name, so unknown future roles keep working. */
 export const CATEGORY_QUERY_WORDS: Record<string, string> = {
   controllers: "controller handler",
+  controller: "controller handler",
   middleware: "middleware",
   models: "model schema",
+  model: "model schema",
   services: "service",
+  service: "service",
   config: "config environment",
   routes: "route router endpoint",
   frontend: "frontend component client",
+  // Adaptive coverage categories that are taxonomy role ids.
+  "page-route": "page route",
+  "api-endpoint": "api endpoint route",
+  "server-action": "server action",
+  repository: "repository persistence",
+  entity: "entity",
+  dto: "data transfer object",
+  resolver: "resolver",
+  gateway: "gateway",
+  guard: "guard",
+  interceptor: "interceptor",
+  component: "component ui",
+  hook: "hook state",
 };
 
 export type IterationPass = {
