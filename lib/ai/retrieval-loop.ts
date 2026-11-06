@@ -127,7 +127,11 @@ export type IterativeRetrievalResult = {
     | "sufficient-coverage"
     | "no-candidates"
     | "max-passes"
-    | "budget-exhausted";
+    | "budget-exhausted"
+    /** An explicitly-named file anchors the question; leftover self-named
+     * (out-of-vocabulary) concepts are left honestly unknown instead of
+     * drilling broad path noise (Phase 1D, V10). */
+    | "explicit-anchor";
   totalMs: number;
 };
 
@@ -139,7 +143,11 @@ function missingCategories(coverage: CoverageEvaluation): MissingPair[] {
   const missing: MissingPair[] = [];
   for (const concept of coverage.concepts) {
     for (const category of concept.categories) {
-      if (category.status !== "found") {
+      // Phase 1D (V7b): the literal "unclassified" label is informational
+      // only — drilling the word would query the junk label, not the code.
+      // (Coverage renames role-less concepts under their own display name,
+      // so this only ever fires on legacy data; kept defensive.)
+      if (category.status !== "found" && category.category !== "unclassified") {
         missing.push({ token: concept.token, category: category.category, status: category.status });
       }
     }
@@ -153,6 +161,11 @@ function missingCategories(coverage: CoverageEvaluation): MissingPair[] {
 }
 
 function focusedQuery(pair: MissingPair): string {
+  // Phase 1D (V1/V7b): self-named drills run the concept's own vocabulary
+  // alone — the token IS the concept's query, and appending the category
+  // name (the token again) or the junk "unclassified" literal would only
+  // dilute or corrupt the focused search.
+  if (pair.category === pair.token) return pair.token;
   const words = CATEGORY_QUERY_WORDS[pair.category] ?? (pair.category === "cli" ? "cli command subcommand" : pair.category);
   return `${pair.token} ${words}`;
 }
@@ -591,10 +604,19 @@ export async function retrieveWithCoverageLoop(
   const useAdaptiveCoverage = !!mapping && mapping.topConcepts.length > 0;
   if (useAdaptiveCoverage && mapping) {
     for (const c of mapping.topConcepts) {
-      for (const cat of c.discoveredCategories) {
+      // Phase 1D (V7b): a concept whose files all lack indexed roles is
+      // drilled under its own display name (coverage renamed the junk
+      // "unclassified" layer), affiliating focused windows by its own
+      // fileIds.
+      const noRoles = c.discoveredCategories.length === 0;
+      for (const cat of noRoles ? [c.displayName] : c.discoveredCategories) {
         const set = categoryToFiles.get(cat) ?? new Set<string>();
-        for (const fid of c.fileIds) {
-          if (c.fileRoles[fid] === cat) set.add(fid);
+        if (noRoles) {
+          for (const fid of c.fileIds) set.add(fid);
+        } else {
+          for (const fid of c.fileIds) {
+            if (c.fileRoles[fid] === cat) set.add(fid);
+          }
         }
         categoryToFiles.set(cat, set);
       }
@@ -656,6 +678,21 @@ export async function retrieveWithCoverageLoop(
   const passes: IterationPass[] = [];
   let stoppedBecause: IterativeRetrievalResult["stoppedBecause"] = "max-passes";
 
+  // Phase 1D (V10): when pass 0 already served a file the question names
+  // outright ("file explicitly named in query"), the question's target is
+  // explicit and the named file is the scope. Leftover missing categories —
+  // self-named oov concepts (structural tokens the planner extracted from
+  // the named path itself, e.g. "package" from package.json) as much as
+  // planner/adaptive category pairs — must not be punched into the
+  // repository: their focused queries match broad path or glossary noise
+  // rather than anything scoped to the question, and the honest outcome —
+  // the named file, plus unknown for every coverage claim the package
+  // cannot establish — is already on the table. Drill widening resumes for
+  // questions that do not name a file.
+  const explicitAnchor = base.windows.some((w) =>
+    w.reason.startsWith("file explicitly named in query"),
+  );
+
   if (missingCategories(coverage).length === 0) {
     return {
       result: buildResult(),
@@ -668,6 +705,13 @@ export async function retrieveWithCoverageLoop(
 
   for (let pass = 1; pass <= config.maxPasses; pass += 1) {
     const missing = missingCategories(coverage);
+    // (V10) An explicit anchor holds the question and its named file: no
+    // speculative drills of any kind. Coverage keeps reporting every
+    // unestablished claim as unknown; nothing new goes into the package.
+    if (explicitAnchor) {
+      stoppedBecause = missing.length > 0 ? "explicit-anchor" : "sufficient-coverage";
+      break;
+    }
     if (missing.length === 0) {
       stoppedBecause = "sufficient-coverage";
       break;
@@ -701,13 +745,26 @@ export async function retrieveWithCoverageLoop(
         if (!symbolKnowledge.has(path)) symbolKnowledge.set(path, list);
       }
       for (const win of focused.windows) {
+        // Per-pair acceptance (Phase 1D: V1/V7b self-named drills). A window
+        // is a candidate when it affiliates with one of the missing pairs'
+        // categories. A self-named pair (category === token — the concept's
+        // own name after the V1/V7b renames; never "unclassified") instead
+        // accepts every focused window: the drill already ran the concept's
+        // own vocabulary, so whatever focused retrieval returned is
+        // candidate evidence for it, and coverage — not this gate — decides
+        // what the merged evidence actually proves.
         let aff: string | null = null;
-        if (useAdaptiveCoverage) {
-          for (const cat of wanted) {
-            if (affiliate(win, cat)) { aff = cat; break; }
+        for (const pair of pairs) {
+          if (pair.category === pair.token) {
+            aff = pair.category;
+            break;
           }
-        } else {
-          aff = windowAffiliation(win);
+          if (useAdaptiveCoverage) {
+            if (affiliate(win, pair.category)) { aff = pair.category; break; }
+          } else if (windowAffiliation(win) === pair.category) {
+            aff = pair.category;
+            break;
+          }
         }
         if (aff !== null && wanted.has(aff)) {
           if (!candidates.some((c) => c.fileId === win.fileId && c.startLine === win.startLine && c.endLine === win.endLine)) {

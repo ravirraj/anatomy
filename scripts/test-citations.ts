@@ -686,6 +686,98 @@ if (req === 'core/useAccentColor.tsx' || req === 'core/useAccentColor.ts') {
 }
 
 console.log("");
+console.log("=== multi-window union coverage (Phase 1D, V5) ===");
+{
+  // Two served windows on the same file. With maxWindowsPerFile=2 this is the
+  // ordinary production shape; the model may legitimately cite a range that
+  // spans both windows as long as no retrieved line is missing in between.
+  const evidenceMap = new Map<string, FileEvidence>([
+    [
+      "lib/seam.ts",
+      {
+        lines: 100,
+        contentHash: "hash-seam",
+        windows: [
+          { startLine: 10, endLine: 25 },
+          { startLine: 26, endLine: 40 },
+        ],
+      },
+    ],
+    [
+      "lib/gap.ts",
+      {
+        lines: 100,
+        contentHash: "hash-gap",
+        windows: [
+          { startLine: 10, endLine: 25 },
+          { startLine: 27, endLine: 40 },
+        ],
+      },
+    ],
+    [
+      "lib/three.ts",
+      {
+        lines: 120,
+        contentHash: "hash-three",
+        windows: [
+          { startLine: 1, endLine: 20 },
+          { startLine: 15, endLine: 30 },
+          { startLine: 31, endLine: 45 },
+        ],
+      },
+    ],
+    ["lib/one.ts", { lines: 100, contentHash: "hash-one", windows: [{ startLine: 10, endLine: 30 }] }],
+  ]);
+  const options = { allAnalysisFiles: new Set(["lib/seam.ts", "lib/gap.ts", "lib/three.ts", "lib/one.ts"]) };
+
+  // 1. Adjacent windows: the union is continuous, so a citation across the
+  //    seam covers only served lines and must be accepted.
+  const seam = verifyCitations("See `lib/seam.ts#L12-L38`.", evidenceMap, options);
+  if (seam.paths.length === 0) pass("citation spanning two adjacent windows is accepted");
+  else fail(`citation spanning adjacent windows rejected: ${JSON.stringify(seam)}`);
+
+  // 2. A real gap between windows: line 26 was never served. The citation
+  //    claims it, so it must fail closed — unchanged behavior — and the
+  //    failure detail must name the unretrieved gap lines.
+  const gap = verifyCitations("See `lib/gap.ts#L12-L38`.", evidenceMap, options);
+  if (gap.paths.length === 1) {
+    const detail = (gap.details ?? []).join(" ");
+    if (detail.includes("26")) pass("gap-spanning citation is rejected and names the uncovered gap line 26");
+    else fail(`gap-spanning rejection does not name the gap: ${JSON.stringify(gap)}`);
+  } else {
+    fail(`gap-spanning citation was not rejected: ${JSON.stringify(gap)}`);
+  }
+
+  // 3. Overlapping windows collapse into one interval; a citation inside the
+  //    overlap behaves exactly as before.
+  const overlap = verifyCitations("See `lib/three.ts#L18-L44`.", evidenceMap, options);
+  if (overlap.paths.length === 0) pass("citation inside merged overlapping windows is accepted");
+  else fail(`citation inside overlapping windows rejected: ${JSON.stringify(overlap)}`);
+
+  // 4. A range genuinely outside every window is still rejected (regression
+  //    of the strict baseline).
+  const outside = verifyCitations("See `lib/one.ts#L31-L99`.", evidenceMap, options);
+  if (outside.paths.length === 1) pass("citation fully outside the windows remains rejected");
+  else fail(`citation outside windows was accepted: ${JSON.stringify(outside)}`);
+
+  // 5. Subset of a single window stays accepted (regression).
+  const subset = verifyCitations("See `lib/one.ts#L15-L25`.", evidenceMap, options);
+  if (subset.paths.length === 0) pass("citation fully inside a single window remains accepted");
+  else fail(`citation inside single window rejected: ${JSON.stringify(subset)}`);
+
+  // 6. End line exactly at the seam-adjacent boundary edge: citing
+  //    [10..40] across adjacent windows ends on served line 40 — accepted.
+  const fullSpan = verifyCitations("See `lib/seam.ts#L10-L40`.", evidenceMap, options);
+  if (fullSpan.paths.length === 0) pass("citation spanning the entire adjacent pair is accepted");
+  else fail(`citation spanning full adjacent pair rejected: ${JSON.stringify(fullSpan)}`);
+
+  // 7. The gap file rejects the same full span because line 26 is missing.
+  const gapFull = verifyCitations("See `lib/gap.ts#L10-L40`.", evidenceMap, options);
+  if (gapFull.paths.length === 1) pass("full span over a real gap remains rejected");
+  else fail(`full span over gap was accepted: ${JSON.stringify(gapFull)}`);
+}
+
+console.log("");
 for (const line of results) console.log(line);
 const failed = results.filter((r) => r.startsWith("FAIL")).length;
 console.log(failed === 0 ? "\nEvery check passed." : `\n${failed} check(s) failed.`);

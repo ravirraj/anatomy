@@ -476,6 +476,16 @@ const COMMON_INFLECTIONS = new Set([
   "d", "s", "r", "e", "ed", "es", "er", "ing", "ly", "al", "en", "or",
 ]);
 
+/**
+ * Tails accepted when one word ends where the other continues
+ * (sameFamily's one-sided branch). Deliberately stricter than
+ * COMMON_INFLECTIONS: a loose 2-char tail ("or" of word-author, "er" of
+ * scheduler) is a different word, not an inflection of the consumed stem,
+ * so "auth"~"author" must never family-match. Plurals, past tense,
+ * gerunds and their stem-round forms are the whole set.
+ */
+const ONE_SIDED_INFLECTIONS = new Set(["s", "d", "es", "ed", "ing", "ies", "ied"]);
+
 // Glossary values are alternative names for the same concept, read
 // symmetrically at lookup time. Kept deliberately small and generic —
 // it is vocabulary the *concept space* provides, not repository knowledge.
@@ -663,10 +673,13 @@ export function sameFamily(a: string, b: string): boolean {
     return tailFamily(ra) && tailFamily(rb);
   }
   // One word ends where the other continues: the extension must be a true
-  // inflection or derivation of the consumed word, never a loose 2-char
-  // tail of an already-consumed stem ("auth" extended with "or"/"orize").
+  // inflection of the consumed word — never a loose 1–3 char tail that
+  // merely shares letters ("auth" extended by the word-author "or", or by
+  // a loose agentive "r"/"er", is a different word). Agentive extensions
+  // ("scheduler" of "schedule") drop out by design; exact and stem
+  // variants still cover those lookups.
   const rest = ra.length > 0 ? ra : rb;
-  return rest === "s" || rest === "d" || COMMON_INFLECTIONS.has(rest);
+  return ONE_SIDED_INFLECTIONS.has(rest);
 }
 
 const ENTRY_POINT_PATTERNS = [

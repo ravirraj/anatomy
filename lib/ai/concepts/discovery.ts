@@ -14,6 +14,9 @@
  * Algorithm summary:
  *   1. Collect all identifier tokens from symbols, routes, file paths.
  *   2. Score each token by its frequency and breadth of signal sources.
+ *      Tokens spread over more than MAX_TERM_FILE_FRACTION of the files are
+ *      glue and dropped before clustering (small repos below
+ *      GLUE_TERM_MIN_FILES exempt).
  *   3. Cluster tokens that co-occur in the same files (union-find style).
  *   4. Name each cluster after its highest-scoring term.
  *   5. Prune clusters with insufficient evidence.
@@ -212,10 +215,12 @@ function routeTokens(route: DiscoveryRoute, filePath: string): TokenSource[] {
  * co-occurrence approach:
  *
  * 1. Build a map: term → {fileIds, sources[]}
- * 2. For each term, find all other terms that appear in ≥ MIN_COOCCURRENCE
+ * 2. Drop glue terms spread over too many files (see MAX_TERM_FILE_FRACTION)
+ *    and prune terms confined to a single file.
+ * 3. For each term, find all other terms that appear in ≥ MIN_COOCCURRENCE
  *    of the same files → these terms describe the same concept.
- * 3. Union-find: merge terms that share many files.
- * 4. Each component becomes one concept, named by its most-frequent term.
+ * 4. Union-find: merge terms that share many files.
+ * 5. Each component becomes one concept, named by its most-frequent term.
  *
  * This is intentionally simple and fast: no LLM, no vector DB, no embedding.
  */
@@ -226,6 +231,26 @@ type TermData = {
   fileIds: Set<string>;
   sources: TokenSource[];
 };
+
+/**
+ * Breadth cap (Phase 1D, V7a — audit §7.1): a term that appears in more than
+ * this fraction of the indexed files is glue, not a concept name ("packages"
+ * shared by every path in a packages/* monorepo, "data" everywhere). It
+ * co-occurs with almost every other term and transitively unions unrelated
+ * concepts into one franken-cluster whose category list spans many roles —
+ * a question mapping to it then expects evidence "everywhere". Glue terms
+ * are dropped before clustering, so they can neither merge clusters nor own
+ * a concept (and consequently never match a question token).
+ */
+const MAX_TERM_FILE_FRACTION = 0.4;
+
+/**
+ * Small-repository floor for the breadth cap: a term spanning the whole of a
+ * tiny repository is as likely to be its one real domain concept as noise
+ * ("telemetry" over the only three telemetry files), so the cap does not
+ * apply until at least this many distinct files carry the term.
+ */
+const GLUE_TERM_MIN_FILES = 4;
 
 function clusterTerms(
   termMap: Map<string, TermData>,
@@ -484,6 +509,19 @@ export function buildConceptIndex(input: DiscoveryInput): ConceptIndex {
   // (They cannot cluster with anything and are likely file-specific artifacts.)
   for (const [term, data] of termMap) {
     if (data.fileIds.size < MIN_FILES_FOR_CONCEPT) {
+      termMap.delete(term);
+    }
+  }
+
+  // ── Step 2b: Drop glue terms (Phase 1D, V7a) ───────────────────────────────
+  // Deliberately before clustering: a glue term must neither union clusters
+  // nor own a concept, so it also vanishes from the term→concept index.
+  const totalFiles = Math.max(1, files.length);
+  for (const [term, data] of termMap) {
+    if (
+      data.fileIds.size >= GLUE_TERM_MIN_FILES &&
+      data.fileIds.size / totalFiles > MAX_TERM_FILE_FRACTION
+    ) {
       termMap.delete(term);
     }
   }

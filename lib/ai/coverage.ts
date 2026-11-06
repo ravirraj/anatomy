@@ -157,6 +157,27 @@ const SIGNAL_RANK: Record<EvidenceSignal, number> = {
 };
 
 /**
+ * Self-named honesty (Phase 1D, V1): an unnamed concept associates with a
+ * window only when a real signal connects them the concept's own
+ * vocabulary. A symbol-mention reason counts only when the symbol name
+ * actually echoes one of the concept's variants — a window reached through
+ * an unrelated symbol (any query produces symbol-hit files) must not turn
+ * an unknown concept into a phantom partial. Relationship provenance is
+ * kept: those windows were reached through query-token-driven traversal.
+ */
+function selfNamedPositive(win: RetrievedWindow, variantList: string[]): boolean {
+  const signal = classifyWindow(win, variantList).signal;
+  if (signal === "source-text") return true;
+  if (signal === "filename-or-role") return false;
+  if (signal === "symbol-name") {
+    const match = /symbol "([^"]+)"|symbol \S+ matches/.exec(win.reason);
+    const name = (match?.[1] ?? match?.[0] ?? "").toLowerCase();
+    return variantList.some((v) => v.length >= 3 && name.includes(v));
+  }
+  return true;
+}
+
+/**
  * Evaluates the plan's expected evidence categories against the final
  * retrieved windows. Per (concept, category) pair the strongest evidence
  * wins for the status; evidence lists keep the top items in signal-strength
@@ -171,13 +192,24 @@ export function evaluateCoverage(plan: QuestionPlan, result: RetrievalResult): C
 
   for (const concept of plan.concepts) {
     const variantList = [...new Set([concept.token, ...concept.variants.map((v) => v.text)])];
+    // Phase 1D (V1): a concept the planner could not name any categories for
+    // was evaluated to nothing — vacuously covered, invisible to the drill
+    // and to the answer's coverage block. It now gets one self-named
+    // category (e.g. "zorb" for concept "zorb"), affiliated with EVERY
+    // retrieved window and judged by the same signal rules, so coverage is
+    // honest and the loop can drill for it with the concept's own
+    // vocabulary.
+    const selfNamed = concept.expectedEvidence.length === 0;
     const categories: CategoryCoverage[] = [];
-    for (const category of concept.expectedEvidence) {
+    for (const category of selfNamed ? [concept.token] : concept.expectedEvidence) {
       const affiliation = CATEGORY_AFFILIATION[category];
       // Affiliation: whole path segment match or a retrieval reason that
       // records the matching architectural role (role seeding writes
-      // `holds the "<role>" role` into the reason).
+      // `holds the "<role>" role` into the reason). Self-named concepts
+      // affiliate with every window: found/partial/unknown still come only
+      // from the concept's own classified signals below.
       const affiliated = result.windows.filter((win) => {
+        if (selfNamed) return true;
         if (!affiliation) return false;
         const segments = win.path.toLowerCase().split("/");
         if (segments.some((segment) => affiliation.segments.includes(segment))) return true;
@@ -185,47 +217,71 @@ export function evaluateCoverage(plan: QuestionPlan, result: RetrievalResult): C
         return roleMatch !== null && affiliation.roles.includes(roleMatch[1]!);
       });
 
-      const evidence = affiliated
-        .map((win) => classifyWindow(win, variantList))
+      const classified = affiliated
+        .map((win) => ({ win, item: classifyWindow(win, variantList) }))
         .sort(
           (a, b) =>
-            SIGNAL_RANK[a.signal] - SIGNAL_RANK[b.signal] ||
-            a.path.localeCompare(b.path) ||
-            a.startLine - b.startLine,
+            SIGNAL_RANK[a.item.signal] - SIGNAL_RANK[b.item.signal] ||
+            a.win.path.localeCompare(b.win.path) ||
+            a.win.startLine - b.win.startLine,
         )
         .slice(0, 8);
 
       let status: CoverageStatus;
       let reason: string;
       // Ensure concept-specific source text, not just category-affiliated text.
-      const textEvidenced = evidence.filter((e) => e.signal === "source-text");
-      if (affiliated.length === 0) {
+      const textEvidenced = classified.filter((p) => p.item.signal === "source-text");
+      // Real association for a self-named concept: echo-checked positives
+      // only — a bare path match establishes nothing about an unnamed
+      // concept, and an unrelated symbol mention echoes nothing.
+      const positivePairs = selfNamed
+        ? classified.filter((p) => selfNamedPositive(p.win, variantList))
+        : [];
+      const evidence = selfNamed ? positivePairs.map((p) => p.item) : classified.map((p) => p.item);
+      const positiveEvidence = evidence;
+
+      if (selfNamed && positivePairs.length === 0) {
+        // An unnamed concept with no real signal stays unknown, and reports
+        // no evidence items (unknown never presents evidence).
         status = "unknown";
-        reason = `no retrieved file is affiliated with the "${category}" layer of "${concept.token}"`;
+        reason = `no retrieved file carries evidence of the "${category}" concept: any retrieved file could hold it, and none matched its variants`;
+      } else if (affiliated.length === 0) {
+        status = "unknown";
+        reason = selfNamed
+          ? `no retrieved file carries evidence of the "${category}" concept: any retrieved file could hold it, and none matched its variants`
+          : `no retrieved file is affiliated with the "${category}" layer of "${concept.token}"`;
       } else if (textEvidenced.length > 0) {
         // Concept-specific check: evidence must both match the concept variant and be from
         // a window whose affiliation matches the category we are evaluating for this concept.
         status = "found";
-        const shown = textEvidenced.slice(0, 3).map((e) => `${e.path} (${e.provenance}, via "${e.matchedVariant}")`);
-        reason = `source text in ${shown.join(", ")} establishes the "${category}" layer of "${concept.token}"`;
+        const shown = textEvidenced
+          .slice(0, 3)
+          .map((p) => `${p.item.path} (${p.item.provenance}, via "${p.item.matchedVariant}")`);
+        reason = selfNamed
+          ? `source text in ${shown.join(", ")} establishes the "${category}" concept`
+          : `source text in ${shown.join(", ")} establishes the "${category}" layer of "${concept.token}"`;
       } else {
         status = "partial";
         const nameMatches = evidence.filter((e) => e.signal === "symbol-name").length;
         const relationHints = evidence.filter(
           (e) => e.signal === "relationship-indexed" || e.signal === "relationship-derived",
         ).length;
-        const uniquePaths = [...new Set(evidence.map((e) => e.path))].slice(0, 3);
-        reason = `category-affiliated files exist (e.g. ${uniquePaths.join(", ")})`
-          + (nameMatches > 0 ? `; ${nameMatches} window(s) echo the concept in symbol names` : "")
-          + (relationHints > 0 ? `; ${relationHints} relationship-traversed file(s)` : "")
-          + `, but the retrieved text does not itself establish the "${category}" behaviour of "${concept.token}"`;
+        const uniquePaths = [...new Set(positiveEvidence.map((e) => e.path))].slice(0, 3);
+        reason = selfNamed
+          ? `retrieved file(s) associate with "${category}" (e.g. ${uniquePaths.join(", ")})`
+            + (nameMatches > 0 ? `; ${nameMatches} window(s) echo the concept in symbol names` : "")
+            + ", but no retrieved text establishes the concept's own vocabulary"
+          : `category-affiliated files exist (e.g. ${uniquePaths.join(", ")})`
+            + (nameMatches > 0 ? `; ${nameMatches} window(s) echo the concept in symbol names` : "")
+            + (relationHints > 0 ? `; ${relationHints} relationship-traversed file(s)` : "")
+            + `, but the retrieved text does not itself establish the "${category}" behaviour of "${concept.token}"`;
       }
 
       if (status === "found") found += 1;
       else if (status === "partial") partial += 1;
       else unknown += 1;
 
-      categories.push({ category, status, reason, evidence });
+      categories.push({ category, status, reason, evidence: positiveEvidence });
     }
     concepts.push({ token: concept.token, categories });
   }
@@ -240,6 +296,62 @@ export function evaluateCoverage(plan: QuestionPlan, result: RetrievalResult): C
 
 
 // ── Adaptive coverage ─────────────────────────────────────────────────────────
+
+/**
+ * Self-named coverage of one plan concept (Phase 1D, V1): a single category
+ * named after the concept itself, affiliated with every retrieved window
+ * (any file could carry the concept), and classified by the standard signal
+ * rules. Reason wording speaks of the concept directly rather than of a
+ * "category layer" of it, and — for honesty — evidence items drop
+ * filename-or-role echoes (a bare path match establishes nothing about an
+ * unnamed concept; such a result stays unknown).
+ */
+function evaluateSelfNamedConcept(
+  concept: { token: string; variants: { text: string }[] },
+  result: RetrievalResult,
+): ConceptCoverage {
+  const variantList = [...new Set([concept.token, ...concept.variants.map((v) => v.text)])];
+  const category = concept.token;
+  const classified = result.windows
+    .map((win) => ({ win, item: classifyWindow(win, variantList) }))
+    .sort(
+      (a, b) =>
+        SIGNAL_RANK[a.item.signal] - SIGNAL_RANK[b.item.signal] ||
+        a.win.path.localeCompare(b.win.path) ||
+        a.win.startLine - b.win.startLine,
+    )
+    .slice(0, 8);
+  const textEvidenced = classified
+    .filter((p) => p.item.signal === "source-text")
+    .map((p) => p.item);
+  const positive = classified
+    .filter((p) => selfNamedPositive(p.win, variantList))
+    .map((p) => p.item);
+  const evidence = positive;
+
+  let status: CoverageStatus;
+  let reason: string;
+  if (positive.length === 0) {
+    status = "unknown";
+    reason = `no retrieved file carries evidence of the "${category}" concept: any retrieved file could hold it, and none matched its variants`;
+  } else if (textEvidenced.length > 0) {
+    status = "found";
+    const shown = textEvidenced.slice(0, 3).map((e) => `${e.path} (${e.provenance}, via "${e.matchedVariant}")`);
+    reason = `source text in ${shown.join(", ")} establishes the "${category}" concept`;
+  } else {
+    status = "partial";
+    const nameMatches = positive.filter((e) => e.signal === "symbol-name").length;
+    const uniquePaths = [...new Set(positive.map((e) => e.path))].slice(0, 3);
+    reason = `retrieved file(s) associate with "${category}" (e.g. ${uniquePaths.join(", ")})`
+      + (nameMatches > 0 ? `; ${nameMatches} window(s) echo the concept in symbol names` : "")
+      + ", but no retrieved text establishes the concept's own vocabulary";
+  }
+
+  return {
+    token: concept.token,
+    categories: [{ category, status, reason, evidence: positive }],
+  };
+}
 
 /**
  * Adaptive coverage evaluation that uses the ConceptIndex and QuestionConceptMapping
@@ -283,13 +395,23 @@ export function evaluateCoverageAdaptive(
     ];
 
     // Derive expected categories from the concept's own files' roles
-    // (not from a hardcoded word→categories map)
-    const expectedCategories = concept.discoveredCategories.length > 0
-      ? concept.discoveredCategories
-      : ["unclassified"];
+    // (not from a hardcoded word→categories map).
+    //
+    // Phase 1D (V7b): a concept whose files never received an indexed role
+    // previously surfaced as a junk "unclassified" layer — meaningless to
+    // the model, drilled by the literal word, and presented as if
+    // "unclassified" were a real layer of the codebase. It is now reported
+    // under the concept's own name, affiliating by its own fileIds (set on
+    // categoryToFiles below).
+    const noRoles = concept.discoveredCategories.length === 0;
+    const expectedCategories = noRoles
+      ? [concept.displayName]
+      : concept.discoveredCategories;
 
     // Category → files of this concept whose recorded role is that category.
-    // Files without a recorded role affiliate only with "unclassified".
+    // Files without a recorded role affiliate only with "unclassified" —
+    // except in the fully role-less case, where the concept affiliates with
+    // everything it owns under its own name.
     const categoryToFiles = new Map<string, { fileIds: Set<string>; paths: Set<string> }>();
     for (let i = 0; i < concept.fileIds.length; i++) {
       const fid = concept.fileIds[i]!;
@@ -300,6 +422,12 @@ export function evaluateCoverageAdaptive(
       const path = concept.filePaths[i];
       if (path) entry.paths.add(path);
       categoryToFiles.set(role, entry);
+    }
+    if (noRoles) {
+      categoryToFiles.set(
+        concept.displayName,
+        { fileIds: new Set(concept.fileIds), paths: new Set(concept.filePaths.filter(Boolean)) },
+      );
     }
 
     const categories: CategoryCoverage[] = [];
@@ -359,6 +487,33 @@ export function evaluateCoverageAdaptive(
     }
 
     adaptiveConcepts.push({ token: concept.displayName, categories });
+  }
+
+  // Phase 1D (V1): plan concepts the repository's concept index did not
+  // match must still be evaluated. Previously they vanished the moment one
+  // of their sibling tokens DID match — no coverage line, no drill, and no
+  // honest unknown in the answer's coverage block. Each unmatched concept
+  // contributes one self-named category with any-window affiliation; a
+  // concept already represented by a top concept (same display name, or the
+  // token is one of its normalized terms) is skipped to avoid duplicates.
+  for (const planConcept of plan.concepts) {
+    if (mapping.matches.has(planConcept.token)) continue;
+    if (
+      mapping.topConcepts.some(
+        (tc) =>
+          tc.displayName === planConcept.token ||
+          tc.normalizedTerms.includes(planConcept.token),
+      )
+    ) {
+      continue;
+    }
+    const appended = evaluateSelfNamedConcept(planConcept, result);
+    for (const cat of appended.categories) {
+      if (cat.status === "found") found += 1;
+      else if (cat.status === "partial") partial += 1;
+      else unknown += 1;
+    }
+    adaptiveConcepts.push(appended);
   }
 
   return {

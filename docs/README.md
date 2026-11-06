@@ -12,12 +12,31 @@ Everything written about Anatomy. Start at the top.
 | [architecture/file-content-storage.md](architecture/file-content-storage.md) | Why contents are discarded today, the requirements, the alternatives compared, and the design for storing source content | You are touching any part of the content pipeline or the answer path |
 | [architecture/decisions/](architecture/decisions/) | Architecture decision records, one decision each, alternatives and consequences attached | You want to know why a structural choice was made |
 | [security.md](security.md) | Trust boundaries, what is stored, where data goes, known limitations, a verification checklist | You are deploying it or reviewing it |
-| [ROADMAP.md](ROADMAP.md) | The public-facing roadmap | You want to know where it is going |
+| [ROADMAP.md](ROADMAP.md) | The public-facing roadmap, and the eight-phase delivery programme with live statuses | You want to know where it is going |
+| [PROJECT_STATE.md](PROJECT_STATE.md) | What is true right now: stage, verified Git state, uncommitted work, the exact next approved task, blockers | **Every agent, before every change** |
+| [DECISIONS.md](DECISIONS.md) | The index of technical decisions and open questions, with evidence pointers | You want to know why, or whether something is settled |
+| [coverage-audit.md](coverage-audit.md) | The coverage-driven Q&A record: pipeline trace, baseline measurements, limitations, loop results | You are working on the retrieval or coverage path |
 | [project-doc.md](project-doc.md) | The product decisions behind the build, with the reasoning attached | You want to know *why* it is like this |
 | [specs/](specs/) | One specification per phase, written before the phase was built | You want the original intent of a part of the system |
 | [../TODO.md](../TODO.md) | The authoritative task list | You are looking for something to do |
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) | How to contribute | You are about to open a pull request |
 | [../CHANGELOG.md](../CHANGELOG.md) | Release history | You want to know what changed when |
+
+**Agents start at [../AGENTS.md](../AGENTS.md).** It sets the reading order
+and the working rules: audit the real Git/code state against
+[PROJECT_STATE.md](PROJECT_STATE.md), never expand an approved scope, never
+commit or push without approval, and never mark work done without recorded
+verification results. After every approved subphase, the documents above
+must be updated so the next agent can resume.
+
+> **A naming note.** There is no separate `docs/ARCHITECTURE.md`: on a
+> case-insensitive filesystem (Windows/macOS default) that name collides
+> with this repository's existing `docs/architecture.md`, which is the
+> canonical architecture document (§11 of it records the current retrieval
+> and Q&A state as implemented). The requested agent-facing "current
+> architecture" content therefore lives in
+> [architecture.md](architecture.md) §11, and [PROJECT_STATE.md](PROJECT_STATE.md)
+> carries the current Git/work state. Do not create the upper-case variant.
 
 ---
 
@@ -31,9 +50,11 @@ flowchart TB
   ARCH["docs/architecture.md<br/>how it is built"]
   FEAT["docs/features.md<br/>what exists today"]
   TODO["TODO.md<br/>what should exist next"]
-  ROAD["docs/ROADMAP.md<br/>the short version"]
+  ROAD["docs/ROADMAP.md<br/>where it is going"]
   SEC["docs/security.md<br/>what to be careful of"]
   DEV["docs/development.md<br/>how to work on it"]
+  STATE["docs/PROJECT_STATE.md<br/>what is true right now"]
+  DEC["docs/DECISIONS.md<br/>decisions and open questions"]
 
   DOC --> SPEC --> CODE
   CODE --> ARCH
@@ -41,6 +62,9 @@ flowchart TB
   FEAT --> TODO --> ROAD
   ARCH --> SEC
   CODE --> DEV
+  STATE -->|verified against| CODE
+  STATE --> ROAD
+  DEC --> ARCH
 ```
 
 **The rule is one-directional.** `docs/project-doc.md` and the specs say what

@@ -2,7 +2,9 @@
 
 How Anatomy is put together, and why. Everything here describes code that
 exists in this repository; proposals live in [TODO.md](../TODO.md) and
-[docs/ai-system.md](ai-system.md), not here.
+[docs/ai-system.md](ai-system.md), not here — with the single deliberate
+exception of §11.5, which records the long-term multi-language direction in
+future tense and is clearly marked as not implemented.
 
 ---
 
@@ -621,3 +623,98 @@ again is instant even if the browser forgot.
 - **How the AI cache should be invalidated** when a repository moves. The
   answer currently re-reads the source and compares hashes, which is correct
   but costs a request.
+
+---
+
+## 11. Current state of the retrieval and Q&A path (as implemented)
+
+> This section records the *implemented* state of the repository-wide Q&A
+> path as of **2026-11-04**, verified on branch `ravi` at `c1ac975` plus
+> recorded uncommitted work (see [PROJECT_STATE.md](PROJECT_STATE.md)). The
+> rest of this document describes the system paragraphs above it; the only
+> future-tense text in this section is §11.5. Deep design narrative lives in
+> [ai-system.md](ai-system.md) and [coverage-audit.md](coverage-audit.md);
+> decision reasoning lives in [DECISIONS.md](DECISIONS.md).
+
+### 11.1 The Q&A data flow
+
+```
+UI question
+  → askQuestionAction            app/(workspace)/analyses/[id]/actions.ts
+  → retrieveWithCoverageLoop     lib/ai/retrieval-loop.ts   (deterministic, no LLM)
+      pass 0: retrieveGroundedContext   lib/ai/retrieval.ts
+      evaluateCoverage                  lib/ai/coverage.ts
+      while categories are partial/unknown: ≤ 2 focused retrievals per pass,
+      ≤ 3 additional passes; append-only merge with atomic bounded
+      replacement; per-package served-cost ledger (16-file / 28k-character
+      budget enforced across passes)
+  → formatRetrievedContext       lib/ai/retrieval.ts
+  → answerQuestion               lib/ai/tasks.ts
+      cache read (sha256 of task + PROMPT_VERSION + model + normalised input)
+        hit  → citations re-verified before serving
+        miss → complete() LLM call → verify → cache write
+  → verifyCitationsEvidence      lib/ai/citations.ts     (line- + hash-bound)
+  → extractCitations (UI: components/qa-panel.tsx renders result.citations)
+```
+
+Within `retrieveGroundedContext`, seeding is multi-strategy over the indexed
+data: symbol names (with subtoken/variant matching), explicit paths,
+recovered `routes` rows, graph edges (bounded expansion), and **file roles** —
+`ROLE_HINTS` maps query vocabulary onto the files the parser labelled, and
+broad (onboarding-style) queries additionally seed modern routable roles as
+entry points. A missing-category evaluation drives the focused follow-up
+queries; their vocabulary comes from `CATEGORY_QUERY_WORDS` in
+`lib/ai/retrieval-loop.ts`, which carries both planner categories and
+taxonomy role ids.
+
+### 11.2 The role taxonomy
+
+`lib/roles.ts` is the single source of truth: **28 roles** in rail display
+order (7 routable surfaces, 12 layers, 9 plumbing), plain data with no
+imports so the browser can read it. Convention assigns roles first; a model
+may label only the 7 `MODEL_ROLES`, none of which is routable, and never
+overwrites a convention role. Retrieval and coverage treat the raw role ids
+(`page-route`, `api-endpoint`, `repository`, `guard`, …) as first-class
+categories, while comparisons against analyses stored under the older
+taxonomy keep the legacy values (`route`, `frontend`, `cli`) working.
+
+### 11.3 Known limitations of the retrieval path
+
+- No call graph exists in the schema; call-like relationships are derived at
+  query time from retrieved windows and are never presented as indexed edges
+  ([coverage-audit.md](coverage-audit.md) §4).
+- Bidirectional prefix matching at length ≥ 4 can cross concepts
+  (`authorize` matches `authorization`-family queries).
+- Graph islands (e.g. `packages/src/*`) are unreachable by edges and are
+  found only through concept vocabulary.
+- Express-style repositories can have zero recovered routes, emptying the
+  route axis for them.
+- Retrieval is lexical/symbol/path/role only — no semantic retrieval
+  (deliberate; see [DECISIONS.md](DECISIONS.md) D1).
+- The answer cache has no eviction; invalidation re-verifies source hashes
+  at serving time ([architecture.md](architecture.md) §10.2–10.3).
+
+### 11.4 Where the reliability programme sits
+
+Development is inside delivery **Phase 1** (retrieval & answer reliability):
+subphases 1A/1B are committed (`c1ac975`), subphase 1C (role-taxonomy audit
+fixes F1–F4) is implemented and verified but uncommitted, and subphase 1D is
+the next approved task. Current status and evidence:
+[PROJECT_STATE.md](PROJECT_STATE.md).
+
+### 11.5 Long-term multi-language direction (NOT implemented — future tense)
+
+This subsection is the deliberate exception to this document's "everything
+here describes code that exists" rule, kept separate so it can never be
+mistaken for the implemented system. The long-term target is one shared
+ingestion infrastructure with multiple language-specific parser adapters and
+framework-specific adapters, all feeding one canonical repository model
+(a language-neutral intermediate representation), one shared relationship
+graph, and one shared retrieval and Q&A engine. Order of work: the
+intermediate representation first, then parser adapters (Python, Go, Java,
+Rust), then framework adapters (Django, FastAPI, Gin, Spring). Today
+everything above assumes TypeScript; `ParsedFile` has no language field and
+the resolver is TypeScript's
+([TODO.md](../TODO.md) §4.1). Tree-sitter is a candidate technology to
+evaluate during the Phase 5 architecture research — not a selection.
+Tracking and status: [ROADMAP.md](ROADMAP.md), Phases 5–8.

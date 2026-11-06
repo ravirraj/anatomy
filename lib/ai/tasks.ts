@@ -6,6 +6,7 @@ import { verifyCitations, CitationError, extractCitations, type FileEvidence, ty
 import {
   assertPromptBudget,
   resolveModelProfile,
+  fallbackProfileNotice,
   BudgetExhaustedError,
   BudgetOverflowError,
   type ModelContextProfile,
@@ -163,6 +164,21 @@ export async function explainFolder(input: FolderInput, deps: { cache: Cache }):
   return run(input);
 }
 
+// Fallback-profile visibility (Phase 1D, V4): when the question model has no
+// verified pin, everything derived from its profile silently shrinks — the
+// 13.5k-character input ceiling also caps the retrieved-evidence package.
+// Say so once per process, exactly where the budget is applied: fresh
+// generation. A cached answer returns before this line is ever reached, so
+// a cache-only process stays silent.
+let warnedFallbackProfile = false;
+function warnFallbackProfileOnce(profile: ModelContextProfile): void {
+  if (warnedFallbackProfile) return;
+  const notice = fallbackProfileNotice(profile);
+  if (notice === null) return;
+  warnedFallbackProfile = true;
+  console.warn(notice);
+}
+
 export async function answerQuestion(
   input: QuestionInput,
   deps: {
@@ -254,6 +270,7 @@ export async function answerQuestion(
     }
 
     const profile = resolveModelProfile(model, resolveBaseUrl());
+    warnFallbackProfileOnce(profile);
     const system = QUESTION_SYSTEM;
     const user = questionMessage(question);
     assertPromptBudget(profile, system, user);

@@ -421,6 +421,56 @@ function isManifestFileGrounded(
   return true;
 }
 
+/**
+ * Merge served windows into maximal disjoint intervals with no retrievable
+ * gap between them: overlapping windows collapse, and windows that are
+ * adjacent (the next starts exactly where the previous one ended) fuse into
+ * one continuous region. A gap of even a single unretrieved line keeps the
+ * intervals apart. Input need not be sorted; output is sorted by start line.
+ */
+function mergeServedIntervals(
+  windows: { startLine: number; endLine: number }[],
+): { startLine: number; endLine: number }[] {
+  const sorted = [...windows].sort((a, b) => a.startLine - b.startLine || a.endLine - b.endLine);
+  const merged: { startLine: number; endLine: number }[] = [];
+  for (const w of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && w.startLine <= last.endLine + 1) {
+      if (w.endLine > last.endLine) last.endLine = w.endLine;
+    } else {
+      merged.push({ startLine: w.startLine, endLine: w.endLine });
+    }
+  }
+  return merged;
+}
+
+/**
+ * Describe the first stretch of the cited range that no served window
+ * covered, so a rejection names the exact unretrieved lines instead of just
+ * the window list. Returns "" when every line is somehow covered (kept as a
+ * guard: the caller only invokes this on a failed containment).
+ */
+function describeUncoveredLines(
+  startLine: number,
+  endLine: number,
+  served: { startLine: number; endLine: number }[],
+): string {
+  let cursor = startLine;
+  for (const w of served) {
+    if (w.endLine < cursor) continue;
+    if (w.startLine > cursor) {
+      const gapEnd = Math.min(w.startLine - 1, endLine);
+      return ` — unretrieved gap at line${gapEnd === cursor ? "" : "s"} ${cursor}${gapEnd === cursor ? "" : `-${gapEnd}`}`;
+    }
+    cursor = w.endLine + 1;
+    if (cursor > endLine) return "";
+  }
+  if (cursor <= endLine) {
+    return ` — unretrieved gap at line${endLine === cursor ? "" : "s"} ${cursor}${endLine === cursor ? "" : `-${endLine}`}`;
+  }
+  return "";
+}
+
 // Returns the offending mentions (empty when every path-shaped token names a
 // file the model was shown and adheres to valid line bounds). The caller decides
 // what to do with them — the AI layer refuses and never caches.
@@ -462,14 +512,25 @@ export function verifyCitations(
             offending.add(token);
             details.push(`Invalid line range in "${token}": end line ${parsed.endLine} exceeds file length of ${evidence.lines} lines`);
           } else if (evidence.windows !== undefined && evidence.windows.length > 0) {
-            const withinWindow = evidence.windows.some(
+            // Union coverage (Phase 1D, V5): with maxWindowsPerFile=2 a file
+            // is often served as several windows, and the model may cite a
+            // range that spans them as long as every cited line was actually
+            // retrieved. Merge the served intervals — overlapping windows
+            // collapse, and windows that are adjacent (next starts exactly
+            // where the previous ended) fuse into one continuous region —
+            // then require the cited range to sit inside them. A range
+            // spanning a real gap still fails closed, with the failure
+            // naming the first unretrieved lines so the error stays
+            // explainable.
+            const served = mergeServedIntervals(evidence.windows);
+            const covered = served.some(
               (w) => parsed.startLine! >= w.startLine && parsed.endLine! <= w.endLine,
             );
-            if (!withinWindow) {
+            if (!covered) {
               offending.add(token);
-              const windowStr = evidence.windows.map((w) => `${w.startLine}-${w.endLine}`).join(", ");
+              const windowStr = served.map((w) => `${w.startLine}-${w.endLine}`).join(", ");
               details.push(
-                `Line range outside retrieved evidence in "${token}": lines ${parsed.startLine}-${parsed.endLine} not within retrieved window(s) [${windowStr}]`,
+                `Line range outside retrieved evidence in "${token}": lines ${parsed.startLine}-${parsed.endLine} not within retrieved window(s) [${windowStr}]${describeUncoveredLines(parsed.startLine, parsed.endLine, served)}`,
               );
             }
           }

@@ -260,6 +260,136 @@ console.log("=== 5. Multi-Repo Structural Generalization: Monorepo & Path-Aliase
 }
 
 console.log("");
+console.log("=== 6. Glue-term breadth cap (Phase 1D, V7a) ===");
+{
+  // A repository where a structural directory term is shared by nearly every
+  // path: pre-cap, the co-occurrence union produced one franken-concept
+  // ("packages") swallowing every domain, whose category list spans many
+  // roles — a question mentioning it then expected evidence "everywhere"
+  // (audit §7.1). Post-cap the glue term is dropped before clustering.
+  const glueIndex = buildConceptIndex({
+    analysisId: "glue_repo",
+    files: [
+      { id: "g1", path: "packages/auth/session.ts", role: "service" },
+      { id: "g2", path: "packages/auth/login.ts", role: "controller" },
+      { id: "g3", path: "packages/billing/subscription.ts", role: "service" },
+      { id: "g4", path: "packages/billing/invoice.ts", role: "model" },
+      { id: "g5", path: "packages/data/store.ts", role: "util" },
+      { id: "g6", path: "packages/data/query.ts", role: "util" },
+      { id: "g7", path: "packages/data/serialize.ts", role: "util" },
+      { id: "g8", path: "packages/data/decode.ts", role: "util" },
+      { id: "g9", path: "packages/data/backup.ts", role: "util" },
+      { id: "g10", path: "packages/web/app/page.tsx", role: "page-route" },
+      { id: "g11", path: "packages/web/lib/branding.ts", role: "util" },
+    ],
+    symbols: [
+      { fileId: "g1", name: "UserSession", kind: "class", exported: true },
+      { fileId: "g3", name: "Subscription", kind: "class", exported: true },
+      { fileId: "g5", name: "DataStore", kind: "class", exported: true },
+    ],
+    routes: [],
+    edges: [],
+  });
+
+  const allTerms = glueIndex.concepts.flatMap((c) => c.normalizedTerms);
+  check(
+    !glueIndex.concepts.some((c) => c.displayName === "data") && !allTerms.includes("data"),
+    "a term spanning >40% of the indexed files is dropped; no 'data' concept exists",
+    `concepts: ${JSON.stringify(glueIndex.concepts.map((c) => [c.displayName, c.normalizedTerms]))}`,
+  );
+  check(
+    !glueIndex.concepts.some((c) => c.displayName === "packages") && !allTerms.includes("packages"),
+    "a term spanning every file is dropped; no 'packages' franken-concept exists",
+    `concepts: ${JSON.stringify(glueIndex.concepts.map((c) => c.displayName))}`,
+  );
+  const authConcept = glueIndex.concepts.find((c) => c.displayName === "auth");
+  const billingConcept = glueIndex.concepts.find((c) => c.displayName === "billing");
+  check(
+    authConcept !== undefined &&
+      billingConcept !== undefined &&
+      authConcept.fileIds.every((f) => f === "g1" || f === "g2") &&
+      billingConcept.fileIds.every((f) => f === "g3" || f === "g4"),
+    "real domain concepts still form exactly across their own files",
+    `auth=${JSON.stringify(authConcept?.fileIds)} billing=${JSON.stringify(billingConcept?.fileIds)}`,
+  );
+  const dataMapping = matchConceptsForQuery(["data"], new Set(), glueIndex);
+  check(
+    dataMapping.topConcepts.length === 0,
+    "a dropped glue term no longer matches any concept for question tokens",
+    `top: ${dataMapping.topConcepts.map((c) => c.displayName).join(", ")}`,
+  );
+}
+{
+  // Small-repository floor: a term spanning the whole of a tiny repository
+  // is as likely to be its one real domain concept as noise; the breadth cap
+  // does not apply below GLUE_TERM_MIN_FILES files.
+  const smallIndex = buildConceptIndex({
+    analysisId: "small_repo",
+    files: [
+      { id: "s1", path: "src/telemetry/collector.ts", role: "service" },
+      { id: "s2", path: "src/telemetry/exporter.ts", role: "service" },
+      { id: "s3", path: "src/telemetry/buffer.ts", role: "model" },
+    ],
+    symbols: [
+      { fileId: "s1", name: "TelemetryCollector", kind: "class", exported: true },
+      { fileId: "s2", name: "ExportTelemetry", kind: "function", exported: true },
+    ],
+    routes: [],
+    edges: [],
+  });
+  check(
+    smallIndex.concepts.some(
+      (c) => c.displayName === "telemetry" || c.normalizedTerms.includes("telemetry"),
+    ),
+    "in a 3-file repository a whole-span term still forms its real concept",
+    `concepts: ${JSON.stringify(smallIndex.concepts.map((c) => c.displayName))}`,
+  );
+}
+{
+  // QA-07 guard (two-framework-monorepo): the monorepo's structural "packages"
+  // term created a repo-wide concept that drills controller/service files for
+  // manifest questions. After the cap the query token must match nothing.
+  const monorepoIndex = buildConceptIndex({
+    analysisId: "two-framework-monorepo",
+    files: [
+      { id: "m1", path: "packages/api/src/users/users.controller.ts", role: "controller" },
+      { id: "m2", path: "packages/api/src/users/users.service.ts", role: "service" },
+      { id: "m3", path: "packages/web/app/page.tsx", role: "page-route" },
+      { id: "m4", path: "packages/web/lib/branding.ts", role: "util" },
+    ],
+    symbols: [
+      { fileId: "m1", name: "UsersController", kind: "class", exported: true },
+      { fileId: "m2", name: "UsersService", kind: "class", exported: true },
+      { fileId: "m4", name: "getBrandingConfig", kind: "function", exported: true },
+    ],
+    routes: [
+      { fileId: "m1", pattern: "/users", method: "GET" },
+      { fileId: "m3", pattern: "/", method: "GET" },
+    ],
+    edges: [{ sourceFileId: "m1", targetFileId: "m2" }],
+  });
+  check(
+    !monorepoIndex.concepts.some(
+      (c) => c.displayName === "packages" || c.normalizedTerms.includes("packages"),
+    ),
+    "monorepo regression guard: no 'packages' concept survives the cap",
+    `concepts: ${JSON.stringify(monorepoIndex.concepts.map((c) => c.displayName))}`,
+  );
+  const packagesMapping = matchConceptsForQuery(["packages"], new Set(), monorepoIndex);
+  check(
+    packagesMapping.topConcepts.length === 0,
+    "monorepo regression guard: the 'packages' question token matches no concept",
+    `top: ${packagesMapping.topConcepts.map((c) => c.displayName).join(", ")}`,
+  );
+  const usersConcept = monorepoIndex.concepts.find((c) => c.displayName === "users");
+  check(
+    usersConcept !== undefined,
+    "monorepo regression guard: the real 'users' concept still forms",
+    `concepts: ${JSON.stringify(monorepoIndex.concepts.map((c) => c.displayName))}`,
+  );
+}
+
+console.log("");
 for (const line of results) console.log(line);
 console.log("");
 const fails = results.filter((r) => r.startsWith("FAIL"));

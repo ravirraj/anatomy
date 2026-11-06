@@ -7,6 +7,9 @@
 import {
   DEFAULT_UNKNOWN_CONTEXT_WINDOW,
   DEFAULT_UNKNOWN_MAX_OUTPUT,
+  DEFAULT_UNKNOWN_MAX_INPUT_CHARACTERS,
+  DEFAULT_UNKNOWN_OPERATIONAL_INPUT_TOKENS,
+  fallbackProfileNotice,
   isOpenAiDirectHost,
   isOpenRouterHost,
   resolveModelProfile,
@@ -32,7 +35,13 @@ import {
 } from "../lib/ai/retrieval-loop.ts";
 
 import { verifyCitations, type FileEvidence } from "../lib/ai/citations.ts";
-import { isContextLengthExceededError } from "../lib/ai/tasks.ts";
+import {
+  answerQuestion,
+  isContextLengthExceededError,
+  type Cache,
+} from "../lib/ai/tasks.ts";
+import { MODELS, resolveBaseUrl } from "../lib/ai/client.ts";
+import type { QuestionInput } from "../lib/ai/prompts.ts";
 
 let passed = 0;
 let failed = 0;
@@ -467,6 +476,103 @@ console.log("\n=== 7. Context Overflow Pattern Matching & Error Taxonomy ===");
   check(overflowErr.code === "BUDGET_OVERFLOW", "overflow error code is BUDGET_OVERFLOW");
   check(overflowErr.model === "gpt-4o", "overflow error contains model identifier");
   check(isContextLengthExceededError(overflowErr), "isContextLengthExceededError returns true for BudgetOverflowError");
+}
+
+// =============================================================================
+// Section 8: Fallback Profile Visibility (Phase 1D, V4)
+// =============================================================================
+{
+  console.log("\n=== 8. Fallback Profile Visibility ===");
+
+  // 8.1 A verified profile yields no notice (pure helper).
+  const verified = resolveModelProfile("gpt-4o", undefined);
+  check(verified.isFallback === false, "gpt-4o resolves as a verified profile");
+  check(
+    fallbackProfileNotice(verified) === null,
+    "verified profile yields no fallback notice",
+  );
+
+  // 8.2 A fallback profile yields an actionable notice.
+  const fallback = resolveModelProfile("unverified-model-x", undefined);
+  check(fallback.isFallback === true, "unverified model resolves as fallback profile");
+  const notice = fallbackProfileNotice(fallback);
+  check(notice !== null, "fallback profile yields a notice");
+  if (notice !== null) {
+    check(notice.includes("unverified-model-x"), "notice names the model");
+    check(
+      notice.includes("AI_CONTEXT_WINDOW_TOKENS") && notice.includes("AI_MAX_OUTPUT_TOKENS"),
+      "notice names both lift-out env vars",
+    );
+    check(
+      notice.replace(/,/g, "").includes(String(DEFAULT_UNKNOWN_MAX_INPUT_CHARACTERS)),
+      "notice states the hard input character ceiling",
+    );
+    check(
+      notice.replace(/,/g, "").includes(String(DEFAULT_UNKNOWN_OPERATIONAL_INPUT_TOKENS)),
+      "notice states the operational input token ceiling",
+    );
+  }
+
+  // 8.3 End to end: the ask path warns exactly once, only where the budget is
+  // applied (fresh generation). The expectation follows the profile this
+  // process actually resolves for the pinned question model (MODELS.question
+  // is read from env at module load), so the test is deterministic in every
+  // environment: a verified pin stays silent, a fallback warns once.
+  const warnLines: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (msg?: unknown) => {
+    warnLines.push(String(msg));
+  };
+  try {
+    const store = new Map<string, string>();
+    const mockCache: Cache = {
+      async read(key: string) {
+        return store.get(key) ?? null;
+      },
+      async write({ key, body }: { key: string; body: string }) {
+        store.set(key, body);
+      },
+      async delete(key: string) {
+        store.delete(key);
+      },
+    };
+    const input: QuestionInput = {
+      question: "How does authentication establish a session?",
+      contextText: "function createSession() { return db.query(); }",
+      files: [
+        {
+          path: "lib/auth/session.ts",
+          contentHash: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+          totalLines: 120,
+        },
+      ],
+    };
+    const first = await answerQuestion(input, {
+      cache: mockCache,
+      complete: async () =>
+        "Authentication creates a session via `lib/auth/session.ts#L10-L40`.",
+    });
+    const second = await answerQuestion(input, {
+      cache: mockCache,
+      complete: async () => "SHOULD NOT BE CALLED",
+    });
+    const liveProfile = resolveModelProfile(MODELS.question, resolveBaseUrl());
+    const expectedWarnCount = liveProfile.isFallback ? 1 : 0;
+    check(
+      warnLines.length === expectedWarnCount,
+      expectedWarnCount === 1
+        ? "fallback ask warns exactly once; the cached serve adds no second warn"
+        : "verified ask stays silent",
+      `warnLines=${JSON.stringify(warnLines)}`,
+    );
+    if (expectedWarnCount === 1 && warnLines.length === 1) {
+      check(warnLines[0].includes(first.model), "warn names the pinned question model");
+    }
+    check(second.cached === true, "cache-serve path returns the cached answer");
+    check(second.citations.length === 1, "cached answer re-verifies its citations");
+  } finally {
+    console.warn = originalWarn;
+  }
 }
 
 console.log("\n========================================================");

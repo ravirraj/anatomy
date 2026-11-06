@@ -296,6 +296,27 @@ export function resolveModelProfile(
 }
 
 /**
+ * Fallback-profile visibility (Phase 1D, V4): a model that is not a verified
+ * pin for the configured provider silently runs every prompt and evidence
+ * budget off the conservative unknown-model defaults above. This helper
+ * renders the one-line notice for such a profile, or null for a verified
+ * one. Pure — the caller decides how and how often it is shown.
+ */
+export function fallbackProfileNotice(profile: ModelContextProfile): string | null {
+  if (!profile.isFallback) return null;
+  return (
+    `[Anatomy] Model "${profile.model}" is not a verified model pin for the configured provider, ` +
+    `so prompt and evidence budgets use conservative defaults ` +
+    `(hard input ceiling ${DEFAULT_UNKNOWN_MAX_INPUT_CHARACTERS.toLocaleString("en-US")} characters, ` +
+    `${DEFAULT_UNKNOWN_OPERATIONAL_INPUT_TOKENS.toLocaleString("en-US")} operational input tokens, ` +
+    `${DEFAULT_UNKNOWN_CONTEXT_WINDOW.toLocaleString("en-US")} context window) ` +
+    `and answers may ground less evidence than expected. ` +
+    `Set AI_CONTEXT_WINDOW_TOKENS and AI_MAX_OUTPUT_TOKENS to lift the fallback, ` +
+    `or pin a model from the verified KNOWN_MODEL_LIMITS table.`
+  );
+}
+
+/**
  * Conservative statistical heuristic for code snippets (identifiers, punctuation, indentation).
  * Note: Heuristics are operational approximations, not mathematical upper bounds.
  */

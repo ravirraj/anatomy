@@ -74,7 +74,7 @@ export function createFixtureContext(fixtureName: string): FixtureContext {
       content_status: "stored",
       analysis_id: analysisId,
       organization_id: organizationId,
-      file_roles: [{ role: undefined, source: "convention" }],
+      file_roles: [{ role: f.role ?? undefined, source: "convention" }],
     });
   }
 
@@ -103,6 +103,9 @@ export function createFixtureContext(fixtureName: string): FixtureContext {
       content_status: "stored",
       analysis_id: analysisId,
       organization_id: organizationId,
+      // Non-code candidates carry no convention role (parseRepository only
+      // assigns roles to parsed source files); kept explicit so the row
+      // shape matches the code files above.
       file_roles: [{ role: undefined, source: "convention" }],
     });
   }

@@ -12,7 +12,7 @@ import {
   retrieveWithCoverageLoop,
   windowAffiliation,
 } from "../lib/ai/retrieval-loop.ts";
-import type { Db, RetrievedWindow } from "../lib/ai/retrieval.ts";
+import { retrieveGroundedContext, type Db, type RetrievedWindow } from "../lib/ai/retrieval.ts";
 
 const results: string[] = [];
 function pass(message: string): void {
@@ -853,8 +853,8 @@ console.log("=== 3. SDK scenario: routes/controllers partial improve through tar
     ]);
 
   const loop = await retrieveWithCoverageLoop(sdk.db as unknown as Db, "loop_sdk", "How does the developer SDK work in this project?", { adaptive: false });
-  check(loop.stoppedBecause === "sufficient-coverage", "loop stops on sufficient coverage", `stop reason: ${loop.stoppedBecause}`);
-  check(loop.passes.length === 1, "exactly one targeted pass was needed", `passes: ${loop.passes.length}`);
+  check(loop.stoppedBecause === "no-candidates", "the sdk concepts drill to found, then the leftover 'project' qualifier drills dry", `stop reason: ${loop.stoppedBecause}`);
+  check(loop.passes.length === 2, "exactly one targeted evidence pass plus one dry qualifier drill", `passes: ${loop.passes.length}`);
   check(loop.passes[0]!.addedWindows === 2, "targeted pass added one window per missing category", `added: ${loop.passes[0]!.addedWindows}`);
   check(
     JSON.stringify(loop.passes[0]!.queries) === JSON.stringify(["sdk route router endpoint", "sdk controller handler"]),
@@ -867,7 +867,7 @@ console.log("=== 3. SDK scenario: routes/controllers partial improve through tar
     "sdk coverage reaches found for routes, controllers and frontend",
     `sdk coverage: ${JSON.stringify(loop.coverage.concepts)}`,
   );
-  check(loop.coverage.summary.partial === 0 && loop.coverage.summary.unknown === 0, "nothing regressed to partial/unknown", `summary: ${JSON.stringify(loop.coverage.summary)}`);
+  check(loop.coverage.summary.partial === 0 && loop.coverage.summary.unknown === 1, "nothing regressed to partial; the unmatched 'project' qualifier stays honestly unknown (Phase 1D, V1)", `summary: ${JSON.stringify(loop.coverage.summary)}`);
   check(
     loop.result.windows.some((w) => w.path === "backend/routes/mediaRegistry.js" && w.startLine === 130),
     "routes drill surfaced the route-table slice (new evidence, same file)",
@@ -921,12 +921,12 @@ console.log("=== 4. Authentication scenario: already sufficient, zero passes ===
     ]);
 
   const loop = await retrieveWithCoverageLoop(auth.db as unknown as Db, "loop_auth", "How does authentication work in this project?", { adaptive: false });
-  check(loop.stoppedBecause === "sufficient-coverage", "loop stops immediately when the base package is sufficient", `stop: ${loop.stoppedBecause}`);
-  check(loop.passes.length === 0, "zero additional passes for the all-found auth package", `passes: ${JSON.stringify(loop.passes)}`);
+  check(loop.stoppedBecause === "no-candidates", "the auth package is sufficient; the leftover qualifier concept drills once and lands empty", `stop: ${loop.stoppedBecause}`);
+  check(loop.passes.length === 1 && loop.passes[0]!.addedWindows === 0, "exactly one dry drill pass for the qualifier concept", `passes: ${JSON.stringify(loop.passes)}`);
   check(auth.calls.symbols >= 1, `single retrieval call (symbols queries: ${auth.calls.symbols})`, `symbol queries: ${auth.calls.symbols}`);
   check(
-    loop.coverage.summary.found === 4 && loop.coverage.summary.partial === 0 && loop.coverage.summary.unknown === 0,
-    "auth coverage all-found without regression",
+    loop.coverage.summary.found === 4 && loop.coverage.summary.partial === 0 && loop.coverage.summary.unknown === 1,
+    "auth coverage stays all-found; the unmatched 'project' qualifier is honestly unknown (Phase 1D, V1)",
     `summary: ${JSON.stringify(loop.coverage.summary)}`,
   );
   assertBudgetInvariants("auth", loop.result);
@@ -984,8 +984,8 @@ console.log("=== 5. Bounded iteration: stops at the iteration limit ===");
   check(loop.passes.length === 3, `exactly ${3} additional passes ran (got ${loop.passes.length})`, `passes: ${loop.passes.length}`);
   check(loop.passes.every((p) => p.addedWindows > 0), "every pass still added fresh evidence", `added: ${JSON.stringify(loop.passes.map((p) => p.addedWindows))}`);
   check(
-    loop.coverage.summary.found === 4 && loop.coverage.summary.partial === 1 && loop.coverage.summary.unknown === 2,
-    `coverage improved to {found 4, partial 1, unknown 2} without completing (summary: ${JSON.stringify(loop.coverage.summary)})`,
+    loop.coverage.summary.found === 4 && loop.coverage.summary.partial === 1 && loop.coverage.summary.unknown === 3,
+    `coverage improved to {found 4, partial 1, unknown 3} without completing (summary: ${JSON.stringify(loop.coverage.summary)})`,
     `summary: ${JSON.stringify(loop.coverage.summary)}`,
   );
   check(
@@ -1238,6 +1238,231 @@ console.log("=== 8. Provenance and hashes preserved through the loop ===");
     );
     assertBudgetInvariants("roles-found", loopFound.result);
   }
+
+// ---- 11. Vacuous coverage no longer stops the loop (Phase 1D, V1/V9) ----
+{
+  // A question whose concepts are entirely out of vocabulary against a repo
+  // with no path/symbol match: pass 0 abstains (no direct seeds outside an
+  // iterative pass). Pre-fix the empty-evidence planner concepts evaluated
+  // to nothing, the drill list was empty, and the loop stopped
+  // "sufficient-coverage" without ever looking again. Now every such
+  // concept evaluates under its own name, the loop drills once with the
+  // concept vocabulary, and the stop is honest.
+  const v9 = buildMock("loop_v9", [
+    {
+      id: "v9_mw",
+      path: "backend/src/middlewares/auditTrail.js",
+      role: "middleware",
+      lines: 60,
+    },
+  ]);
+  const loop = await retrieveWithCoverageLoop(
+    v9.db as unknown as Db,
+    "loop_v9",
+    "How are widgetfield transactions enforced?",
+    { adaptive: false },
+  );
+  check(
+    loop.stoppedBecause === "no-candidates" && loop.passes.length === 1,
+    "an out-of-vocabulary role-only question drills instead of stopping vacuously",
+    `stoppedBecause=${loop.stoppedBecause} passes=${loop.passes.length}`,
+  );
+  const queries = loop.passes.flatMap((p) => p.queries);
+  check(
+    queries.includes("widgetfield") && queries.includes("transactions"),
+    "the drill runs the unmatched concepts' own vocabulary (bare tokens, no junk words)",
+    `queries=${JSON.stringify(queries)}`,
+  );
+  check(
+    loop.coverage.summary.unknown >= 2 &&
+      loop.coverage.concepts.every((c) => c.categories.length === 1),
+    "every empty-evidence plan concept evaluates under its own name as unknown",
+    `summary=${JSON.stringify(loop.coverage.summary)} categories=${JSON.stringify(loop.coverage.concepts.map((c) => c.categories.map((x) => x.category)))}`,
+  );
+  check(
+    loop.result.windows.length === 0 && loop.result.insufficientEvidence === true,
+    "an honestly-drilled but seed-less question still abstains with an empty package",
+    `windows=${loop.result.windows.length} insufficient=${loop.result.insufficientEvidence}`,
+  );
+  assertBudgetInvariants("v9-drill", loop.result);
+}
+
+// ---- 12. Adaptive coverage drills for unmatched plan concepts (Phase 1D, V1) ----
+{
+  // One matched concept (telemetry, all categories found) plus an unmatched
+  // sibling concept (widget) whose file text carries no concept vocabulary:
+  // the widget coverage starts partial, drives exactly one focused pass run
+  // with the bare concept token, and lands honestly (nothing new to add).
+  const unmatched = buildMock("loop_unmatched", [
+    {
+      id: "tel_collector",
+      path: "src/telemetry/collector.js",
+      role: "service",
+      lines: 80,
+      symbols: [["TelemetryCollector", 10, true]],
+      text: (n) => (n === 10 ? "class TelemetryCollector { track(event) { return event; } }" : null),
+    },
+    {
+      id: "tel_export",
+      path: "src/telemetry/exporter.js",
+      role: "service",
+      lines: 80,
+      symbols: [["exportTelemetry", 20, true]],
+      text: (n) => (n === 20 ? "export function exportTelemetry(event) { return fetch(event); }" : null),
+    },
+    {
+      id: "uw",
+      path: "src/panels/panel.js",
+      lines: 60,
+      symbols: [["WidgetPanel", 10, true]],
+    },
+  ]);
+  const loop = await retrieveWithCoverageLoop(
+    unmatched.db as unknown as Db,
+    "loop_unmatched",
+    "How does telemetry work with the widget?",
+  );
+  check(
+    loop.passes.length === 1 && loop.passes[0]!.queries[0] === "widget",
+    "the unmatched widget concept drives exactly one drill with the bare token",
+    `passes=${JSON.stringify(loop.passes.map((p) => p.queries))}`,
+  );
+  check(
+    loop.passes[0]!.categories.every((c) => c === "widget"),
+    "fixture precondition: only the widget category was missing when the pass ran",
+    `pass categories=${JSON.stringify(loop.passes[0]!.categories)}`,
+  );
+  check(
+    loop.stoppedBecause === "no-candidates",
+    "the partial-driven drill lands honestly when the focused pass adds nothing new",
+    `stoppedBecause=${loop.stoppedBecause}`,
+  );
+  const widgetEntry = loop.coverage.concepts.find((c) => c.token === "widget");
+  check(
+    widgetEntry !== undefined &&
+      widgetEntry.categories.length === 1 &&
+      widgetEntry.categories[0]!.category === "widget",
+    "the adaptive coverage keeps the unmatched widget concept under its own name",
+    `widget wrong: ${JSON.stringify(widgetEntry)}`,
+  );
+  assertBudgetInvariants("unmatched-drill", loop.result);
+}
+
+// ---- 13. Role-less concepts drill under their own name (Phase 1D, V7b) ----
+{
+  // A concept whose files never received indexed roles: pre-fix its
+  // coverage category was the literal "unclassified" and the drill query
+  // embedded that junk word. Now the concept drills its own display name.
+  const roleless = buildMock("loop_v7b", [
+    { id: "v7b_panel", path: "src/renders/panel.js", lines: 60, symbols: [["widgetPanel", 10, true]] },
+    { id: "v7b_dock", path: "src/renders/dock.js", lines: 60, symbols: [["widgetDock", 20, true]] },
+  ]);
+  const loop = await retrieveWithCoverageLoop(
+    roleless.db as unknown as Db,
+    "loop_v7b",
+    "How does widget rendering work?",
+  );
+  const conceptEntry = loop.coverage.concepts.find((c) =>
+    c.categories.some((cat) => cat.status !== "found"),
+  );
+  check(
+    conceptEntry !== undefined &&
+      conceptEntry.token !== "unclassified" &&
+      !loop.passes.flatMap((p) => p.queries).some((q) => q.includes("unclassified")),
+    "the role-less concept drills its own display name, never the 'unclassified' junk word",
+    `token=${conceptEntry?.token} queries=${JSON.stringify(loop.passes.flatMap((p) => p.queries))}`,
+  );
+  check(
+    conceptEntry !== undefined &&
+      loop.passes.length === 1 &&
+      loop.passes[0]!.queries[0] === conceptEntry.token,
+    "the focused query for a role-less concept is exactly its display name",
+    `queries=${JSON.stringify(loop.passes.flatMap((p) => p.queries))}`,
+  );
+  check(
+    loop.coverage.concepts
+      .flatMap((c) => c.categories)
+      .every((cat) => cat.category !== "unclassified"),
+    "no 'unclassified' category is ever emitted by the loop's coverage evaluation",
+    `categories=${JSON.stringify(loop.coverage.concepts.flatMap((c) => c.categories.map((cat) => cat.category)))}`,
+  );
+  assertBudgetInvariants("v7b-drill", loop.result);
+}
+
+// ---- 14. An explicitly-named file is the question's scope (Phase 1D, V10) ----
+{
+  // Manifest-shaped question naming its file outright: pass 0 serves the
+  // named file, and every leftover category (self-named oov tokens from the
+  // file path, planner/adaptive category pairs) stays honestly unknown
+  // instead of pulling unrelated repository structure into the package.
+  // Pre-V10 the self-named "package" pair drilled the whole packages/* tree
+  // (broad path noise), and category pairs added monorepo files the manifest
+  // question never asked about (QA-07 shape).
+  const anchor = buildMock("loop_anchor", [
+    {
+      id: "am_web",
+      path: "packages/web/package.json",
+      lines: 9,
+      text: (n) => [
+        '{',
+        '  "name": "@monorepo/web",',
+        '  "dependencies": {',
+        '    "next": "16.0.0",',
+        '    "react": "19.0.0"',
+        '  }',
+        '}',
+        "// line 8",
+        "// line 9",
+      ][n - 1] ?? null,
+    },
+    {
+      id: "am_ctrl",
+      path: "packages/api/src/users/users.controller.ts",
+      lines: 40,
+      role: "controller",
+      symbols: [["UsersController", 5, true]],
+    },
+    {
+      id: "am_svc",
+      path: "packages/api/src/users/users.service.ts",
+      lines: 40,
+      role: "service",
+      symbols: [["UsersService", 5, true]],
+    },
+  ]);
+  const question =
+    "What dependencies are declared by @monorepo/web in packages/web/package.json, and does it declare @monorepo/api?";
+  const loop = await retrieveWithCoverageLoop(anchor.db as unknown as Db, "loop_anchor", question);
+  const single = await retrieveGroundedContext(anchor.db as unknown as Db, "loop_anchor", question);
+  check(
+    loop.result.windows.some((w) => w.reason.startsWith("file explicitly named in query")),
+    "fixture precondition: pass 0 served a window for the file the question names",
+    `reasons: ${JSON.stringify(loop.result.windows.map((w) => w.reason))}`,
+  );
+  check(
+    loop.stoppedBecause === "explicit-anchor",
+    "the loop stops with explicit-anchor instead of drilling speculative categories",
+    `stoppedBecause=${loop.stoppedBecause} passes=${JSON.stringify(loop.passes)}`,
+  );
+  check(
+    loop.passes.length === 0,
+    "no focused pass runs for an explicitly-named question",
+    `passes: ${JSON.stringify(loop.passes)}`,
+  );
+  const anchorWindow = loop.result.windows.map((w) => `${w.fileId}:${w.startLine}-${w.endLine}`).join(",");
+  const singleWindow = single.windows.map((w) => `${w.fileId}:${w.startLine}-${w.endLine}`).join(",");
+  check(
+    anchorWindow === singleWindow && single.windows.length > 0,
+    "the anchored loop package is exactly the pass-0 package (no drift)",
+    `anchor=${anchorWindow} single=${singleWindow}`,
+  );
+  check(
+    loop.coverage.summary.unknown > 0,
+    "leftover categories remain honestly unknown in the coverage block",
+    `summary=${JSON.stringify(loop.coverage.summary)}`,
+  );
+  assertBudgetInvariants("anchor", loop.result);
+}
 
 // ---- Summary ----
 console.log("");

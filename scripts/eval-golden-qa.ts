@@ -7,6 +7,7 @@ import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { retrieveGroundedContext } from "../lib/ai/retrieval.ts";
+import { retrieveWithCoverageLoop } from "../lib/ai/retrieval-loop.ts";
 import { verifyCitations, type FileEvidence } from "../lib/ai/citations.ts";
 import { FIXTURES } from "./test-fixtures-shared.ts";
 import { createFixtureContext, type FixtureContext } from "./eval-fixture-adapter.ts";
@@ -155,6 +156,10 @@ interface EvalOptions {
   json?: boolean;
   markdown?: boolean;
   failOnWarn?: boolean;
+  /** Freeze pass-0 behavior: run the unchanged deterministic pipeline once
+   * per case (used to compare engine baselines; default is the production
+   * coverage loop). */
+  singlePass?: boolean;
 }
 
 function printHelp(): void {
@@ -167,6 +172,7 @@ Options:
   --json               Output machine-readable JSON evaluation report
   --markdown, --md     Output GitHub Flavored Markdown table and summary
   --fail-on-warn       Exit with non-zero code (1) if any diagnostic precision warnings occur
+  --single-pass        Run the frozen pass-0 pipeline instead of the coverage loop (baseline comparison)
   -h, --help           Show this help message
 `);
 }
@@ -192,6 +198,8 @@ function parseCliArgs(argv: string[]): EvalOptions {
       options.markdown = true;
     } else if (arg === "--fail-on-warn") {
       options.failOnWarn = true;
+    } else if (arg === "--single-pass") {
+      options.singlePass = true;
     } else {
       console.error(`Unknown argument: "${arg}". Use --help for usage.`);
       process.exit(1);
@@ -255,8 +263,13 @@ async function runEvaluation(): Promise<void> {
   for (const c of cases) {
     const ctx = getContext(c.fixture);
 
-    // 1. Run actual retrieval pipeline (production defaults & budget)
-    const retrievalResult = await retrieveGroundedContext(ctx.db, ctx.analysisId, c.question);
+    // 1. Run the production QA evidence path (Phase 1D, Batch D): the
+    // coverage loop owns retrieval — pass 0 is the unchanged deterministic
+    // pipeline, targeted passes add what coverage says the plan missed.
+    // --single-pass freezes the pass-0-only baseline for engine comparison.
+    const retrievalResult = options.singlePass
+      ? await retrieveGroundedContext(ctx.db, ctx.analysisId, c.question)
+      : (await retrieveWithCoverageLoop(ctx.db, ctx.analysisId, c.question)).result;
     const windows = retrievalResult.windows;
 
     // 2. Group and merge retrieved intervals by file

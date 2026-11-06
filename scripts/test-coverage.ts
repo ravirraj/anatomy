@@ -18,6 +18,7 @@ import {
 } from "../lib/ai/coverage.ts";
 import {
   buildConceptIndex,
+  matchConceptsForQuery,
   type ConceptIndex,
   type QuestionConceptMapping,
 } from "../lib/ai/concepts/index.ts";
@@ -338,9 +339,12 @@ function categoryEval(
   const sdkConcept = evaluation.concepts.find((c) => c.token === "sdk")!;
   check(
     plan.concepts.some((c) => c.token === "developer" && c.expectedEvidence.length === 0) &&
-      evaluation.concepts.find((c) => c.token === "developer")!.categories.length === 0,
-    "concepts without expected categories evaluate to nothing (vacuously covered)",
-    "developer concept should contribute no categories",
+      (() => {
+        const dev = evaluation.concepts.find((c) => c.token === "developer");
+        return dev !== undefined && dev.categories.length === 1 && dev.categories[0]!.category === "developer";
+      })(),
+    "concepts without expected categories evaluate under their own name (Phase 1D, V1)",
+    "developer concept should contribute exactly one self-named category",
   );
   const statuses = new Map(sdkConcept.categories.map((c) => [c.category, c.status] as const));
   check(
@@ -669,6 +673,251 @@ function categoryEval(
     cli?.status === "partial" && cli.evidence[0]?.signal === "filename-or-role",
     "the persisted legacy cli role keeps affiliating the cli category",
     `cli wrong: ${JSON.stringify(cli)}`,
+  );
+}
+
+// ---- 17. Self-named fallback coverage in the base evaluator (Phase 1D, V1) ----
+{
+  // An out-of-vocabulary concept the planner could not name categories for is
+  // no longer vacuously covered: it gets one self-named category ("zorb" of
+  // concept "zorb") affiliated with every retrieved window, judged by the
+  // same signal rules — so honest unknown, honest partial, and source-text
+  // found wherever the file lives.
+
+  // 17a. No window associates with the concept in any real way: unknown,
+  // with no evidence items (an unknown category never reports evidence).
+  {
+    const { evaluation } = evaluateScenario("How does the zorb flux work?", [
+      {
+        path: "src/utils/hex.js",
+        text: "export const toHex = (n) => n.toString(16);",
+        reason: `file path matches token "zorb"`,
+      },
+    ]);
+    const zorb = categoryEval(evaluation, "zorb", "zorb");
+    const flux = categoryEval(evaluation, "flux", "flux");
+    check(
+      zorb?.status === "unknown" && zorb.evidence.length === 0,
+      "self-named unknown needs no evidence items and is not proof of absence",
+      `zorb wrong: ${JSON.stringify(zorb)}`,
+    );
+    check(
+      flux !== undefined && flux.category === "flux",
+      "every empty-evidence plan concept contributes its self-named category",
+      `flux wrong: ${JSON.stringify(flux)}`,
+    );
+  }
+
+  // 17b. A symbol-name echo is partial, never found.
+  {
+    const { evaluation } = evaluateScenario("How does the zorb flux work?", [
+      {
+        path: "src/render/panel.js",
+        text: "const cache = {};",
+        reason: `symbol "zorbPanel" (function) matches token "zorb"`,
+      },
+    ]);
+    const zorb = categoryEval(evaluation, "zorb", "zorb");
+    check(
+      zorb?.status === "partial" && zorb.evidence.every((e) => e.signal === "symbol-name"),
+      "self-named concept stays partial on symbol-name evidence alone",
+      `zorb wrong: ${JSON.stringify(zorb)}`,
+    );
+  }
+
+  // 17c. Retrieved text that names the concept's own vocabulary is found,
+  // wherever the file lives (any-window affiliation).
+  {
+    const { evaluation } = evaluateScenario("How does the zorb flux work?", [
+      {
+        path: "src/anything/elsewhere.js",
+        text: "export const handleZorbEvent = (e) => e.zorb;",
+      },
+    ]);
+    const zorb = categoryEval(evaluation, "zorb", "zorb");
+    check(
+      zorb?.status === "found" && zorb.evidence.some((e) => e.signal === "source-text" && e.matchedVariant === "zorb"),
+      "self-named concept is found by concept source text from any retrieved file",
+      `zorb wrong: ${JSON.stringify(zorb)}`,
+    );
+  }
+}
+
+// ---- 18. Adaptive coverage keeps unmatched plan concepts (Phase 1D, V1) ----
+{
+  // When some token matches the repository's concept index, every OTHER plan
+  // concept must still appear: previously an unmatched concept vanished
+  // whenever one of its siblings DID match — no coverage line, no drill, no
+  // abstention signal. Each unmatched concept now gets one self-named
+  // category with any-window affiliation.
+  const index: ConceptIndex = buildConceptIndex({
+    analysisId: "adaptive_unmatched",
+    files: [
+      { id: "t1", path: "src/telemetry/emit.js", role: "service" },
+      { id: "t2", path: "src/telemetry/watch.js", role: "service" },
+    ],
+    symbols: [
+      { fileId: "t1", name: "emitTelemetry", kind: "function", exported: true },
+      { fileId: "t2", name: "watchTelemetry", kind: "function", exported: true },
+    ],
+    routes: [],
+    edges: [],
+  });
+  const query = "How does telemetry handle the widget quota?";
+  const plan: QuestionPlan = planQuestion(query, index);
+  const tokens = plan.concepts.map((c) => c.token);
+  const genericTokens = new Set(
+    (plan.unusedTokens ?? []).filter((u) => u.reason === "generic-verb").map((u) => u.word),
+  );
+  const mapping: QuestionConceptMapping = matchConceptsForQuery(tokens, genericTokens, index);
+  check(
+    mapping.topConcepts.length === 1 && mapping.matches.has("telemetry") && !mapping.matches.has("widget") && !mapping.matches.has("quota"),
+    "fixture precondition: telemetry matches the index, widget/quota do not",
+    `matches: ${JSON.stringify([...mapping.matches.keys()])} top: ${JSON.stringify(mapping.topConcepts.map((c) => c.displayName))}`,
+  );
+
+  const retrieved: RetrievedWindow[] = [
+    {
+      fileId: "t1",
+      path: "src/telemetry/emit.js",
+      contentHash: "hash_t1",
+      totalLines: 140,
+      startLine: 1,
+      endLine: 45,
+      score: 80,
+      text: "module.exports.emitTelemetry = (event) => exporters.push(event);",
+      reason: `symbol "emitTelemetry" (function) matches token "telemetry"`,
+    },
+    {
+      fileId: "w9",
+      path: "src/limits/widget.js",
+      contentHash: "hash_w9",
+      totalLines: 140,
+      startLine: 1,
+      endLine: 45,
+      score: 80,
+      text: "export const widgetState = { remaining: 9 };",
+      reason: `symbol "quotaMeter" (function) matches token "quota"`,
+    },
+  ];
+  const result: RetrievalResult = {
+    analysisId: "adaptive_unmatched",
+    query,
+    tokens,
+    plan,
+    windows: retrieved,
+    files: retrieved.map((w) => ({
+      fileId: w.fileId,
+      path: w.path,
+      contentHash: w.contentHash,
+      totalLines: w.totalLines,
+    })),
+    totalCharacters: retrieved.reduce((acc, w) => acc + w.text.length, 0),
+    insufficientEvidence: false,
+  };
+  const evaluation = evaluateCoverageAdaptive(plan, result, mapping, index);
+
+  const widgetConcept = evaluation.concepts.find((c) => c.token === "widget");
+  check(
+    widgetConcept !== undefined &&
+      widgetConcept.categories.length === 1 &&
+      widgetConcept.categories[0]!.category === "widget" &&
+      widgetConcept.categories[0]!.status === "found",
+    "an unmatched plan concept is still evaluated under its own name and found by its text",
+    `widget wrong: ${JSON.stringify(widgetConcept)}`,
+  );
+  const quotaConcept = evaluation.concepts.find((c) => c.token === "quota");
+  check(
+    quotaConcept !== undefined &&
+      quotaConcept.categories.length === 1 &&
+      quotaConcept.categories[0]!.status === "partial",
+    "an unmatched concept with only symbol-name association stays partial (quota)",
+    `quota wrong: ${JSON.stringify(quotaConcept)}`,
+  );
+  check(
+    evaluation.summary.found + evaluation.summary.partial + evaluation.summary.unknown ===
+      evaluation.concepts.reduce((acc, c) => acc + c.categories.length, 0),
+    "the adaptive summary still reconciles after the unmatched append",
+    `summary: ${JSON.stringify(evaluation.summary)}`,
+  );
+}
+
+// ---- 19. Role-less concepts affiliate under their own name (Phase 1D, V7b) ----
+{
+  // A concept whose files never received an indexed role previously surfaced
+  // as a junk "unclassified" layer (which the loop then drilled with the
+  // literal query word). It is now reported under the concept's own display
+  // name and affiliates by its own fileIds; "unclassified" disappears from
+  // the coverage evaluation entirely.
+  const index: ConceptIndex = buildConceptIndex({
+    analysisId: "roleless_test",
+    files: [
+      { id: "w1", path: "src/renders/panel.js", role: null },
+      { id: "w2", path: "src/renders/dock.js", role: null },
+    ],
+    symbols: [
+      { fileId: "w1", name: "widgetPanel", kind: "function", exported: true },
+      { fileId: "w2", name: "widgetDock", kind: "function", exported: true },
+    ],
+    routes: [],
+    edges: [],
+  });
+  const concept = index.concepts.find((c) => c.fileIds.includes("w1") && c.fileIds.includes("w2"));
+  check(
+    concept !== undefined && concept.discoveredCategories.length === 0,
+    "fixture precondition: the role-less concept carries no discovered categories",
+    `concepts: ${JSON.stringify(index.concepts.map((c) => [c.displayName, c.discoveredCategories]))}`,
+  );
+  const displayName = concept!.displayName;
+  const query = `How does ${displayName} render work?`;
+  const plan: QuestionPlan = planQuestion(query, index);
+  const mapping: QuestionConceptMapping = {
+    query,
+    matches: new Map(),
+    topConcepts: [concept!],
+  };
+  const retrieved: RetrievedWindow[] = [
+    {
+      fileId: "w1",
+      path: "src/renders/panel.js",
+      contentHash: "hash_w1",
+      totalLines: 40,
+      startLine: 1,
+      endLine: 40,
+      score: 80,
+      text: "export function widgetPanel() { return mount(); }",
+      reason: `symbol "widgetPanel" (function) matches token "${displayName}"`,
+    },
+  ];
+  const result: RetrievalResult = {
+    analysisId: "roleless_test",
+    query,
+    tokens: plan.concepts.map((c) => c.token),
+    plan,
+    windows: retrieved,
+    files: retrieved.map((w) => ({
+      fileId: w.fileId,
+      path: w.path,
+      contentHash: w.contentHash,
+      totalLines: w.totalLines,
+    })),
+    totalCharacters: retrieved.reduce((acc, w) => acc + w.text.length, 0),
+    insufficientEvidence: false,
+  };
+  const evaluation = evaluateCoverageAdaptive(plan, result, mapping, index);
+  const conceptEntry = evaluation.concepts.find((c) => c.token === displayName);
+  check(
+    conceptEntry !== undefined &&
+      conceptEntry.categories.length === 1 &&
+      conceptEntry.categories[0]!.category === displayName &&
+      conceptEntry.categories[0]!.status === "found",
+    "a role-less concept is evaluated under its own name and found via its own fileId",
+    `concept wrong: ${JSON.stringify(conceptEntry)}`,
+  );
+  check(
+    evaluation.concepts.flatMap((c) => c.categories).every((cat) => cat.category !== "unclassified"),
+    "the literal \"unclassified\" category never appears in coverage (Phase 1D, V7b)",
+    "unclassified leaked",
   );
 }
 

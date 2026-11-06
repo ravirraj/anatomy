@@ -2,8 +2,17 @@
 
 ## Status
 
-Proposed — design accepted in principle; implementation is tasked in
-[TODO.md](../../../TODO.md) §3.4. No code, schema or migration exists yet.
+Adopted — design accepted; Phase 1 (quarantine-first classification) and
+Phase 2 (content-addressed storage and verified reads) are implemented on
+branch `ravi`; implementation notes and the open questions the code settled
+are in
+[content-pipeline-integration.md](../content-pipeline-integration.md).
+Remaining phases (later remediation, object-storage questions) are still to
+come — see [TODO.md](../../../TODO.md) §3.4.
+
+*Earlier status, kept for the record: "Proposed — design accepted in
+principle; implementation is tasked in TODO.md §3.4. No code, schema or
+migration exists yet." (2026-10-30, before implementation.)*
 
 ## Date
 

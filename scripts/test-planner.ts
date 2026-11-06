@@ -236,6 +236,51 @@ const plans: Record<string, ReturnType<typeof planQuestion>> = {};
     !sameFamily("configuration", "config"),
     "sameFamily says yes",
   );
+  // One-sided tails must be true inflections, not loose 2-char suffixes:
+  // "auth" extended by the word-author suffix "or" is a different word.
+  check(
+    "user ~ users is an inflection family",
+    sameFamily("user", "users"),
+    "sameFamily says no",
+  );
+  check(
+    "authorize ~ authorized is an inflection family",
+    sameFamily("authorize", "authorized"),
+    "sameFamily says no",
+  );
+  check(
+    "database ~ databases is an inflection family",
+    sameFamily("database", "databases"),
+    "sameFamily says no",
+  );
+  check(
+    "checkout ~ checkouts is an inflection family",
+    sameFamily("checkout", "checkouts"),
+    "sameFamily says no",
+  );
+  check(
+    "auth is NOT in the author word family (extension 'or' is not an inflection)",
+    !sameFamily("auth", "author"),
+    "sameFamily says yes",
+  );
+  check(
+    "auth is NOT in the authorizer word family (extension 'orizer' is not an inflection)",
+    !sameFamily("auth", "authorizer"),
+    "sameFamily says yes",
+  );
+  check(
+    "gate is NOT in the gateway word family (extension 'way' is not an inflection)",
+    !sameFamily("gate", "gateway"),
+    "sameFamily says yes",
+  );
+  // Accepted trade-off of the strict one-sided rule: agentive 1-2 char tails
+  // ("scheduler" of "schedule") no longer family-match; exact and stem
+  // variants still cover those cases.
+  check(
+    "schedule is NOT in the scheduler word family (strict one-sided inflections only)",
+    !sameFamily("schedule", "scheduler"),
+    "sameFamily says yes",
+  );
   const authVariants = tokenVariants("authentication").map((v) => v.text);
   check(
     "authentication query variants no longer contain authorization",
