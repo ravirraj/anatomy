@@ -2,7 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getFileLines, type BackfillDeps } from "../content/read.ts";
 import type { Database } from "../supabase/database.types.ts";
 import { planQuestion, type QuestionPlan } from "./planner.ts";
-import { formatPackagingEvidence, loadPackagingEvidence } from "./packaging.ts";
+import { formatPackagingEvidence, loadPackagingEvidence, sanitizeEvidenceValue } from "./packaging.ts";
 import type { ManifestFile } from "./citations.ts";
 import { PRIMARY_MANIFEST_NAMES } from "../parser/screening.ts";
 import { isCodeFile } from "../parser/walk.ts";
@@ -78,6 +78,24 @@ function mapSymbolCandidateRow(row: Record<string, unknown>, path: string): NonN
 }
 
 /**
+ * The documentation slice of one `[API surface]` row (Phase 2, B4 — audit
+ * finding F4). Repository text — a JSDoc summary — is the one free-text slot
+ * the appendix renders, so it obeys the same structural rule as every
+ * packaging row, via the same shared sanitizer (`sanitizeEvidenceValue`):
+ * one line, no envelope tokens, no forged window header, a bounded length cut
+ * with a visible ellipsis. First line only, as the appendix has always read
+ * the summary; a first line that is empty or whitespace-only contributes no
+ * documentation at all. Signature, name, kind and export kind are untouched:
+ * they leave the parser as identifiers, enums or compiler type text, and a
+ * nested-generic type can legitimately contain `>>>`.
+ */
+function documentationSuffix(documentation: string | undefined): string {
+  if (!documentation) return "";
+  const firstLine = sanitizeEvidenceValue(documentation.split("\n")[0]!);
+  return firstLine ? ` — ${firstLine}` : "";
+}
+
+/**
  * The `[API surface]` appendix a prompt attaches under a file's line-1
  * window: exported symbols of that file. Shared by the post-serving block,
  * the serving-phase budget checks (which must reserve the same text), and
@@ -85,11 +103,16 @@ function mapSymbolCandidateRow(row: Record<string, unknown>, path: string): NonN
  * final prompt renders.
  */
 export function formatApiSurfaceFor(syms: NonNullable<RetrievalResult["symbols"]>): string {
-  const api = syms
+  // Row order is fixed by the same (path, line, name) sort the final prompt
+  // uses to group symbols, so the helper's output is byte-stable whatever
+  // order its caller came by the rows in — and the accounting mirror that
+  // measures this text always reserves the exact rendered bytes.
+  const api = [...syms]
+    .sort((a, b) => a.path.localeCompare(b.path) || a.line - b.line || a.name.localeCompare(b.name))
     .filter((s) => s.exported)
     .map((s) => {
       const sig = s.signature ?? s.name;
-      const doc = s.documentation ? ` — ${s.documentation.split("\n")[0]}` : "";
+      const doc = documentationSuffix(s.documentation);
       return `- ${s.name} (${s.kind})${s.exportKind && s.exportKind !== "named" ? ` [${s.exportKind}]` : ""}: ${sig}${doc}`;
     })
     .join("\n");
@@ -1714,8 +1737,12 @@ export async function retrieveGroundedContext(
   const servedContext = new Map<string, { candidate: TargetWindow; candidateText: string }>();
   const windowKey = (w: { fileId: string; startLine: number; endLine: number }): string =>
     `${w.fileId}|${w.startLine}|${w.endLine}`;
+  // The header embeds the full canonical content hash (no truncation): two
+  // repositories cannot share window identity by grinding an 8-hex prefix
+  // (Phase 2, B2). Keep this template byte-identical to the render in
+  // formatRetrievedContext below and to windowHeaderCost in retrieval-loop.ts.
   const headerCostOf = (path: string, contentHash: string, startLine: number, endLine: number): number =>
-    `--- File: ${path} (lines ${startLine}-${endLine}) [hash: ${contentHash.slice(0, 8)}] ---\n`.length + 2;
+    `--- File: ${path} (lines ${startLine}-${endLine}) [hash: ${contentHash}] ---\n`.length + 2;
   const windowCostOf = (
     path: string,
     contentHash: string,
@@ -2228,7 +2255,7 @@ export async function retrieveGroundedContext(
     (totalEvidenceChars > limits.maxCharacters || totalEvidenceTokens > limits.maxTokens)
   ) {
     const dropped = retrievedWindows.pop()!;
-    const headerCost = `--- File: ${dropped.path} (lines ${dropped.startLine}-${dropped.endLine}) [hash: ${dropped.contentHash.slice(0, 8)}] ---\n`.length + 2;
+    const headerCost = headerCostOf(dropped.path, dropped.contentHash, dropped.startLine, dropped.endLine);
     const droppedChars = dropped.text.length + headerCost;
     const droppedTokens = estimateCodeTokens(dropped.text) + estimateProseTokens(dropped.path) + 15;
     totalEvidenceChars -= droppedChars;
@@ -2380,19 +2407,14 @@ export function formatRetrievedContext(result: RetrievalResult): string {
   }
 
   for (const win of result.windows) {
-    let section = `--- File: ${win.path} (lines ${win.startLine}-${win.endLine}) [hash: ${win.contentHash.slice(0, 8)}] ---\n${win.text}`;
+    let section = `--- File: ${win.path} (lines ${win.startLine}-${win.endLine}) [hash: ${win.contentHash}] ---\n${win.text}`;
     const syms = symbolsByFile.get(win.path);
     if (syms && syms.length > 0 && win.startLine === 1) {
-      // Append the API surface once, on the first window of the file.
-      const api = syms
-        .filter((s) => s.exported)
-        .map((s) => {
-          const sig = s.signature ?? s.name;
-          const doc = s.documentation ? ` — ${s.documentation.split("\n")[0]}` : "";
-          return `- ${s.name} (${s.kind})${s.exportKind && s.exportKind !== "named" ? ` [${s.exportKind}]` : ""}: ${sig}${doc}`;
-        })
-        .join("\n");
-      if (api) section += `\n\n[API surface]\n${api}`;
+      // Append the API surface once, on the first window of the file. The
+      // text delegates to `formatApiSurfaceFor`, the same authority every
+      // accounting mirror (serving-phase budget check, merge ledger) uses,
+      // so what is rendered is exactly what was reserved.
+      section += formatApiSurfaceFor(syms);
     }
     sections.push(section);
   }

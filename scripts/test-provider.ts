@@ -521,8 +521,11 @@ scenario = "normal";
   const { cache, texts } = freshCache();
   const qInput = {
     question: "Where is the helper?",
-    contextText: "--- File: index.ts (lines 1-10) [hash: h1] ---\nexport const h = 1;\n",
-    files: [{ path: "index.ts", contentHash: "h1", totalLines: 10, windows: [{ startLine: 1, endLine: 10 }] }],
+    contextText:
+      "--- File: index.ts (lines 1-10) [hash: a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2] ---\nexport const h = 1;\n",
+    files: [
+      { path: "index.ts", contentHash: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", totalLines: 10, windows: [{ startLine: 1, endLine: 10 }] },
+    ],
   };
   const out = await attempt(() => answerQuestion(qInput, { cache }));
   if (
@@ -543,8 +546,11 @@ scenario = "normal";
   const { cache, texts } = freshCache();
   const qInput = {
     question: "Where is the helper?",
-    contextText: "--- File: index.ts (lines 1-10) [hash: h1] ---\nexport const h = 1;\n",
-    files: [{ path: "index.ts", contentHash: "h1", totalLines: 10, windows: [{ startLine: 1, endLine: 10 }] }],
+    contextText:
+      "--- File: index.ts (lines 1-10) [hash: a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2] ---\nexport const h = 1;\n",
+    files: [
+      { path: "index.ts", contentHash: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", totalLines: 10, windows: [{ startLine: 1, endLine: 10 }] },
+    ],
   };
   const out = await attempt(() => answerQuestion(qInput, { cache }));
   if (
@@ -564,8 +570,11 @@ scenario = "normal";
   const { cache, texts } = freshCache();
   const qInput = {
     question: "Where is the helper?",
-    contextText: "--- File: index.ts (lines 1-10) [hash: h1] ---\nexport const h = 1;\n",
-    files: [{ path: "index.ts", contentHash: "h1", totalLines: 10, windows: [{ startLine: 1, endLine: 10 }] }],
+    contextText:
+      "--- File: index.ts (lines 1-10) [hash: a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2] ---\nexport const h = 1;\n",
+    files: [
+      { path: "index.ts", contentHash: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", totalLines: 10, windows: [{ startLine: 1, endLine: 10 }] },
+    ],
   };
   const ans = await answerQuestion(qInput, { cache });
   if (

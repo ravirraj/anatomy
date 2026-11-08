@@ -629,8 +629,8 @@ again is instant even if the browser forgot.
 ## 11. Current state of the retrieval and Q&A path (as implemented)
 
 > This section records the *implemented* state of the repository-wide Q&A
-> path as of **2026-11-04**, verified on branch `ravi` at `c1ac975` plus
-> recorded uncommitted work (see [PROJECT_STATE.md](PROJECT_STATE.md)). The
+> path, last verified on branch `ravi` at `e78ee56` (2026-11-06); see
+> [PROJECT_STATE.md](PROJECT_STATE.md). The
 > rest of this document describes the system paragraphs above it; the only
 > future-tense text in this section is §11.5. Deep design narrative lives in
 > [ai-system.md](ai-system.md) and [coverage-audit.md](coverage-audit.md);
@@ -698,9 +698,9 @@ taxonomy keep the legacy values (`route`, `frontend`, `cli`) working.
 
 Development is inside delivery **Phase 1** (retrieval & answer reliability):
 subphases 1A/1B are committed (`c1ac975`), subphase 1C (role-taxonomy audit
-fixes F1–F4) is implemented and verified but uncommitted, and subphase 1D is
-the next approved task. Current status and evidence:
-[PROJECT_STATE.md](PROJECT_STATE.md).
+fixes F1–F4) and subphase 1D (Q&A reliability batches) are committed and
+pushed (1C at `7262316`, 1D closure at `e78ee56`, both on `origin/ravi`).
+Current status and evidence: [PROJECT_STATE.md](PROJECT_STATE.md).
 
 ### 11.5 Long-term multi-language direction (NOT implemented — future tense)
 

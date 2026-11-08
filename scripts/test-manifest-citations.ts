@@ -261,7 +261,10 @@ async function run() {
       },
     };
 
-    const pkgHash = "hash_pkg_verified";
+    // A canonical content hash: the answer seam now refuses evidence whose
+    // hash is missing or not a full sha256 (Phase 2, B2), so fixtures model
+    // what the parser actually stores.
+    const pkgHash = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
     const qInput: QuestionInput = {
       question: "What dependencies are in package.json?",
       contextText: "--- File: package.json (lines 1-30) [hash: hash_pkg] ---\n{\n  \"dependencies\": {\"express\": \"4.18.2\"}\n}",

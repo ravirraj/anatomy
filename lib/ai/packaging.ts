@@ -82,6 +82,74 @@ function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
 }
 
+/**
+ * Longest raw repository-controlled value one packaging row may carry. Real
+ * package names, versions, globs and paths sit far below this; the cap is a
+ * budget backstop for pathological fields (and documented here so nothing is
+ * dropped silently), with every cut marked by a trailing ellipsis.
+ */
+const MAX_VALUE_CHARS = 120;
+
+/**
+ * One serialization rule for repository-controlled values rendered next to
+ * app-owned prompt structure: the packaging blocks' rows (Manifests,
+ * Dependencies, Configuration references, Entry points) and the
+ * `[API surface]` appendix's per-symbol documentation slice. Phase 2,
+ * B3 — audit findings F2/F3 — and B4 (F4) route both channels through this
+ * single authority, so no second, subtly different transform can exist.
+ *
+ * The blocks' structural currency is line breaks and three-character
+ * sequences: the answer envelope opens and closes on `<<<` / `>>>`, window
+ * headers open on `--- File:`, and one row is one line. Nothing a manifest or
+ * package.json says may mint any of those. Repo-controlled strings are the
+ * parse products of arbitrary JSON/TOML/YAML values, so "name" here includes
+ * strings containing newlines, null bytes, half a header or a whole
+ * instruction paragraph.
+ *
+ * The transform is deliberately:
+ * - **line-flat** — `\r\n`, stray `\r` and `\n` become a space, plus tab /
+ *   vertical tab / form feed; a value can never start another prompt line,
+ *   forge a row or claim a structural prefix (`---`, `workspaces:`-style
+ *   labels are app-rendered literals, not value text);
+ * - **token-free** — every `>>>` and `<<<` inside the value is removed and
+ *   any run of three or more hyphens collapses to two, so no rendered line
+ *   can equal or open with the envelope tokens or a window header;
+ * - **control-strip** — remaining C0/C1 control characters (null bytes among
+ *   them) are dropped outright: they have no text semantics for the model;
+ * - **capped, with a reason** — over-length values are cut at a code-point
+ *   boundary (no lone surrogate) to `MAX_VALUE_CHARS` including one
+ *   ellipsis, so honest metadata stays readable and a cut is visible rather
+ *   than silent; normal values untouched.
+ *
+ * Legitimate content survives verbatim otherwise: unicode, ordinary spaces,
+ * version ranges, globs. The transform is deterministic and idempotent, and
+ * every producer applies it before the text is measured, so the rendered
+ * packaging rows and appendix lines, the evidence budget's character/token
+ * accounting and the message the model sees all describe the same
+ * already-sanitized text.
+ */
+export function sanitizeEvidenceValue(raw: string): string {
+  let safe = raw
+    .replace(/\r\n?/g, " ")
+    .replace(/\n/g, " ")
+    .replace(/[\t\v\f]/g, " ")
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "")
+    .replace(/>>>/g, " ")
+    .replace(/<<</g, " ")
+    .replace(/-{3,}/g, "--")
+    .trim();
+  if (safe.length > MAX_VALUE_CHARS) {
+    // Cut just short of the cap, back up when the cut would split a
+    // surrogate pair, and mark the loss with one ellipsis. A second pass
+    // sees at most the cap and changes nothing: idempotent.
+    let cut = MAX_VALUE_CHARS - 1;
+    const last = safe.charCodeAt(cut - 1);
+    if (last !== undefined && last >= 0xd800 && last <= 0xdbff) cut -= 1;
+    safe = `${safe.slice(0, cut)}\u2026`;
+  }
+  return safe;
+}
+
 /** A JSONB scripts column read back as { name, command } pairs. */
 function scriptList(value: unknown): { name: string; command: string }[] {
   if (!Array.isArray(value)) return [];
@@ -189,12 +257,15 @@ export async function loadPackagingEvidence(
       });
     }
     const lines = ranked.map(({ m }) => {
-      const parts = [`- ${m.path} (${m.ecosystem}${m.name ? `, declares "${m.name}"` : ""})`];
-      const workspaces = stringArray(m.workspaces);
+      const name = m.name ? sanitizeEvidenceValue(m.name) : "";
+      const parts = [
+        `- ${sanitizeEvidenceValue(m.path)} (${sanitizeEvidenceValue(m.ecosystem)}${name ? `, declares "${name}"` : ""})`,
+      ];
+      const workspaces = stringArray(m.workspaces).map(sanitizeEvidenceValue);
       const scripts = scriptList(m.scripts);
-      const problems = stringArray(m.problems);
+      const problems = stringArray(m.problems).map(sanitizeEvidenceValue);
       if (workspaces.length > 0) parts.push(`workspaces: ${workspaces.join(", ")}`);
-      if (scripts.length > 0) parts.push(`commands: ${scripts.map((s) => s.name).join(", ")}`);
+      if (scripts.length > 0) parts.push(`commands: ${scripts.map((s) => sanitizeEvidenceValue(s.name)).join(", ")}`);
       if (problems.length > 0) parts.push(`COULD NOT READ: ${problems.join("; ")}`);
       return parts.join("; ");
     });
@@ -215,12 +286,12 @@ export async function loadPackagingEvidence(
       .sort((a, b) => b.score - a.score || b.d.imported_by - a.d.imported_by || a.d.name.localeCompare(b.d.name))
       .slice(0, MAX_DEPENDENCIES);
     const lines = ranked.map(({ d }) => {
-      const version = d.version === null ? "no version declared" : d.version;
+      const version = d.version === null ? "no version declared" : sanitizeEvidenceValue(d.version);
       const reach =
         d.imported_by > 0
           ? `imported by ${d.imported_by} indexed file${d.imported_by === 1 ? "" : "s"}`
           : "not imported by any indexed file (this does not prove it is unused)";
-      return `- ${d.name} ${version} [${d.kind}] declared in ${d.manifest_path}; ${reach}`;
+      return `- ${sanitizeEvidenceValue(d.name)} ${version} [${sanitizeEvidenceValue(d.kind)}] declared in ${sanitizeEvidenceValue(d.manifest_path)}; ${reach}`;
     });
     blocks.push(
       `[Dependencies — declared in manifests, not verified as installed]\n${lines.join("\n")}\n` +
@@ -237,9 +308,10 @@ export async function loadPackagingEvidence(
       .sort((a, b) => b.score - a.score || a.c.variable.localeCompare(b.c.variable) || a.c.file_path.localeCompare(b.c.file_path))
       .slice(0, MAX_CONFIG);
     const lines = ranked.map(({ c }) => {
-      const where = c.line > 0 ? `${c.file_path}#L${c.line}` : c.file_path;
-      const detail = c.detail ? ` (${c.detail})` : "";
-      return `- ${c.variable} — ${c.kind}${detail} at ${where}`;
+      const where =
+        c.line > 0 ? `${sanitizeEvidenceValue(c.file_path)}#L${c.line}` : sanitizeEvidenceValue(c.file_path);
+      const detail = c.detail ? ` (${sanitizeEvidenceValue(c.detail)})` : "";
+      return `- ${sanitizeEvidenceValue(c.variable)} — ${sanitizeEvidenceValue(c.kind)}${detail} at ${where}`;
     });
     blocks.push(
       `[Configuration references — variable NAMES only, never values]\n${lines.join("\n")}\n` +
@@ -271,9 +343,12 @@ export async function loadPackagingEvidence(
         : e.unresolved_reason === "not-indexed"
           ? "exists but is not code this parser indexes"
           : "nothing is at that path";
-      const detail = e.detail ? ` (${e.detail})` : "";
-      const via = Array.isArray(e.via) && e.via.length > 0 ? `; re-exports ${e.via.join(", ")}` : "";
-      return `- ${e.path} — ${e.kind} by ${e.source}${detail}; ${state}${via}`;
+      const detail = e.detail ? ` (${sanitizeEvidenceValue(e.detail)})` : "";
+      const via =
+        Array.isArray(e.via) && e.via.length > 0
+          ? `; re-exports ${e.via.filter((v): v is string => typeof v === "string").map(sanitizeEvidenceValue).join(", ")}`
+          : "";
+      return `- ${sanitizeEvidenceValue(e.path)} — ${sanitizeEvidenceValue(e.kind)} by ${sanitizeEvidenceValue(e.source)}${detail}; ${state}${via}`;
     });
     blocks.push(
       `[Entry points — declared and inferred, kept distinct]\n${lines.join("\n")}\n` +

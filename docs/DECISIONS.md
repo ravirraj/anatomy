@@ -12,8 +12,9 @@ decision).
 
 Recorded 2026-11-04; evidence pointers verified against the repository on
 that date. Updated 2026-11-06 (Phase 1D closure): D8 (glue-term breadth cap)
-and D9 (explicit-anchor stop) added; P5 refreshed to record the 1D
-implemented-but-uncommitted state.
+and D9 (explicit-anchor stop) added. Updated later on 2026-11-06: P5 and the
+1C/1D status rows corrected to the verified committed-and-pushed state
+(`7262316`, `e78ee56` at `origin/ravi`).
 
 ---
 
@@ -68,7 +69,7 @@ implemented-but-uncommitted state.
   `scripts/test-retrieval-loop.ts` are the price of that subtlety.
 
 ### D6. Retrieval must match the parser's role taxonomy, legacy values included
-- **Code (Phase 1C, verified uncommitted):** `ROLE_HINTS` one conservative
+- **Code (Phase 1C, committed at `7262316`):** `ROLE_HINTS` one conservative
   entry per producible role; `FRONTEND_ROLES` decay; entry seeding recognises
   modern routable roles; `CATEGORY_AFFILIATION` and `CATEGORY_QUERY_WORDS`
   aligned, adaptive categories are raw role ids.
@@ -141,7 +142,7 @@ coverage-loop drills once it is served (Phase 1D, V10)
 | P2 | **Non-literal import specifiers** — how computed/template specifiers are classified. | [TODO.md](../TODO.md) §2.3 |
 | P3 | **Licence** — the repository is not licensed for reuse yet. | [TODO.md](../TODO.md) §2.9 |
 | P4 | **Object storage swap** for content payloads (and large-file handling). | [file-content-storage.md](architecture/file-content-storage.md), ADR-0001 |
-| P5 | **Phase 1D scope and follow-on answer-quality questions** — Phase 1D is implemented and verified 2026-11-06 (batches B, E, C, A, D, G, F) but uncommitted; commit/push still needs explicit user approval. Open follow-ups: whether to schedule a fresh full answer-quality run (the scorer's fact gaps were fixed after the first baseline run), and a QA-07 retry to replace its final state (the original run's FAIL was pure provider 429 quota exhaustion). | [PROJECT_STATE.md](PROJECT_STATE.md), [phase-1d-qa-audit.md](phase-1d-qa-audit.md) |
+| P5 | **Phase 1D scope and follow-on answer-quality questions** — Phase 1D is implemented and verified 2026-11-06 (batches B, E, C, A, D, G, F), committed and pushed (`e78ee56` at `origin/ravi`; approval for that commit/push was recorded at closure). Open follow-ups: whether to schedule a fresh full answer-quality run (the scorer's fact gaps were fixed after the first baseline run), and a QA-07 retry to replace its final state (the original run's FAIL was pure provider 429 quota exhaustion). | [PROJECT_STATE.md](PROJECT_STATE.md), [phase-1d-qa-audit.md](phase-1d-qa-audit.md) |
 | P6 | **Where the pipeline runs** for large repositories. | [architecture.md](architecture.md) §10.3 |
 | P7 | **Prompt-injection defence design** for retrieved repository content. | [ROADMAP.md](ROADMAP.md) Phase 2 |
 

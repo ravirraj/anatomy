@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { isModelRole, MODEL_ROLES, type ModelRole } from "../roles.ts";
 import { traceable } from "langsmith/traceable";
+import { isContentHash, IntegrityError } from "../content/store.ts";
 import { ai, MODELS, openAIOnly, traceConfig } from "./client.ts";
 import { verifyCitations, CitationError, extractCitations, type FileEvidence, type ManifestFile, type ParsedCitation } from "./citations.ts";
 import {
@@ -190,8 +191,19 @@ export async function answerQuestion(
   },
 ): Promise<QuestionAnswer> {
   const model = MODELS.question;
+  // Evidence identity is the hash each file's window header carries into the
+  // rendered message and therefore into the cache key. A missing or
+  // non-canonical hash would be rendered as it stands and keyed as it stands,
+  // so a malformed identity could be served — fail closed instead: the
+  // parser always writes sha256, so anything else is corrupt or tampered
+  // evidence, not a valid basis for an answer (Phase 2, B2).
   const allowedEvidence = new Map<string, FileEvidence>();
   for (const f of input.files) {
+    if (typeof f.contentHash !== "string" || !isContentHash(f.contentHash)) {
+      throw new IntegrityError(
+        `Evidence for "${f.path}" has a missing or malformed content hash; refusing to answer (full sha256 required)`,
+      );
+    }
     allowedEvidence.set(f.path, {
       lines: f.totalLines,
       contentHash: f.contentHash,

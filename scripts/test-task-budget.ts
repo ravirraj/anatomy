@@ -495,7 +495,7 @@ console.log("\n=== 4. Exact Output Reservations Sent to Provider ===");
       {
         question: "How does helper work?",
         contextText: "--- File: src/helper.ts (lines 1-1)\nexport function help() { return 42; }\n",
-        files: [{ path: "src/helper.ts", contentHash: "h1", totalLines: 1, windows: [{ startLine: 1, endLine: 1 }] }],
+        files: [{ path: "src/helper.ts", contentHash: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", totalLines: 1, windows: [{ startLine: 1, endLine: 1 }] }],
       },
       { cache },
     );
@@ -516,7 +516,7 @@ console.log("\n=== 4. Exact Output Reservations Sent to Provider ===");
       {
         question: "How does helper work under override?",
         contextText: "--- File: src/helper.ts (lines 1-1)\nexport function help() { return 42; }\n",
-        files: [{ path: "src/helper.ts", contentHash: "h1", totalLines: 1, windows: [{ startLine: 1, endLine: 1 }] }],
+        files: [{ path: "src/helper.ts", contentHash: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", totalLines: 1, windows: [{ startLine: 1, endLine: 1 }] }],
       },
       { cache },
     );
@@ -595,7 +595,7 @@ console.log("\n=== 5. Upstream Context Length Exceeded: BudgetOverflowError Conv
         {
           question: "How does it work?",
           contextText: "--- File: src/helper.ts (lines 1-20)\nexport function help() { return 42; }\n",
-          files: [{ path: "src/helper.ts", contentHash: "h1", totalLines: 20, windows: [{ startLine: 1, endLine: 20 }] }],
+          files: [{ path: "src/helper.ts", contentHash: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", totalLines: 20, windows: [{ startLine: 1, endLine: 20 }] }],
         },
         { cache },
       );
@@ -850,7 +850,7 @@ console.log("\n=== 6. Telemetry Isolation & Secret Scrubbing ===");
         {
           question: "Query with partial usage",
           contextText: "--- File: src/helper.ts (lines 1-1)\nexport function help() { return 42; }\n",
-          files: [{ path: "src/helper.ts", contentHash: "help", totalLines: 1, windows: [{ startLine: 1, endLine: 1 }] }],
+          files: [{ path: "src/helper.ts", contentHash: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", totalLines: 1, windows: [{ startLine: 1, endLine: 1 }] }],
         },
         { cache },
       );
@@ -881,7 +881,7 @@ console.log("\n=== 6. Telemetry Isolation & Secret Scrubbing ===");
     const input = {
       question: "Cached query",
       contextText: "--- File: src/helper.ts (lines 1-1)\nexport function help() { return 42; }\n",
-      files: [{ path: "src/helper.ts", contentHash: "help", totalLines: 1, windows: [{ startLine: 1, endLine: 1 }] }],
+      files: [{ path: "src/helper.ts", contentHash: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", totalLines: 1, windows: [{ startLine: 1, endLine: 1 }] }],
     };
 
     // First call: fresh

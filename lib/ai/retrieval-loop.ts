@@ -198,15 +198,17 @@ function windowOverlaps(a: RetrievedWindow, b: RetrievedWindow): boolean {
 
 /**
  * The exact per-window serving costs the base pipeline enforces
- * (lib/ai/retrieval.ts `windowCostOf`): the rendered package charges every
- * window its header line plus its code text, in characters, and its code
- * tokens plus the header's prose tokens. Iterative merging must respect the
- * same figures so it can never drift past the budget the base path enforced.
+ * (lib/ai/retrieval.ts `headerCostOf`): the rendered package charges
+ * every window its header line plus its code text, in characters, and its
+ * code tokens plus the header's prose tokens. Iterative merging must respect
+ * the same figures so it can never drift past the budget the base path
+ * enforced. The header embeds the full content hash — the template must stay
+ * byte-identical to the base pipeline's (Phase 2, B2).
  */
 const windowHeaderCost = (
   w: { path: string; contentHash: string; startLine: number; endLine: number },
 ): number =>
-  `--- File: ${w.path} (lines ${w.startLine}-${w.endLine}) [hash: ${w.contentHash.slice(0, 8)}] ---\n`.length + 2;
+  `--- File: ${w.path} (lines ${w.startLine}-${w.endLine}) [hash: ${w.contentHash}] ---\n`.length + 2;
 
 const windowServingCost = (
   w: { path: string; contentHash: string; startLine: number; endLine: number; text: string },

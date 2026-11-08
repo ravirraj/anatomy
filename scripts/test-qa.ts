@@ -6,10 +6,16 @@ import { answerQuestion, cacheKey, type Cache } from "../lib/ai/tasks.ts";
 import { CitationError } from "../lib/ai/citations.ts";
 import { QUESTION_SYSTEM, questionMessage, type QuestionInput } from "../lib/ai/prompts.ts";
 import { loadPackagingEvidence } from "../lib/ai/packaging.ts";
+import { formatRetrievedContext, type RetrievalResult, type RetrievedWindow } from "../lib/ai/retrieval.ts";
+import { IntegrityError } from "../lib/content/store.ts";
 
 const results: string[] = [];
 const pass = (m: string) => results.push(`ok    ${m}`);
 const fail = (m: string) => results.push(`FAIL  ${m}`);
+const check = (cond: boolean, m: string, detail?: unknown) => {
+  if (cond) pass(m);
+  else fail(detail === undefined ? m : `${m} :: ${typeof detail === "string" ? detail : JSON.stringify(detail)}`);
+};
 
 async function run() {
   const store = new Map<string, string>();
@@ -1160,6 +1166,176 @@ Database client initialization is in \`lib/db/client.ts#L5-L25\`.
         fail("production data flow allowed foreign manifest citation!");
       }
     }
+  }
+
+  // ---- Phase 2, B2: full-hash window identity (audit finding F6) ----
+  // The old 8-hex header was grindable: regenerating content beyond the
+  // served window to keep an 8-hex prefix left a stale answer cacheable as
+  // if nothing changed. The header now embeds the full canonical sha256 and
+  // the answer seam refuses evidence whose hash is missing or non-canonical.
+  {
+    // Two full hashes sharing their first eight characters. No cryptographic
+    // collision is hunted: the grind worked at the prefix, so a same-prefix
+    // pair is exactly the realistic threat-model fixture.
+    const sharedPrefix = "a1b2c3d4";
+    const hashBeforeEdit = sharedPrefix + "10".repeat(8) + "0".repeat(40);
+    const hashAfterEdit = sharedPrefix + "20".repeat(8) + "2".repeat(40);
+    const sessionPath = "lib/auth/session.ts";
+
+    const mkWindow = (contentHash: string): RetrievedWindow => ({
+      fileId: "f1",
+      path: sessionPath,
+      contentHash,
+      totalLines: 120,
+      startLine: 10,
+      endLine: 40,
+      text: "function createSession() { return db.query(); }",
+      score: 1,
+      reason: "B2 identity fixture",
+    });
+    const mockPlan = {
+      query: "authentication",
+      isOnboarding: false,
+      intent: "explain-architecture" as const,
+      intentReason: "B2 fixture",
+      concepts: [],
+      unusedTokens: [],
+      expectedEvidence: [],
+      isAnswerable: true,
+    };
+    const mkResult = (contentHash: string): RetrievalResult => ({
+      analysisId: "analysis-b2",
+      query: "authentication",
+      tokens: ["auth"],
+      plan: mockPlan,
+      windows: [mkWindow(contentHash)],
+      files: [
+        { fileId: "f1", path: sessionPath, contentHash, totalLines: 120, windows: [{ startLine: 10, endLine: 40 }] },
+      ],
+      totalCharacters: 0,
+      totalTokens: 0,
+      renderedCharacters: 0,
+      insufficientEvidence: false,
+    });
+    const mkInput = (hash: string, contextText: string): QuestionInput => ({
+      question: "How does authentication establish a session?",
+      contextText,
+      files: [{ path: sessionPath, contentHash: hash, totalLines: 120, windows: [{ startLine: 10, endLine: 40 }] }],
+    });
+
+    // 1. Producer: the header carries the full hash and never the 8-hex
+    //    prefix — neither the new one nor any shorter grain.
+    const rendered = formatRetrievedContext(mkResult(hashBeforeEdit));
+    check(
+      rendered.includes(`[hash: ${hashBeforeEdit}]`),
+      "window headers embed the full canonical content hash",
+      rendered,
+    );
+    check(
+      !rendered.includes("[hash: a1b2c3d4]") && !rendered.includes(`[hash: ${hashBeforeEdit.slice(0, 8)}]`),
+      "window headers no longer render an 8-hex hash prefix",
+      rendered,
+    );
+
+    // 5 (identity form). An old abbreviated-style render is simply a
+    // different identity: it can neither be served as, nor collide with, the
+    // current full-hash identity.
+    const inputOldStyle = mkInput(hashBeforeEdit, wrap("lines 10-40"));
+    const inputNewStyle = mkInput(hashBeforeEdit, rendered);
+    check(
+      cacheKey("answer-question", "m", { system: QUESTION_SYSTEM, body: questionMessage(inputOldStyle) }) !==
+        cacheKey("answer-question", "m", { system: QUESTION_SYSTEM, body: questionMessage(inputNewStyle) }),
+      "a pre-B2 abbreviated-header render is a distinct identity from the full-hash render",
+    );
+
+    // 2 + 3 + 4. Behavioural: two windows whose full hashes differ only
+    // beyond the shared 8-hex prefix are different evidence — the same
+    // served window bounds answer from a different identity (out-of-window
+    // content changed the file hash), so the stale answer cannot be reused.
+    const {
+      store: b2Store,
+      counts: b2Counts,
+      cache: b2Cache,
+    } = localCache();
+    const b2Complete = async () => {
+      b2Counts.model++;
+      return sessionAnswer;
+    };
+    const answerBefore = await answerQuestion(mkInput(hashBeforeEdit, rendered), { cache: b2Cache, complete: b2Complete });
+    check(answerBefore.cached === false, "B2: the pre-edit evidence generates fresh", JSON.stringify(answerBefore));
+    const afterBefore = b2Counts.model;
+    await answerQuestion(mkInput(hashAfterEdit, formatRetrievedContext(mkResult(hashAfterEdit))), {
+      cache: b2Cache,
+      complete: b2Complete,
+    });
+    check(
+      b2Counts.model === afterBefore + 1 && b2Store.size === 2,
+      "matching 8-hex prefixes do not collapse evidence identity - the post-edit ask regenerates and caches separately",
+    );
+    const afterAfter = b2Counts.model;
+    const revisitBefore = await answerQuestion(mkInput(hashBeforeEdit, rendered), { cache: b2Cache, complete: b2Complete });
+    check(
+      revisitBefore.cached === true && b2Counts.model === afterAfter,
+      "the exact pre-edit identity still hits its own cache entry (per-identity, not per-prefix)",
+    );
+
+    // 6. Missing or malformed hashes fail closed at the answer seam: no
+    //    model call, no cache write, a typed integrity error.
+    for (const [label, bad] of [
+      ["an 8-hex truncated hash", "a1b2c3d4"],
+      ["an empty hash", ""],
+      ["a non-hex hash", "dead beef"],
+    ] as const) {
+      let thrown: unknown = null;
+      const { store: badStore, counts: badCounts, cache: badCache } = localCache();
+      try {
+        await answerQuestion({ ...baseInput, contextText: rendered, files: [{ ...sampleFiles[0], contentHash: bad }] }, {
+          cache: badCache,
+          complete: async () => {
+            badCounts.model++;
+            return sessionAnswer;
+          },
+        });
+      } catch (err) {
+        thrown = err;
+      }
+      check(
+        thrown instanceof IntegrityError && badCounts.model === 0 && badStore.size === 0,
+        `evidence with ${label} is refused with IntegrityError, uncached, no model call`,
+        String(thrown),
+      );
+    }
+    let missingThrown: unknown = null;
+    const { store: missingStore, counts: missingCounts, cache: missingCache } = localCache();
+    try {
+      await answerQuestion(
+        {
+          ...baseInput,
+          contextText: rendered,
+          files: [{ path: sessionPath, contentHash: undefined as unknown as string, totalLines: 120 }],
+        },
+        {
+          cache: missingCache,
+          complete: async () => {
+            missingCounts.model++;
+            return sessionAnswer;
+          },
+        },
+      );
+    } catch (err) {
+      missingThrown = err;
+    }
+    check(
+      missingThrown instanceof IntegrityError && missingCounts.model === 0 && missingStore.size === 0,
+      "evidence with a missing hash is refused with IntegrityError, uncached, no model call",
+      String(missingThrown),
+    );
+
+    // 7 + 8. Union-coverage merging and fail-closed citation verification are
+    // covered unchanged above and in test-citations.ts / test-retrieval-loop.ts;
+    // the answer seam guard above is itself fail-closed (refuse; never
+    // generate). Cached-answer verification paths are exercised by the
+    // poisoned-cache and staleness tests earlier in this file.
   }
 }
 

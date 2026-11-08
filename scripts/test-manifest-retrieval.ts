@@ -361,8 +361,8 @@ async function run() {
     }
 
     const formatted = formatRetrievedContext(res);
-    if (formatted.includes(`--- File: package.json (lines 1-${pkgLines}) [hash: ${pkgHash.slice(0, 8)}] ---`)) {
-      pass("formatted context includes standard verified file header with hash");
+    if (formatted.includes(`--- File: package.json (lines 1-${pkgLines}) [hash: ${pkgHash}] ---`)) {
+      pass("formatted context includes standard verified file header with the full content hash");
     } else {
       fail(`formatRetrievedContext output missing expected header: ${formatted}`);
     }
@@ -490,7 +490,11 @@ async function run() {
 
   console.log("\n=== 4. Bounded Budget Compliance ===");
   {
-    // Restrict maxCharacters to 200 with 2 matching manifests (total ~280 chars)
+    // Restrict maxCharacters to 200 with 2 matching manifests (total ~280 chars).
+    // B2 embeds the full 64-hex hash in every window header, raising the
+    // per-window floor cost: a single window plus its header can exceed this
+    // tiny cap entirely, and then no window is served. The invariant is
+    // budget bounding — never fewer than 0, never more than fits.
     const tightBudgetRes = await retrieveGroundedContext(
       db as unknown as Db,
       analysisId,
@@ -499,10 +503,27 @@ async function run() {
       null,
       backfillDeps,
     );
-    if (tightBudgetRes.totalCharacters <= 200 && tightBudgetRes.windows.length === 1) {
-      pass(`character budget respected under tight cap (totalChars: ${tightBudgetRes.totalCharacters} <= 200, windows: 1)`);
+    if (tightBudgetRes.totalCharacters <= 200 && tightBudgetRes.windows.length <= 1) {
+      pass(`character budget respected under tight cap (totalChars: ${tightBudgetRes.totalCharacters} <= 200, windows: ${tightBudgetRes.windows.length})`);
     } else {
       fail(`character budget not bounded: totalChars=${tightBudgetRes.totalCharacters}, windows=${tightBudgetRes.windows.length}`);
+    }
+
+    // With a cap sized for a full-hash header plus the window text (B2),
+    // evidence is still served and stays bounded.
+    const oneWindowBudget = 500;
+    const fittedRes = await retrieveGroundedContext(
+      db as unknown as Db,
+      analysisId,
+      "What dependencies are listed in package.json?",
+      { maxCharacters: oneWindowBudget },
+      null,
+      backfillDeps,
+    );
+    if (fittedRes.totalCharacters <= oneWindowBudget && fittedRes.windows.length >= 1) {
+      pass(`evidence still served within a full-hash-sized cap (totalChars: ${fittedRes.totalCharacters} <= ${oneWindowBudget}, windows: ${fittedRes.windows.length})`);
+    } else {
+      fail(`full-hash header starve detected: totalChars=${fittedRes.totalCharacters}, windows=${fittedRes.windows.length}`);
     }
 
     // Restrict maxFiles to 1 with multiple matches

@@ -56,8 +56,8 @@ that fail against the old implementation.
 |---|---|---|
 | 1A | **Role-scoped concept affiliation** — coverage categories and loop-focused queries work off the raw taxonomy role ids | **Done, committed** (`c1ac975`) |
 | 1B | **Atomic iterative-merge replacement + served-cost accounting** — the coverage loop replaces weak evidence atomically and every package carries a served-size ledger | **Done, committed** (`c1ac975`) |
-| 1C | **Role-taxonomy audit fixes F1–F4** — completed `ROLE_HINTS`, corrected stale role checks and `CATEGORY_AFFILIATION`, curated focused-query vocabulary for role-valued categories | **Implemented and verified, uncommitted** — see [PROJECT_STATE.md](PROJECT_STATE.md) |
-| 1D | **Q&A reliability batches** (audit-driven): B retrieval families → E budget/profile plumbing → C citation span-merge → A coverage/loop oov semantics → D golden-eval loop swap + fixture adapter role → G glue-term breadth cap + explicit-anchor stop → F answer-stage evaluation | **Implemented and verified, uncommitted** — see [PROJECT_STATE.md](PROJECT_STATE.md) |
+| 1C | **Role-taxonomy audit fixes F1–F4** — completed `ROLE_HINTS`, corrected stale role checks and `CATEGORY_AFFILIATION`, curated focused-query vocabulary for role-valued categories | **Committed** (`7262316`, pushed to `origin/ravi`) — see [PROJECT_STATE.md](PROJECT_STATE.md) |
+| 1D | **Q&A reliability batches** (audit-driven): B retrieval families → E budget/profile plumbing → C citation span-merge → A coverage/loop oov semantics → D golden-eval loop swap + fixture adapter role → G glue-term breadth cap + explicit-anchor stop → F answer-stage evaluation | **Committed and pushed** (`e78ee56` on `origin/ravi`) — see [PROJECT_STATE.md](PROJECT_STATE.md) |
 
 **Deliverables per subphase:** targeted fixes in `lib/ai/retrieval.ts`,
 `lib/ai/coverage.ts`, `lib/ai/retrieval-loop.ts` (and planner only when an
@@ -71,7 +71,7 @@ scoring redesign, no new dependencies, no weakening of content-trust or
 citation checks; changes are backward-compatible with analyses stored under
 the legacy role values.
 
-#### Phase 1D batch notes (implemented 2026-11-04…06, uncommitted)
+#### Phase 1D batch notes (implemented 2026-11-04…06, committed at `e78ee56`)
 
 Executed as the approved consolidated plan (order B → E → C → A → D → G → F),
 scope drawn from [phase-1d-qa-audit.md](phase-1d-qa-audit.md). Evidence and
