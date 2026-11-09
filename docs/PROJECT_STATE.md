@@ -9,7 +9,7 @@ after every approved subphase (see the maintenance rules in
 If this document and the repository disagree, the repository is right — fix
 this document and record what differed.
 
-**Last updated: 2026-11-09** (verification of every factual claim in this
+**Last updated: 2026-11-10** (verification of every factual claim in this
 file is listed alongside the claim).
 
 ---
@@ -49,6 +49,28 @@ The approved 2026-11-09 push carries `9f4f942`, `3e6c7ff`, `56898dc` and the
 docs commit to `origin/ravi`; a deployment of migration `20261109000000` to
 the linked remote Supabase remains **not approved** (§4).
 
+**Phase 3 (Measurement & Evaluation) opened 2026-11-09** with the approved
+read-only audit of the evaluation system (report delivered in-session; no
+repository changes): it found the deterministic golden QA eval fully
+provider-free and byte-reproducible, recorded the answer-stage baseline
+history exactly (`eval-answer-baseline.txt` sanctioned 11 PASS / 2 WARN /
+3 FAIL; `eval-answer-baseline-fresh.txt` artifact run with 9 provider-quota
+FAILs), and ranked "no machine-readable baseline persistence / no automated
+cross-commit regression detection" as the top measurement gap. **Phase 3A
+(the first approved Phase 3 subphase, 2026-11-10) implemented that gap**:
+`fixtures/golden-qa.baseline.json` (schema 1; dataset version 1 + SHA-256
+`62f98110d4d3663c61da74b4dba99adbf5de71eaa85e7c96924a0dd31fed7b79`; reference
+`phase-3a`; per-case verdicts/metrics; aggregates with explicit
+numerators/denominators — the frozen 15 PASS / 1 WARN / facts 37/37 /
+micro 89-of-206, 89-of-94 record preserved exactly inside it), the
+comparator `scripts/eval-golden-diff.ts` (`pnpm test:qa-diff`, never
+writes; explicit `--approve-update` refresh with integrity/completion gates
+and atomic write), and `scripts/test-qa-diff.ts` registered in `pnpm test`
+(one real eval spawn + 30 policy checks). The frozen historical
+answer-stage records were not touched. Details: §3 Phase 3A;
+comparison policy + update procedure also documented in
+[phase-1d-qa-audit.md](phase-1d-qa-audit.md) §10.1.
+
 ## 2. Verified Git state
 
 Verified 2026-11-09 during the F5 implementation, via `git log --oneline`,
@@ -62,7 +84,7 @@ Verified 2026-11-09 during the F5 implementation, via `git log --oneline`,
 | Commits | this docs commit (contains this file) · `56898dc` F5+F8 security hardening (9 files) · `3e6c7ff` F7 retention · `9f4f942` Phase 2 consolidation (B1–B4, 19 files) · `e78ee56` docs/eval follow-up · `c51f018` feat(qa): Phase 1D · `7262316` fix(retrieval): Phase 1C · `c1ac975` Phases 1A+1B (preserved, untouched) |
 | Remote | `https://github.com/ravirraj/anatomy.git` (`origin`) |
 | Pushed | Yes — approved and executed 2026-11-09; the push carries `9f4f942`, `3e6c7ff`, `56898dc` and this docs commit, so `origin/ravi` ends at this docs commit's tip; verified via `git ls-remote origin ravi` |
-| Working tree | **Clean.** The former F5+F8 uncommitted change set (listed in the F5/F8 chronicles below) was committed as `56898dc`; this table's "Dirty" entry therefore describes the batch window, not the current state. All gates were green at both commit times (2026-11-09); no commits were made beyond the two approved ones. |
+| Working tree | **Clean.** The former F5+F8 uncommitted change set (listed in the F5/F8 chronicles below) was committed as `56898dc`; this table's "Dirty" entry therefore describes the batch window, not the current state. All gates were green at both commit times (2026-11-09); no commits were made beyond the two approved ones. **Update 2026-11-10:** the Phase 3 audit left the tree clean at `2c86868` (verified via `git rev-parse origin/ravi` matching); the Phase 3A implementation (§3 Phase 3A) is now **uncommitted in the working tree**. |
 | Previous commits | `f05af36` (CLI flow/budget), `3fa177c` (cli-execution intent), `913e9d0`, `d1098bc`, `159dede`, `df85638` |
 
 Commit-integrity note: before partitioning, the full intended state
@@ -714,24 +736,141 @@ pass again after restoring the fixed files.
 the single approved commit; see the F5 chronicle footer). The chronicle
 above is kept as written at batch time.
 
+### Phase 3 — Measurement & Evaluation audit (2026-11-09, read-only, no changes)
+
+Strictly inspection-only approved task, completed with zero repository
+changes (working tree byte-identical before/after, verified `git status`).
+Read and re-ran: the full command surface of `package.json` (incl. the
+28-suite `pnpm test` chain, `test:db`, `test:budget`, `test:qa-*`,
+`accuracy`), `scripts/eval-golden-qa.ts` (all 599 lines), the fixture
+adapter, `scripts/eval-answer-quality.ts` (all 505 lines), `lib/ai/client.ts`
+(`MODELS` exact pins, `deterministicSamplingParams` temperature 0 / seed 42),
+`lib/ai/retrieval-loop.ts` (stop reasons + pass ledger), both root baseline
+records, all 12 fixture dirs and `fixtures/golden-qa.json` (16 cases).
+Executed read-only: `pnpm test:qa-eval` (twice — reproduced the frozen
+baseline exactly), `test:qa-dataset` (24 checks), `test:qa-arithmetic`,
+`pnpm accuracy` (TP 28 / FP 0 / FN 0 over 12 fixtures), `pnpm test:qa-answer`
+NOT run (provider-gated, deliberately). Key verified facts: the golden
+eval is deterministic and provider-free (in-memory fixture adapter) and
+default-runs the production coverage loop; the answer-stage eval is
+opt-in/quota-costing and never gates anything; **no CI exists** (.github
+absent); `test:qa-eval` was not chained into `pnpm test`; no rank metric,
+no budget-utilization judgment, no loop-pass attribution, and no persisted
+machine-readable baseline existed. Delivered the 10-part report with a
+prioritized Phase 3 plan (P1 baseline+diff … P6 deterministic answer seam;
+O1–O4 optional; no framework). No recommendations implemented.
+
+### Phase 3A — baseline versioning & regression detection (2026-11-10, implemented, uncommitted)
+
+**Scope implemented (only):** machine-readable golden QA baseline; dataset
+identity verification; deterministic comparison command; regression
+detection with explicit intentional-change handling; tests. No ranking
+metrics, budget metrics, pass attribution, dataset expansion, answer-stage
+changes, provider throttling, CI, or evaluation framework.
+
+**Files:**
+
+- **Created `fixtures/golden-qa.baseline.json`** (exit-0 explicit
+  first-generation via the update path) — baselineSchemaVersion 1; reference
+  `phase-3a`; dataset `{version: 1, sha256:
+  62f98110d4d3663c61da74b4dba99adbf5de71eaa85e7c96924a0dd31fed7b79}`
+  (Node crypto and PowerShell independently computed, cross-checked equal);
+  per-case entries (fixture/language/category/verdict/stable metrics) for
+  all 16 cases; summary aggregates with explicit numerators/denominators:
+  15 PASS / 1 WARN (QA-05 WARN 0.1875), facts 37/37, abstention 2/2,
+  micro precision 89/206, micro recall 89/94, micro F1 0.5933, macro
+  (14 cases) P 0.5110 / R 0.9725 / F1 0.6229. No secrets, no durations, no
+  environment values. The frozen 15/1 historical record is preserved as
+  data, not prose.
+- **Created `scripts/eval-golden-diff.ts`** — `pnpm test:qa-diff`. Compares a
+  fresh run of the REAL engine (spawned `node scripts/eval-golden-qa.ts
+  --json`; engine file untouched) against the reviewed baseline. Gates
+  before comparing: supported baseline schema version, dataset version,
+  dataset SHA-256 (exact bytes), case-ID set (missing/dup/unexpected named
+  and rejected). Comparison policy (documented in the header): PASS→WARN and
+  any→FAIL are regressions; WARN→PASS / FAIL recovery are improvements;
+  unchanged WARN accepted (QA-05's historic 18.8% is baseline data, no
+  hard-coded special case); numeric precision/recall decline on ANY case is
+  a regression (worsened WARN reported as its own class; no new percentage
+  thresholds); fact shortfalls and lost policyVerified regress; window/line
+  counts informational; aggregates mirrored with explicit direction (rise in
+  failed/warned counts regresses); float equality 1e-9 epsilon. Exit 1 on
+  any regression/gate failure/malformed baseline; `--json` output and
+  `--baseline`/`--dataset` overrides available. Update mode: `--approve-update`
+  requires dataset integrity + completed evaluation (engine exit 0, zero
+  FAIL, dataset-case-complete) + compatible existing schema, writes
+  atomically (temp file + rename, cleanup on failure), prints before/after,
+  and is unreachable from normal comparison. Normal mode NEVER writes.
+- **Created `scripts/test-qa-diff.ts`** — 30 deterministic checks
+  (registered at the end of the `pnpm test` chain): real-engine match
+  against the committed baseline; improvement acceptance; PASS→WARN;
+  PASS→FAIL; WARN→FAIL; QA-05 WARN acceptance; new unexpected WARN;
+  worsened-WARN policy; dataset version/hash mismatch; unsupported schema;
+  duplicate/missing/unexpected case IDs; malformed-baseline shapes; update
+  refusal on FAIL/incomplete eval (3 paths, byte-identical file after);
+  update-without-approval refusal; atomic update completeness with no
+  temp leftovers; committed-baseline-untouched assertion. File-level tests
+  run in a temp directory; the committed baseline is never modified.
+- **Modified `package.json`** — added `"test:qa-diff": "node
+  scripts/eval-golden-diff.ts"` and appended
+  `&& node scripts/test-qa-diff.ts` to the `pnpm test` chain.
+- **Modified `docs/phase-1d-qa-audit.md`** — added §10.1 (baseline artifact
+  + comparison policy + update procedure; historical audit content
+  untouched). **Modified this file** — this section, §1 stage, §2
+  working-tree note, §4, §5.
+
+**Verification (all exit 0, after the last relevant change):** `pnpm
+test:qa-dataset` (24 checks), `pnpm test:qa-arithmetic`, `pnpm test:qa-eval`
+(15 PASS / 1 WARN identical to frozen), `pnpm test:qa-diff` (three runs
+across the batch — identical zero-regression output each time),
+`pnpm test` (full 29-suite chain incl.
+test-qa-diff), `pnpm test:budget`, `pnpm typecheck` (one transient TS2367 in
+the new comparator fixed), `pnpm lint` (0 errors, **56 warnings = exact
+pre-existing baseline**), `pnpm accuracy` (12 fixtures, TP 28 / FP 0 /
+FN 0). Committed baseline byte-untouched by all normal runs (asserted by the
+test suite itself). No provider or remote database used.
+
+**Baseline integrity invariant:** normal evaluation and normal comparison
+cannot rewrite `fixtures/golden-qa.baseline.json`; regeneration only via
+`--approve-update` with completed evaluation + dataset integrity; every
+`pnpm test` now asserts the working tree matches the baseline.
+
 ## 4. Exact next approved task
 
-**F5 and F8 were implemented and gate-verified 2026-11-09 and are committed
-together as `56898dc`** (`fix(security): enforce evidence-grounded citation
-verification`; parent `3e6c7ff`; see §3 F5 and F8 sections). The
-documentation correction recording that commit (this file's edit) was
-likewise approved and committed 2026-11-09, with the push of `ravi` —
-carrying `9f4f942`, `3e6c7ff`, `56898dc` and the docs commit — approved and
-executed the same day (§2 Pushed row). Migration `20261109000000` is applied
-to the **local** Supabase and catalog-verified; it has **not** been deployed
-to the linked remote Supabase project, and that deployment remains **not
+**Phase 3A (baseline versioning & regression detection) is implemented,
+gate-verified 2026-11-10, and now sits UNCOMMITTED in the working tree**
+(see §3 Phase 3A). Phase 2 (`9f4f942`, `3e6c7ff`, `56898dc` + docs) remains
+pushed at `origin/ravi` = `2c86868`; migration `20261109000000` is applied
+to the **local** Supabase only and its remote deployment remains **not
 approved**.
 
-**No next batch is approved yet.** Awaiting explicit user approval for:
+Awaiting explicit user approval for, in order:
 
-1. A deployment of migration `20261109000000` to the linked remote Supabase
-   project (`finalyear`, `nfuwkbiriyxchueijnov`) — every other pending
-   action from the F7/F5/F8 batches is now resolved (committed and pushed).
+1. **Review and commit of the Phase 3A change set** (four files:
+   `fixtures/golden-qa.baseline.json`, `scripts/eval-golden-diff.ts`,
+   `scripts/test-qa-diff.ts`, `package.json` + the two doc files). The
+   review should check the diff against the approved scope — ranking
+   metrics, budget metrics, pass attribution, dataset expansion,
+   answer-stage changes, provider throttling, CI, and evaluation framework
+   are all explicitly OUT of Phase 3A.
+2. **Phase 3B and later Phase 3 subphases** (from the approved Phase 3
+   plan: P2 budget-utilization/loop ledger metrics, P3 rank metric,
+   P4 provider-run protocol, P5 dataset governance, optional O1–O4) — each
+   needs its own scope approval before implementation.
+3. Separately, still pending from Phase 2: a deployment of migration
+   `20261109000000` to the linked remote Supabase project (`finalyear`,
+   `nfuwkbiriyxchueijnov`), and (optional) a quota-free full-16 run of
+   `scripts/eval-answer-quality.ts` after the Gemini daily quota resets —
+   with `test:qa-diff` now live, a fresh sanctioned answer-stage baseline
+   would be recorded per protocol, not by regenerating the retrieval-side
+   baseline.
+
+Note on the frozen baseline at commit time: the golden-QA record of 15
+PASS / 1 WARN / facts 37/37 / micro 43.2% (89/206) / 94.7% (89/94) /
+abstention 2/2 is preserved verbatim in this document's historical
+sections AND now also machine-readably in `fixtures/golden-qa.baseline.json`
+(reference `phase-3a`); committing Phase 3A adds the machine-readable form
+without changing the historical form.
 
 Optional follow-ups, **not approved and not started** (each needs its own
 approval):
@@ -750,6 +889,8 @@ approval):
 
 | Item | Type | Note |
 |---|---|---|
+| Phase 3A — baseline versioning & regression detection | Implemented 2026-11-10, **uncommitted** | Four code/config files + two doc files in the working tree (§3 Phase 3A). All gates green after the last change (incl. `pnpm test` with the new suite, lint at the exact 56-warning baseline). Commit awaits approval (§4 item 1). |
+| Phase 3 audit (2026-11-09) | Resolved | Read-only report delivered; top gap (machine-readable baseline + regression detection) closed by Phase 3A. Remaining plan items (P2 budget/loop metrics, P3 rank metric, P5 dataset governance, O1–O4) recorded in PROJECT_STATE §4, not started. |
 | Phase 2 batches B1–B4: implemented, verified, committed | Resolved 2026-11-08 | Committed as the consolidation commit `feat(security): harden answer integrity and evidence boundaries` (`9f4f942`; B1 trust rule, B2 full-hash headers, B3 packaging hardening, B4 JSDoc appendix hardening per [phase-2-audit.md](phase-2-audit.md) §5). F7 was implemented 2026-11-08–09 and committed as `3e6c7ff`. F5 and F8 were resolved 2026-11-09 (see next rows). Push: approved and executed 2026-11-09 (§2 Pushed row). |
 | F5 — `contextText` bare-path rescue | Resolved 2026-11-09 — committed as `56898dc` | The 2026-11-09 audit-only pass reproduced the finding end to end (bare citations accepted for real-unretrieved and even nonexistent paths mentioned verbatim in served text; line-bound and window containment intact; rescue-passing answers cached). The narrow fix removes the rescue: bare paths ground only in the served-evidence map or the manifest gate (decision D10); regression coverage in `test-citations.ts` / `test-citation-context-integration.ts` / `test-qa.ts`; old-implementation demonstration via stash (11 FAILs pre-fix, 0 post); all six gates green; frozen golden baseline identical. Committed with F8 in `56898dc`. |
 | F8 — explain legacy whole-path Set verification tier | Resolved 2026-11-09 — committed as `56898dc` | The audit-only pass established the split: bare-path naming is an intentional task contract (naming permission from parser-resolved input — not an F5-class mention shortcut) and is formally accepted; line-bound citations were accepted unchecked on that tier and are now rejected fail-closed with an explainable refusal detail (decision D11). Q&A Map tier byte-unchanged; explain refusal details surfaced; no prompt change (`PROMPT_VERSION` 3). Regression coverage in `test-citations.ts` F8 section (legacy + Map single-line) and the integration suite's F8 block (fresh refusal before caching, poisoned-hit refusal without healing, whole-path controls). Old-implementation demonstration without a stash (F8 hunks reverted and SHA-verified restored): 6 + 4 FAILs pre-fix. All gates green; frozen golden baseline identical. Committed with F5 in `56898dc`. |

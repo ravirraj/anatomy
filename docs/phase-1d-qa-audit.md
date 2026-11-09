@@ -317,6 +317,57 @@ Also verified as fine: the eval's metric arithmetic is unit-tested
 Go, Python (manifest-only cases QA-09/15/16), and abstention policies
 (QA-13/14) — see §11.
 
+### 10.1 Machine-readable golden baseline and regression diff (Phase 3A addendum, 2026-11-10)
+
+The Phase 3 read-only audit (2026-11-09) identified "no machine-readable
+baseline persistence and no automated cross-commit regression detection" as
+the highest-priority measurement gap: the deterministic eval printed to stdout
+and was discarded, so every quality regression was detected by hand-comparing
+against prose baselines in PROJECT_STATE.md. Phase 3A closes that gap for the
+deterministic golden QA eval:
+
+- **Artifact:** `fixtures/golden-qa.baseline.json` — schema version 1, the
+  dataset identity (version + SHA-256 over the exact dataset bytes,
+  `62f98110d4d3663c61da74b4dba99adbf5de71eaa85e7c96924a0dd31fed7b79`, computed
+  independently by Node crypto and PowerShell and cross-checked), a
+  generation reference (`phase-3a`), per-case verdicts and stable metrics for
+  all 16 cases, and aggregates with explicit numerators/denominators
+  (micro 89/206 and 89/94; macro mean over 14 cases). The historical frozen
+  baseline is preserved exactly inside it: 15 PASS / 1 WARN (QA-05 stays WARN
+  at 18.8% precision), facts 37/37, abstention 2/2. Only stable metrics are
+  stored — no durations, environment values or secrets.
+- **Comparison:** `pnpm test:qa-diff` (`scripts/eval-golden-diff.ts`) spawns
+  the real `eval-golden-qa.ts --json` verbatim (one engine, one schema, no
+  reimplementation), verifies the supported baseline schema version, dataset
+  version and SHA-256, and the case-ID set (missing, duplicated and
+  unexpected IDs are named and rejected) before comparing per-case verdicts
+  and metrics plus aggregates. Provider-free and deterministic; a repeat run
+  produces identical output.
+- **Comparison policy (tested, `scripts/test-qa-diff.ts`, 30 checks):**
+  PASS → WARN and any → FAIL are regressions; WARN → PASS and FAIL →
+  recovery are improvements; an *unchanged* WARN is accepted — the expected
+  QA-05 WARN is encoded in the baseline data itself, not hard-coded; a WARN
+  that worsens numerically (per-case line precision **or** recall declines)
+  is a regression; any numeric precision/recall decline on any case is a
+  regression (no additional percentage thresholds — the engine's own 20%
+  WARN floor supplies the semantics); fact shortfalls and lost
+  `policyVerified` are regressions; raw window/line counts are informational.
+  Aggregates mirror the per-case rule with explicit direction (a *rise* in
+  failed/warned counts is a regression). Float equality uses a 1e-9 epsilon.
+  Exit code 1 on any unapproved regression or gate failure.
+- **Intentional update:** normal comparison *never* writes. Refreshing the
+  baseline is explicit: `node scripts/eval-golden-diff.ts --approve-update
+  [--reference <id>]` — gated on dataset integrity, a completed evaluation
+  (engine exit 0, zero FAIL cases, every dataset case in the report) and a
+  compatible existing schema; writes atomically (temp file + rename) and
+  prints a before/after summary. A run containing hard failures is refused
+  into the baseline; the update is documented-for-review, then the diff is
+  reviewed via `git diff`.
+- **Gate integration:** `scripts/test-qa-diff.ts` runs inside `pnpm test`
+  (one real eval spawn + 30 policy checks in a temp directory), so the
+  committed baseline is now asserted on every verification run — the
+  regression detection the audit asked for.
+
 ## 11. JS/TS-specific assumptions (for the future multi-language programme)
 
 Anchored to the architecture doc's §11 distinction (implemented JS/TS scope
