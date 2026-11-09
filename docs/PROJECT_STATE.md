@@ -32,20 +32,22 @@ closed; 2026-11-08) — are implemented, gates-verified and **committed
 (migration `20261109000000` applied to and catalog-verified against the local
 Supabase, full `test:db` chain green incl. the 17 answer-gc checks) and
 **committed 2026-11-09 as `3e6c7ff`**
-(`feat(cache): add bounded answer cache retention`) — the push and a
-deployment of the migration to the linked remote Supabase remain **not
-approved** (§4). F5 (the `contextText` bare-path rescue) was audited,
-reproduced end to end and **resolved 2026-11-09** with the narrow fix in
-`lib/ai/citations.ts` (rescue removed; decision D10) plus regression
-coverage in three test suites — implemented, gates-verified
-(`pnpm test` / `test:budget` / `test:qa-eval` / `typecheck` / `lint` /
-`test:db` all green; frozen golden-QA baseline identical 15 PASS / 1 WARN)
-and **uncommitted in the working tree** (§2, §3). F8 (the explain tasks'
-legacy whole-path Set verification tier) was audited and, on the same day,
-resolved by approved decision D11 — the explain tier verifies whole-file
-paths only and rejects every line-bound citation — with regression coverage
-in two test suites and the same verification battery green, likewise
-**uncommitted in the working tree** together with F5 (§2, §3).**
+(`feat(cache): add bounded answer cache retention`). F5 (the `contextText`
+bare-path rescue) was audited, reproduced end to end and **resolved
+2026-11-09** with the narrow fix in `lib/ai/citations.ts` (rescue removed;
+decision D10) plus regression coverage in three test suites; F8 (the explain
+tasks' legacy whole-path Set verification tier) was audited and, on the same
+day, resolved by approved decision D11 — the explain tier verifies whole-file
+paths only and rejects every line-bound citation. Both were implemented,
+gates-verified (`pnpm test` / `test:budget` / `test:qa-eval` / `typecheck` /
+`lint` / `test:db` all green; frozen golden-QA baseline identical
+15 PASS / 1 WARN) and **committed together 2026-11-09 as `56898dc`**
+(`fix(security): enforce evidence-grounded citation verification`;
+`56898dc1013e55407442d70e7f783f063ce0d25c`, parent `3e6c7ff`), with the
+documentation correction recorded in the commit that contains this file.
+The approved 2026-11-09 push carries `9f4f942`, `3e6c7ff`, `56898dc` and the
+docs commit to `origin/ravi`; a deployment of migration `20261109000000` to
+the linked remote Supabase remains **not approved** (§4).
 
 ## 2. Verified Git state
 
@@ -56,11 +58,11 @@ Verified 2026-11-09 during the F5 implementation, via `git log --oneline`,
 | Fact | Value |
 |---|---|
 | Branch | `ravi` |
-| HEAD | `3e6c7ff` — *feat(cache): add bounded answer cache retention* (2026-11-09; F7-1…F7-4 in one approved commit; parent `9f4f942`) |
-| Commits | `3e6c7ff` F7 retention · `9f4f942` Phase 2 consolidation (B1–B4, 19 files) · `e78ee56` docs/eval follow-up · `c51f018` feat(qa): Phase 1D · `7262316` fix(retrieval): Phase 1C · `c1ac975` Phases 1A+1B (preserved, untouched) |
+| HEAD | `56898dc` — *fix(security): enforce evidence-grounded citation verification* (2026-11-09; F5 + F8 change set in one approved commit, parent `3e6c7ff`; full hash `56898dc1013e55407442d70e7f783f063ce0d25c`), followed by the documentation correction commit that contains this file (*docs: record Phase 2 security hardening commit*) |
+| Commits | this docs commit (contains this file) · `56898dc` F5+F8 security hardening (9 files) · `3e6c7ff` F7 retention · `9f4f942` Phase 2 consolidation (B1–B4, 19 files) · `e78ee56` docs/eval follow-up · `c51f018` feat(qa): Phase 1D · `7262316` fix(retrieval): Phase 1C · `c1ac975` Phases 1A+1B (preserved, untouched) |
 | Remote | `https://github.com/ravirraj/anatomy.git` (`origin`) |
-| Pushed | No — `origin/ravi` is at `e78ee56`; unpushed local commits: **2** (`9f4f942`, `3e6c7ff`; push **not** approved) |
-| Working tree | **Dirty (F5 + F8 implementations, uncommitted — no commit approved for either)** — modified: `lib/ai/citations.ts` (F5 rescue removal; F8 legacy-tier line-bound rejection), `lib/ai/tasks.ts` (F5 `verifyCitationsEvidence` de-parameterized; F8 refusal-details passthrough), `scripts/test-citations.ts` (F5 section + F8 section + legacy-line case rewritten), `scripts/test-citation-context-integration.ts` (F5 contract rewritten; F8 explain-seam block), `scripts/test-qa.ts` (F5 answer-seam section), `docs/phase-2-audit.md` (F5 + F8 resolutions appended, findings untouched), `docs/ROADMAP.md`, `docs/PROJECT_STATE.md` (this record), `docs/DECISIONS.md` (D10, D11). All gates re-verified after the last relevant change (2026-11-09); no commits made during either batch. |
+| Pushed | Yes — approved and executed 2026-11-09; the push carries `9f4f942`, `3e6c7ff`, `56898dc` and this docs commit, so `origin/ravi` ends at this docs commit's tip; verified via `git ls-remote origin ravi` |
+| Working tree | **Clean.** The former F5+F8 uncommitted change set (listed in the F5/F8 chronicles below) was committed as `56898dc`; this table's "Dirty" entry therefore describes the batch window, not the current state. All gates were green at both commit times (2026-11-09); no commits were made beyond the two approved ones. |
 | Previous commits | `f05af36` (CLI flow/budget), `3fa177c` (cli-execution intent), `913e9d0`, `d1098bc`, `159dede`, `df85638` |
 
 Commit-integrity note: before partitioning, the full intended state
@@ -588,7 +590,7 @@ retention architecture; no code, migration, or test changes.
 **Committed 2026-11-09 as `3e6c7ff`** (the whole F7 series in one approved
 commit).
 
-### Phase 2 F5 — bare-path text rescue removed: implemented and verified (2026-11-09, uncommitted)
+### Phase 2 F5 — bare-path text rescue removed: implemented and verified (2026-11-09; committed as `56898dc`)
 
 Approved scope: resolve audit finding F5 after the audit-only confirmation
 (the finding was reproduced end-to-end at `3e6c7ff` first, per the audit's
@@ -638,6 +640,10 @@ never invalidated: `del=0 model=0`). All pass again after the stash pop.
   17 answer-gc checks D1–D11 pass; local migration `20261109000000` still
   applied and catalog-verified; the linked remote project untouched).
 
+**Committed 2026-11-09 as `56898dc`** (together with the F8 change set, in
+the single approved commit `fix(security): enforce evidence-grounded citation
+verification`). The chronicle above is kept as written at batch time.
+
 **F5 limitations (deliberate, documented):** the strict policy refuses
 citable form for downstream config names outside the tracked manifest
 universe (`lithos.json`) — the mention stays discussable in prose and the
@@ -646,7 +652,7 @@ spaces were never citation tokens before or after F5. The UI ground-panel is
 structurally safe (post-fix, only verified bodies are ever served or cached,
 so `extractCitations` cannot surface an unserved path), unchanged code.
 
-### Phase 2 F8 — explain legacy tier verifies whole-file paths only (2026-11-09, uncommitted)
+### Phase 2 F8 — explain legacy tier verifies whole-file paths only (2026-11-09; committed as `56898dc`)
 
 The F8 audit-only pass (report delivered in-session; the reproduction is
 recorded in [phase-2-audit.md](phase-2-audit.md)'s Resolution block)
@@ -704,22 +710,28 @@ pass again after restoring the fixed files.
 - `pnpm check-links` — exit 0 (257 links / 36 files, all resolve; +1 link
   from the F8 resolution cross-reference).
 
+**Committed 2026-11-09 as `56898dc`** (together with the F5 change set, in
+the single approved commit; see the F5 chronicle footer). The chronicle
+above is kept as written at batch time.
+
 ## 4. Exact next approved task
 
-**F5 and F8 are implemented and verified 2026-11-09 but remain uncommitted in
-the working tree** (no commit approved for either; see §3 F5 and F8
-sections). F7-1…F7-4 are committed as `3e6c7ff` (2026-11-09); the
-2026-11-09 re-run of the FULL `pnpm test:db` chain is green, migration
-`20261109000000` is applied to the **local** Supabase and catalog-verified,
-but it has **not** been deployed to the linked remote Supabase project.
+**F5 and F8 were implemented and gate-verified 2026-11-09 and are committed
+together as `56898dc`** (`fix(security): enforce evidence-grounded citation
+verification`; parent `3e6c7ff`; see §3 F5 and F8 sections). The
+documentation correction recording that commit (this file's edit) was
+likewise approved and committed 2026-11-09, with the push of `ravi` —
+carrying `9f4f942`, `3e6c7ff`, `56898dc` and the docs commit — approved and
+executed the same day (§2 Pushed row). Migration `20261109000000` is applied
+to the **local** Supabase and catalog-verified; it has **not** been deployed
+to the linked remote Supabase project, and that deployment remains **not
+approved**.
 
 **No next batch is approved yet.** Awaiting explicit user approval for:
 
-1. A commit of the F5 + F8 working-tree change set (currently uncommitted),
-   and — separately — a push and/or a deployment of migration
-   `20261109000000` to the linked remote Supabase project (covering the two
-   unpushed local commits `9f4f942` and `3e6c7ff` plus the F5/F8 commit once
-   approved).
+1. A deployment of migration `20261109000000` to the linked remote Supabase
+   project (`finalyear`, `nfuwkbiriyxchueijnov`) — every other pending
+   action from the F7/F5/F8 batches is now resolved (committed and pushed).
 
 Optional follow-ups, **not approved and not started** (each needs its own
 approval):
@@ -738,10 +750,10 @@ approval):
 
 | Item | Type | Note |
 |---|---|---|
-| Phase 2 batches B1–B4: implemented, verified, committed | Resolved 2026-11-08 | Committed as the consolidation commit `feat(security): harden answer integrity and evidence boundaries` (`9f4f942`; B1 trust rule, B2 full-hash headers, B3 packaging hardening, B4 JSDoc appendix hardening per [phase-2-audit.md](phase-2-audit.md) §5). F7 was implemented 2026-11-08–09 and committed as `3e6c7ff`. F5 was resolved 2026-11-09 (see next row). Push of these commits: **not requested/approved**. |
-| F5 — `contextText` bare-path rescue | Resolved 2026-11-09 (uncommitted) | The 2026-11-09 audit-only pass reproduced the finding end to end (bare citations accepted for real-unretrieved and even nonexistent paths mentioned verbatim in served text; line-bound and window containment intact; rescue-passing answers cached). The narrow fix removes the rescue: bare paths ground only in the served-evidence map or the manifest gate (decision D10); regression coverage in `test-citations.ts` / `test-citation-context-integration.ts` / `test-qa.ts`; old-implementation demonstration via stash (11 FAILs pre-fix, 0 post); all six gates green; frozen golden baseline identical. Working tree uncommitted — commit approval outstanding. |
-| F8 — explain legacy whole-path Set verification tier | Resolved 2026-11-09 (uncommitted) | The audit-only pass established the split: bare-path naming is an intentional task contract (naming permission from parser-resolved input — not an F5-class mention shortcut) and is formally accepted; line-bound citations were accepted unchecked on that tier and are now rejected fail-closed with an explainable refusal detail (decision D11). Q&A Map tier byte-unchanged; explain explain refusal details surfaced; no prompt change (`PROMPT_VERSION` 3). Regression coverage in `test-citations.ts` F8 section (legacy + Map single-line) and the integration suite's F8 block (fresh refusal before caching, poisoned-hit refusal without healing, whole-path controls). Old-implementation demonstration without a stash (F8 hunks reverted and SHA-verified restored): 6 + 4 FAILs pre-fix. All gates green; frozen golden baseline identical. Working tree uncommitted — commit approval outstanding. |
-| Push approval for `9f4f942` + `3e6c7ff` (and the F5/F8 commit once approved) | Awaiting approval | Not requested by the approved batches; `origin/ravi` still at `e78ee56`, two unpushed local commits. |
+| Phase 2 batches B1–B4: implemented, verified, committed | Resolved 2026-11-08 | Committed as the consolidation commit `feat(security): harden answer integrity and evidence boundaries` (`9f4f942`; B1 trust rule, B2 full-hash headers, B3 packaging hardening, B4 JSDoc appendix hardening per [phase-2-audit.md](phase-2-audit.md) §5). F7 was implemented 2026-11-08–09 and committed as `3e6c7ff`. F5 and F8 were resolved 2026-11-09 (see next rows). Push: approved and executed 2026-11-09 (§2 Pushed row). |
+| F5 — `contextText` bare-path rescue | Resolved 2026-11-09 — committed as `56898dc` | The 2026-11-09 audit-only pass reproduced the finding end to end (bare citations accepted for real-unretrieved and even nonexistent paths mentioned verbatim in served text; line-bound and window containment intact; rescue-passing answers cached). The narrow fix removes the rescue: bare paths ground only in the served-evidence map or the manifest gate (decision D10); regression coverage in `test-citations.ts` / `test-citation-context-integration.ts` / `test-qa.ts`; old-implementation demonstration via stash (11 FAILs pre-fix, 0 post); all six gates green; frozen golden baseline identical. Committed with F8 in `56898dc`. |
+| F8 — explain legacy whole-path Set verification tier | Resolved 2026-11-09 — committed as `56898dc` | The audit-only pass established the split: bare-path naming is an intentional task contract (naming permission from parser-resolved input — not an F5-class mention shortcut) and is formally accepted; line-bound citations were accepted unchecked on that tier and are now rejected fail-closed with an explainable refusal detail (decision D11). Q&A Map tier byte-unchanged; explain refusal details surfaced; no prompt change (`PROMPT_VERSION` 3). Regression coverage in `test-citations.ts` F8 section (legacy + Map single-line) and the integration suite's F8 block (fresh refusal before caching, poisoned-hit refusal without healing, whole-path controls). Old-implementation demonstration without a stash (F8 hunks reverted and SHA-verified restored): 6 + 4 FAILs pre-fix. All gates green; frozen golden baseline identical. Committed with F5 in `56898dc`. |
+| Push approval for `9f4f942` + `3e6c7ff` + `56898dc` (+ docs commit) | Resolved 2026-11-09 | Approved and executed 2026-11-09; `origin/ravi` at the docs commit tip; verified via `git ls-remote origin ravi` after the push. No rewrite, amend or squash. |
 | F7 — `ai_cache` retention/eviction | Resolved 2026-11-09 — committed as `3e6c7ff` | Migration `20261109000000` applied to the local Supabase and catalog-verified (RLS/grants unchanged); full `pnpm test:db` chain green incl. all 17 answer-gc checks (D1–D11); cap verified as a pruning target (insert completed in 85 ms under a held prune lock; over-cap org converges on the next prune). F7-3: `continueRun` calls failure-isolated `pruneRetiredAnswers` (service-role writer, org-explicit, bounded single RPC, structured error logging) after the durable `status: "complete"` update; 35 wiring checks pass; live smoke pruned a seeded expired row. F7-4: documentation consolidated (DECISIONS D7 rewritten from "never evicted"; architecture §10.2–10.3 + new §11.6; ROADMAP Phase 2 marked implemented; ai-system §4.3, security §6.1/§9.6, features, file-content-storage §7.1 corrected; `pnpm check-links` green). Serving path, verification, key identity, RLS untouched. Type regeneration also surfaced + fixed pre-existing `symbols` types drift. **Remote deployment of the migration still pending approval.** |
 | Commit approval for 1C + 1D + docs | Resolved 2026-11-06 | `7262316` (1C), `c51f018` (1D), plus one small docs/eval follow-up commit. |
 | Push approval for `ravi` → `origin` | Approved 2026-11-06 | Push covers `c1ac975`, `7262316`, `c51f018`, and the follow-up commit; remote HEAD verified after push via `git ls-remote origin ravi`. |
