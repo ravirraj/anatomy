@@ -490,11 +490,25 @@ console.log("=== route paths are not file citations ===");
     else fail(`cross-directory relative leaked: ${JSON.stringify(tokens)}`);
   }
 
-  // Valid canonical paths still verify normally.
+  // Whole-path citations verify normally on a legacy Set. A line-bound token
+  // does not: since Phase 2's F8 fix the legacy tier (explain-file /
+  // explain-folder) verifies whole-file paths only, so the previously accepted
+  // line citation is rejected in place — the acceptance this case once carried
+  // is superseded by decision D11.
   {
-    const bad = verifyCitations("See `lib/ai/tasks.ts#L10-L25` and `components/explanation-text.tsx`.", allowed);
-    if (bad.paths.length === 0) pass("valid canonical paths still verify");
-    else fail(`valid canonical paths flagged: ${JSON.stringify(bad.paths)}`);
+    const ok = verifyCitations("See `components/explanation-text.tsx`.", allowed);
+    if (ok.paths.length === 0) pass("a bare canonical path still verifies on a legacy Set");
+    else fail(`bare canonical path flagged: ${JSON.stringify(ok.paths)}`);
+    const ranged = verifyCitations("See `lib/ai/tasks.ts#L10-L25`.", allowed);
+    if (
+      ranged.paths.length === 1 &&
+      ranged.paths[0] === "lib/ai/tasks.ts#L10-L25" &&
+      (ranged.details ?? []).join(" ").includes("Unverifiable line citation")
+    ) {
+      pass("a previously-accepted line citation on a legacy Set is now rejected (F8)");
+    } else {
+      fail(`legacy line citation not rejected as F8 requires: ${JSON.stringify(ranged)}`);
+    }
   }
 
   // Unknown relative paths are not silently converted to a valid canonical path.
@@ -594,23 +608,6 @@ console.log("=== Quoted directory configs and in-code string literals ===");
     "core/useAccentColor.tsx",
     "components/ui/icons/IconBase.tsx",
   ]);
-  const contextText = `
---- File: src/cli/utils.ts (lines 1-70) [hash: hash-utils] ---
-export const DEFAULT_CONFIG = {
-  components: './src/components/ui',
-  utils: './src/utils',
-  css: './src/index.css',
-};
-const configPath = path.join(root, 'lithos.json');
-
---- File: src/cli/add.ts (lines 1-50) [hash: hash-add] ---
-if (req.includes('components/ui/icons/') && req !== 'components/ui/icons/IconBase.tsx') {
-  deps.add('components/ui/icons/IconBase.tsx');
-}
-if (req === 'core/useAccentColor.tsx' || req === 'core/useAccentColor.ts') {
-  deps.add('core/AccentColorContext.ts');
-}
-`;
 
   // 1. Quoted directory/config paths (e.g. './src/components/ui') are not misclassified as citations
   const dirTokens = pathTokens("Defaults to `'./src/components/ui'` and `'./src/utils'`.");
@@ -620,35 +617,59 @@ if (req === 'core/useAccentColor.tsx' || req === 'core/useAccentColor.ts') {
     fail(`quoted directory configs misclassified as citations: ${JSON.stringify(dirTokens)}`);
   }
 
-  // 2. lithos.json discussed as a downstream config filename present in evidence text
+  // 2. lithos.json discussed via a code span: since Phase 2's F5 fix, a bare
+  //    filename is only citable through served evidence or the manifest gate —
+  //    `lithos.json` is neither (a downstream config outside the parser's
+  //    tracked manifest universe), so the code-span quote is refused
+  //    (documented trade-off of the strict evidence policy).
   const configRes = verifyCitations(
     "Defaults are configured in `src/cli/utils.ts#L33-L42` which checks for `lithos.json`.",
     evidenceMap,
-    { allAnalysisFiles, contextText },
+    { allAnalysisFiles },
   );
-  if (configRes.paths.length === 0) {
-    pass("downstream config file mentioned verbatim in evidence text passes");
+  if (configRes.paths.length === 1 && configRes.paths[0] === "lithos.json") {
+    pass("downstream config filename in a code span is no longer treated as a citation (F5)");
   } else {
-    fail(`downstream config file rejected: ${JSON.stringify(configRes)}`);
+    fail(`downstream config filename rejection wrong: ${JSON.stringify(configRes)}`);
   }
 
-  // 3. String literals in retrieved source code discussed without unretrieved-file error
+  // 2b. The same filename in plain prose (no path separator) is conversational
+  //     vocabulary, not a citation, and stays free of verification.
+  const configProse = verifyCitations(
+    "Defaults are configured in src/cli/utils.ts#L33-L42 which checks for the file lithos.json in the project root.",
+    evidenceMap,
+    { allAnalysisFiles },
+  );
+  if (configProse.paths.length === 0) {
+    pass("a prose mention of a config filename without a path shape is not a citation check");
+  } else {
+    fail(`prose config mention wrongly rejected: ${JSON.stringify(configProse)}`);
+  }
+
+  // 3. String literals in retrieved source code name real, stored files: since
+  //    F5 the bare citation to an unretrieved file is rejected regardless of
+  //    the verbatim quote — quoting evidence text is not serving the file.
   const literalRes = verifyCitations(
     "In `src/cli/add.ts#L16-L42`, dependencies on `components/ui/icons/IconBase.tsx` and `core/AccentColorContext.ts` are injected.",
     evidenceMap,
-    { allAnalysisFiles, contextText },
+    { allAnalysisFiles },
   );
-  if (literalRes.paths.length === 0) {
-    pass("bare path string literal quoted from evidence text passes without unretrieved-file error");
+  if (
+    literalRes.paths.length === 2 &&
+    literalRes.paths.includes("components/ui/icons/IconBase.tsx") &&
+    literalRes.paths.includes("core/AccentColorContext.ts") &&
+    literalRes.details?.every((d) => d.includes("Unretrieved repository file"))
+  ) {
+    pass("bare paths quoted as string literals in served source are rejected as unretrieved (F5)");
   } else {
-    fail(`in-code string literal rejected: ${JSON.stringify(literalRes)}`);
+    fail(`in-code string literal policy wrong: ${JSON.stringify(literalRes)}`);
   }
 
   // 4. An explicit citation to an unretrieved file remains strictly rejected
   const explicitUnretrieved = verifyCitations(
     "See `core/AccentColorContext.ts#L10-L20` for implementation.",
     evidenceMap,
-    { allAnalysisFiles, contextText },
+    { allAnalysisFiles },
   );
   if (
     explicitUnretrieved.paths.length === 1 &&
@@ -664,7 +685,7 @@ if (req === 'core/useAccentColor.tsx' || req === 'core/useAccentColor.ts') {
   const inventedRes = verifyCitations(
     "See `lib/fake/nonexistent.ts` for details.",
     evidenceMap,
-    { allAnalysisFiles, contextText },
+    { allAnalysisFiles },
   );
   if (inventedRes.paths.length === 1 && inventedRes.paths[0] === "lib/fake/nonexistent.ts") {
     pass("invented unretrieved path not in evidence text remains strictly rejected");
@@ -676,12 +697,147 @@ if (req === 'core/useAccentColor.tsx' || req === 'core/useAccentColor.ts') {
   const validStrict = verifyCitations(
     "Defined in `src/cli/utils.ts#L10-L25`.",
     evidenceMap,
-    { allAnalysisFiles, contextText },
+    { allAnalysisFiles },
   );
   if (validStrict.paths.length === 0) {
     pass("valid line-range citation remains accepted");
   } else {
     fail(`valid line-range citation rejected: ${JSON.stringify(validStrict)}`);
+  }
+}
+
+console.log("");
+console.log("=== F5 (Phase 2): textual mentions are never evidence ===");
+{
+  // Served evidence: exactly one file with one window. The window text quotes
+  // or mentions three other paths of different existence classes — none of
+  // them was ever retrieved, and none is citable, whatever the mention form.
+  const evidenceMap = new Map<string, FileEvidence>([
+    [("lib/auth/session.ts"), { lines: 40, contentHash: "hash-session", windows: [{ startLine: 1, endLine: 20 }] }],
+  ]);
+  const allAnalysisFiles = new Set([
+    "lib/auth/session.ts",
+    "src/admin/keys.ts",
+    "src/config/env.ts",
+  ]);
+  // A nonexistent path is mentioned in a served comment (a repository may
+  // name "planned" files that do not exist).
+  const contextMentioning = `
+--- File: lib/auth/session.ts (lines 1-20) [hash: hash-session] ---
+1: const helper = "src/admin/keys.ts";
+2: // session bootstrap reads the sibling env config from src/config/env.ts
+3: # see also docs: src/ghost/module.ts (planned)
+`;
+  // The `contextText` key below is deliberately not a verifier input any
+  // more (the option was removed with F5). It is carried in a plain object —
+  // not a typed literal — so these same cases also fail against the pre-fix
+  // implementation, where the context-text rescue would have accepted every
+  // mention above merely from its verbatim presence.
+  const options = { allAnalysisFiles, contextText: contextMentioning };
+  const ctxText = options.contextText;
+
+  // B1: real, stored but unretrieved file quoted as a string literal
+  const bLiteral = verifyCitations("Configuration lives in `src/admin/keys.ts`.", evidenceMap, options);
+  if (
+    bLiteral.paths.length === 1 &&
+    bLiteral.paths[0] === "src/admin/keys.ts" &&
+    bLiteral.details?.[0]?.includes("Unretrieved repository file")
+  ) {
+    pass("a real unretrieved file quoted as a string literal in served text is rejected (F5, string literal)");
+  } else {
+    fail(`string-literal mention not rejected: ${JSON.stringify(bLiteral)}`);
+  }
+
+  // B2: the same file mentioned inside a served comment
+  const bComment = verifyCitations("The bootstrap reads `src/config/env.ts`.", evidenceMap, options);
+  if (
+    bComment.paths.length === 1 &&
+    bComment.paths[0] === "src/config/env.ts" &&
+    bComment.details?.[0]?.includes("Unretrieved repository file")
+  ) {
+    pass("a real unretrieved file mentioned in a served comment is rejected (F5, comment)");
+  } else {
+    fail(`comment mention not rejected: ${JSON.stringify(bComment)}`);
+  }
+
+  // B3: markdown/bold prose citation with the path verbatim in served text
+  const bMarkdown = verifyCitations("Configuration lives in **src/admin/keys.ts**.", evidenceMap, options);
+  if (bMarkdown.paths.length === 1 && bMarkdown.paths[0] === "src/admin/keys.ts") {
+    pass("a bold-form citation to an unretrieved file is rejected (F5, markdown)");
+  } else {
+    fail(`markdown mention not rejected: ${JSON.stringify(bMarkdown)}`);
+  }
+
+  // B4: plain prose with the slash path verbatim in served text
+  const bProse = verifyCitations("Configuration lives in src/admin/keys.ts.", evidenceMap, options);
+  if (bProse.paths.length === 1 && bProse.paths[0] === "src/admin/keys.ts") {
+    pass("a bare prose citation with a path shape is rejected (F5, prose)");
+  } else {
+    fail(`prose path mention not rejected: ${JSON.stringify(bProse)}`);
+  }
+
+  // C: a nonexistent path mentioned in served text stays rejected
+  const cGhost = verifyCitations("We are planning `src/ghost/module.ts`.", evidenceMap, options);
+  if (
+    cGhost.paths.length === 1 &&
+    cGhost.paths[0] === "src/ghost/module.ts" &&
+    cGhost.details?.[0]?.includes("Unknown file path")
+  ) {
+    pass("a nonexistent path mentioned verbatim in served text is rejected (F5, nonexistent)");
+  } else {
+    fail(`nonexistent mention not rejected: ${JSON.stringify(cGhost)}`);
+  }
+
+  // D: line-bound citations were already strict; they stay strict regardless
+  // of any textual mention.
+  const dLine = verifyCitations("See `src/admin/keys.ts:1-5` — it is quoted in the session file.", evidenceMap, options);
+  if (
+    dLine.paths.length === 1 &&
+    dLine.paths[0] === "src/admin/keys.ts:1-5" &&
+    dLine.details?.[0]?.includes("not in retrieved evidence")
+  ) {
+    pass("a line-bound citation, even to a verbatim-quoted real file, is rejected (F5, line-bound strictness)");
+  } else {
+    fail(`line-bound mention not rejected: ${JSON.stringify(dLine)}`);
+  }
+
+  // Evidence-window containment remains intact for the truly served file.
+  const eOutside = verifyCitations("See `lib/auth/session.ts:15-25`.", evidenceMap, options);
+  const eGap = verifyCitations("See `lib/auth/session.ts:1-40`.", evidenceMap, options);
+  const eOk = verifyCitations("See `lib/auth/session.ts:1-20`.", evidenceMap, options);
+  if (
+    eOutside.paths.length === 1 &&
+    eOutside.details?.[0]?.includes("outside retrieved evidence") &&
+    eGap.paths.length === 1 &&
+    eGap.paths[0] === "lib/auth/session.ts:1-40" &&
+    eOk.paths.length === 0
+  ) {
+    pass("union-window containment for the served file is unchanged (F5, window bounds)");
+  } else {
+    fail(`window-bound checks wrong: outside=${JSON.stringify(eOutside)} gap=${JSON.stringify(eGap)} ok=${JSON.stringify(eOk)}`);
+  }
+
+  // The served file itself is still citable bare and line-bound.
+  const aServed = verifyCitations("Session setup lives in `lib/auth/session.ts` (see `lib/auth/session.ts:1-3`).", evidenceMap, options);
+  if (aServed.paths.length === 0) {
+    pass("bare + line-bound citations to the actually served file stay accepted (F5, served file)");
+  } else {
+    fail(`served file citation rejected: ${JSON.stringify(aServed)}`);
+  }
+
+  // Guard: the mention text itself is inert without its citation form — a
+  // filename written as ordinary conversational prose (no separator, no
+  // markup) is not a citation and never enters verification.
+  const proseInert = verifyCitations("The keys are read from a file named keys.ts in src/admin/", evidenceMap, options);
+  if (proseInert.paths.length === 0) {
+    pass("ordinary prose naming a file is not a citation and is not verified");
+  } else {
+    fail(`inert prose wrongly rejected: ${JSON.stringify(proseInert)}`);
+  }
+  if (ctxText.includes("src/admin/keys.ts")) {
+    pass("F5 context fixture sanity: the quoted path is verbatim in the served text");
+  } else {
+    fail("F5 fixture: quoted path missing from served text");
   }
 }
 
@@ -775,6 +931,105 @@ console.log("=== multi-window union coverage (Phase 1D, V5) ===");
   const gapFull = verifyCitations("See `lib/gap.ts#L10-L40`.", evidenceMap, options);
   if (gapFull.paths.length === 1) pass("full span over a real gap remains rejected");
   else fail(`full span over gap was accepted: ${JSON.stringify(gapFull)}`);
+}
+
+{
+  // === F8 (Phase 2): the legacy Set tier (explain-file / explain-folder)
+  // verifies whole-file paths only; every line-bound citation is rejected
+  // there, while the Map tier's own checks are untouched (decision D11). ===
+  console.log("=== F8 (Phase 2): explain tasks verify whole-file paths, never line citations ===");
+
+  // explainFile's allowed set (fileCitationsAllowed, lib/ai/tasks.ts): the
+  // target, what reaches it, and every import/importer. Only the target's
+  // source is ever served; neighbours appear as name/role/export metadata.
+  const fileAllowed = new Set([
+    "lib/auth/session.ts",
+    "lib/auth/middleware.ts",
+    "lib/db/client.ts",
+    "app/routes/edge.ts",
+  ]);
+  // explainFolder's allowed set (folderCitationsAllowed): dir, members, both
+  // endpoints of every boundary edge. The folder prompt carries no source at all.
+  const folderAllowed = new Set([
+    "src/auth",
+    "src/auth/session.ts",
+    "src/auth/token.ts",
+    "app/middleware.ts",
+    "lib/db/client.ts",
+  ]);
+
+  // 1. The whole-path naming contract is preserved: every kind of permitted
+  //    bare mention still verifies, including directory spans.
+  const target = verifyCitations("Sessions live in `lib/auth/session.ts`.", fileAllowed);
+  if (target.paths.length === 0) pass("bare primary-file path is accepted (F8)");
+  else fail(`bare target path rejected: ${JSON.stringify(target)}`);
+
+  const neighbour = verifyCitations("Queries run in `lib/db/client.ts`.", fileAllowed);
+  if (neighbour.paths.length === 0) pass("bare allowed neighbour path is accepted (F8)");
+  else fail(`bare neighbour path rejected: ${JSON.stringify(neighbour)}`);
+
+  const member = verifyCitations("Entry point is `src/auth/token.ts`.", folderAllowed);
+  if (member.paths.length === 0) pass("bare folder-member path is accepted (F8)");
+  else fail(`bare folder-member path rejected: ${JSON.stringify(member)}`);
+
+  const dirSpan = verifyCitations("The auth namespace `src/auth` holds it.", folderAllowed);
+  if (dirSpan.paths.length === 0) pass("directory-span acceptance unchanged (F8, legacy directory rule)");
+  else fail(`directory span rejected: ${JSON.stringify(dirSpan)}`);
+
+  // 2. Line-bound citations on any legacy allowed path fail closed — all
+  //    shapes: over-range, inverted, zero-start, single, colon form.
+  for (const token of [
+    "lib/auth/session.ts#L1-L9999",
+    "lib/auth/session.ts#L40-L1",
+    "lib/auth/session.ts#L0-L1",
+    "lib/auth/session.ts#L777",
+    "lib/auth/session.ts:2-2",
+  ]) {
+    const bad = verifyCitations(`See \`${token}\`.`, fileAllowed);
+    const detail = (bad.details ?? []).join(" ");
+    if (bad.paths.length === 1 && bad.paths[0] === token && detail.includes("Unverifiable line citation")) {
+      pass(`${token} is rejected on the legacy tier (F8)`);
+    } else {
+      fail(`${token} not rejected with the F8 detail: ${JSON.stringify(bad)}`);
+    }
+  }
+
+  // 3. Foreign paths stay out on both tiers of the check: unknown bare paths
+  //    and unknown line-bound paths (path matching still precedes the tier
+  //    rule, so the original evidence detail is kept).
+  const foreignBare = verifyCitations("Also see `src/billing/invoice.ts`.", fileAllowed);
+  if (foreignBare.paths.length === 1 && (foreignBare.details ?? []).join(" ").includes("Unknown file path")) {
+    pass("a foreign bare path remains rejected (F8)");
+  } else {
+    fail(`foreign bare path behavior changed: ${JSON.stringify(foreignBare)}`);
+  }
+  const foreignLine = verifyCitations("Also see `src/billing/invoice.ts#L1-L2`.", fileAllowed);
+  if (foreignLine.paths.length === 1 && (foreignLine.details ?? []).join(" ").includes("not in retrieved evidence")) {
+    pass("a foreign line-bound path remains rejected with the evidence detail (F8)");
+  } else {
+    fail(`foreign line-bound path behavior changed: ${JSON.stringify(foreignLine)}`);
+  }
+
+  // 4. Q&A Map-tier regression: the bounds/count checks and window containment
+  //    are the same code path as before the F8 change (out-of-bounds,
+  //    inverted, zero-start, unknown-unknowns and the union-window seam/gap
+  //    sections above all still run over the Map tier; here the one shape
+  //    those sections never covered — the single-line citation — is added).
+  const mapAllowed: Map<string, FileEvidence> = new Map([
+    ["lib/auth/session.ts", { lines: 40, contentHash: "hash-session" }],
+  ]);
+  const single = verifyCitations("See `lib/auth/session.ts#L10`.", mapAllowed);
+  if (single.paths.length === 0) pass("a single-line citation inside the file length stays accepted on the Map tier");
+  else fail(`single-line Map citation rejected: ${JSON.stringify(single)}`);
+  const singleOver = verifyCitations("See `lib/auth/session.ts#L50`.", mapAllowed);
+  if (
+    singleOver.paths.length === 1 &&
+    (singleOver.details ?? []).join(" ").includes("exceeds file length of 40 lines")
+  ) {
+    pass("a single-line citation past the file length stays rejected on the Map tier");
+  } else {
+    fail(`out-of-length single line not rejected: ${JSON.stringify(singleOver)}`);
+  }
 }
 
 console.log("");

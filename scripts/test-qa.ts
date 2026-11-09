@@ -1337,6 +1337,149 @@ Database client initialization is in \`lib/db/client.ts#L5-L25\`.
     // generate). Cached-answer verification paths are exercised by the
     // poisoned-cache and staleness tests earlier in this file.
   }
+
+  // ---- Phase 2, F5: textual mentions are never evidence (answer seam) ----
+  // The verifier no longer rescues a bare path because its string appears
+  // verbatim in the rendered context: a quote, comment or packaging row can
+  // name any repository path without that file's content ever being served.
+  // Bare citations ground only in the structured evidence map and the
+  // manifest gate. These tests assert the answer-seam behaviour under that
+  // rule, including the cache contract.
+  {
+    const f5AllFiles = new Set([
+      "lib/auth/session.ts",
+      "src/admin/keys.ts",
+      "src/config/env.ts",
+    ]);
+    const f5Hash = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
+    // One served file, one window; its verbatim window text quotes a stored
+    // but unretrieved file and names a nonexistent one — repo-controlled text
+    // the model sees but the evidence map never covers.
+    const f5Context = [
+      `--- File: lib/auth/session.ts (lines 1-20) [hash: ${f5Hash}] ---`,
+      '1: const helper = "src/admin/keys.ts";',
+      "2: // bootstrap also mentions src/admin/keys.ts and src/ghost/module.ts (planned)",
+    ].join("\n");
+    const f5Input: QuestionInput = {
+      question: "how are admin keys resolved?",
+      contextText: f5Context,
+      files: [{ path: "lib/auth/session.ts", contentHash: f5Hash, totalLines: 40, windows: [{ startLine: 1, endLine: 20 }] }],
+    };
+
+    // 1. Fresh generation: a body citing the quoted-but-unretrieved file is
+    //    refused outright and never cached.
+    {
+      const { store, counts, cache } = localCache();
+      let thrown: unknown = null;
+      try {
+        await answerQuestion(f5Input, {
+          cache,
+          allAnalysisFiles: f5AllFiles,
+          complete: async () => {
+            counts.model++;
+            return "Keys live in `src/admin/keys.ts`, which `lib/auth/session.ts:1-2` names.";
+          },
+        });
+      } catch (err) {
+        thrown = err;
+      }
+      check(
+        thrown instanceof CitationError &&
+          thrown.details?.[0]?.includes("Unretrieved repository file") === true &&
+          counts.model === 1 &&
+          store.size === 0,
+        "F5: a fresh answer citing a verbatim-quoted unretrieved file is refused and not cached",
+        String(thrown),
+      );
+    }
+
+    // 2. Cached answer: identical verification. A poisoned entry written in
+    //    the old rescue era (bare cite accepted by rendered text alone) is
+    //    refuted on the hit path, its entry deleted, and one fresh
+    //    regeneration runs; the new body fails the same verification, so the
+    //    ask refuses and writes nothing.
+    {
+      let readCalls = 0;
+      let deleteCalls = 0;
+      let writeCalls = 0;
+      let modelCalls = 0;
+      const poisoned = "Keys live in `src/admin/keys.ts`, which `lib/auth/session.ts:1-2` names.";
+      const cache: Cache = {
+        async read() {
+          readCalls++;
+          return readCalls === 1 ? poisoned : null;
+        },
+        async write() {
+          writeCalls++;
+        },
+        async delete() {
+          deleteCalls++;
+        },
+      };
+      let thrown: unknown = null;
+      try {
+        await answerQuestion(f5Input, {
+          cache,
+          allAnalysisFiles: f5AllFiles,
+          complete: async () => {
+            modelCalls++;
+            return poisoned;
+          },
+        });
+      } catch (err) {
+        thrown = err;
+      }
+      check(
+        thrown instanceof CitationError &&
+          deleteCalls === 1 &&
+          modelCalls === 1 &&
+          writeCalls === 0,
+        "F5: a rescue-shaped cached body is invalidated, deleted, and the regeneration is refused without caching",
+        `thrown=${String(thrown)} read=${readCalls} del=${deleteCalls} model=${modelCalls} write=${writeCalls}`,
+      );
+    }
+
+    // 3. The legitimate shape is untouched: cite the actually served file —
+    //    bare and line-bound inside the served window — and the answer is
+    //    served, cached, re-verified on the next identical ask, and its
+    //    extracted citations never contain a path outside the served evidence
+    //    (the UI token list cannot leak an unretrieved file).
+    {
+      const { store, counts, cache } = localCache();
+      const good = "The helper stores keys in `lib/auth/session.ts#L1-L20`; the module is `lib/auth/session.ts`.";
+      const answer = await answerQuestion(f5Input, {
+        cache,
+        allAnalysisFiles: f5AllFiles,
+        complete: async () => {
+          counts.model++;
+          return good;
+        },
+      });
+      check(
+        answer.cached === false && counts.model === 1 && store.size === 1,
+        "F5: a properly grounded body is served and cached",
+        JSON.stringify(answer),
+      );
+      check(
+        answer.citations.length >= 1 && answer.citations.every((c) => c.path === "lib/auth/session.ts"),
+        "F5: extracted citations contain only served-evidence paths",
+        JSON.stringify(answer.citations),
+      );
+      const again = await answerQuestion(f5Input, {
+        cache,
+        allAnalysisFiles: f5AllFiles,
+        complete: async () => {
+          counts.model++;
+          return good;
+        },
+      });
+      check(
+        again.cached === true && counts.model === 1,
+        "F5: the grounded cached body re-verifies and serves from cache with no model call",
+        `cached=${again.cached} model=${counts.model}`,
+      );
+    }
+  }
 }
 
 run()

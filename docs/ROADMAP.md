@@ -102,7 +102,7 @@ records D8 and D9 in [DECISIONS.md](DECISIONS.md).
   with fact-scoring gaps (`reads_config`, wildcard `imports`) fixed
   afterwards and the affected cases re-run PASS.
 
-### Phase 2 — Answer integrity & safety hardening (implemented 2026-11-06…09; F5 deliberately deferred)
+### Phase 2 — Answer integrity & safety hardening (implemented 2026-11-06…09; F5 and F8 resolved 2026-11-09)
 
 Untrusted repository content today reaches a powerful model with limited
 defences. Implemented: prompt-injection defences for retrieved content
@@ -110,16 +110,23 @@ defences. Implemented: prompt-injection defences for retrieved content
 `PROMPT_VERSION` 2→3, full-hash window headers, packaging-line sanitizing,
 JSDoc appendix cap — committed as `9f4f942`, tests in
 `scripts/test-prompt-hardening.ts` and [TODO.md](../TODO.md) near-term P1),
-and a bounded eviction/retention policy for the answer cache (F7-1…F7-3:
+a bounded eviction/retention policy for the answer cache (F7-1…F7-3:
 90-day `expires_at`, per-organization pruning target of 25,000 rows,
-service-role pruning once per successful analysis completion — implemented
-and DB-verified against the local Supabase, uncommitted; lifecycle in
-[architecture.md](architecture.md) §11.6, decision in
-[DECISIONS.md](DECISIONS.md) D7). Hash-bound citations evolved without
-weakening their fail-closed property (B2/B1 re-keying). **Explicitly
-deferred:** audit finding F5 — the `contextText` bare-path rescue
-(quote-integrity gate work); its behaviour stays locked as recorded in the
-audit's T-A5 and needs separate approval. Acceptance: the existing
+service-role pruning once per successful analysis completion — implemented,
+DB-verified against the local Supabase and committed as `3e6c7ff`;
+lifecycle in [architecture.md](architecture.md) §11.6, decision in
+[DECISIONS.md](DECISIONS.md) D7), and the closure of audit finding F5
+(2026-11-09): the `contextText` bare-path rescue removed — a bare citation is
+grounded only by the structured served-evidence map or the manifest gate, so
+a comment, string literal or packaging row can no longer authorize a citation
+to a file whose content was never served (decision D10; regression coverage
+in `scripts/test-citations.ts`, `scripts/test-citation-context-integration.ts`
+and `scripts/test-qa.ts`). Audit finding F8 (2026-11-09): the explain tasks'
+legacy Set tier was formally accepted for whole-path naming (D11) while every
+line-bound citation token is now rejected there — explain tasks serve no
+line-addressable evidence, so fabricated or hallucinated line ranges can no
+longer pass verification and be cached. Hash-bound citations evolved without
+weakening their fail-closed property (B2/B1 re-keying). Acceptance: the existing
 citation and cache tests still pass, plus new tests demonstrating a
 poisoned repository cannot make the answer cite or reveal what the
 evidence does not contain (prompt-hardening and golden-QA suites).

@@ -10,14 +10,18 @@ Statuses: **Adopted** (in force, evidenced), **Pending** (unresolved — an
 agent must not decide these alone), **Historical** (superseded by an adopted
 decision).
 
-Recorded 2026-11-04; evidence pointers verified against the repository on
+Recording 2026-11-04; evidence pointers verified against the repository on
 that date. Updated 2026-11-06 (Phase 1D closure): D8 (glue-term breadth cap)
 and D9 (explicit-anchor stop) added. Updated later on 2026-11-06: P5 and the
 1C/1D status rows corrected to the verified committed-and-pushed state
 (`7262316`, `e78ee56` at `origin/ravi`). Updated 2026-11-09 (F7 closure):
 D7 rewritten from "cache-never-evicted" to the implemented bounded-retention
 policy (90-day eligibility, 25,000-row org pruning target, service-role
-pruning once per successful analysis completion).
+pruning once per successful analysis completion). Updated 2026-11-09
+(F5 closure): D10 added — the `contextText` bare-path rescue removed from
+citation verification. Updated 2026-11-09 (F8 closure): D11 added — the
+explain tasks' legacy Set tier verifies whole-file paths only and rejects
+line-bound citations.
 
 ---
 
@@ -165,6 +169,86 @@ coverage-loop drills once it is served (Phase 1D, V10)
   and un-auditable. This supersedes the earlier approved QA-07 WARN
   trade-off (see PROJECT_STATE §Phase 1D): QA-07 is PASS again in both
   modes, and the rule is strictly narrower than "never drill".
+
+### D10. Only served evidence grounds a bare citation — textual mention is never evidence (Phase 2, F5)
+- **Code (2026-11-09):** `lib/ai/citations.ts` — the bare-path branch of
+  `verifyCitations` no longer accepts a citation because its path string
+  appears verbatim anywhere in `contextText`; the `CitationOptions.contextText`
+  option and the `verifyCitationsEvidence` text-forwarding parameter were
+  removed. A bare path is grounded only by (a) membership in the structured
+  served-evidence map (`allowedEvidence`) or (b) the manifest gate
+  (`isManifestFileGrounded`: tracked, `stored`, `rendered`, current analysis —
+  expanded nowhere).
+- **Reason:** the audit (phase-2-audit.md F5, confirmed by an end-to-end
+  reproduction at `3e6c7ff`) showed the rescue accepted citations to a real
+  but unretrieved file whose name appeared as a string literal or comment in
+  served text — even to a *nonexistent* planned-path mention. A mention can
+  be committed by any repository text; only retrieval membership proves the
+  file's content was served. This is D2's fail-closed rule applied without
+  exception: quoting evidence text is not serving the file.
+- **Trade-off (deliberately accepted, not silent):** downstream config names
+  that live outside the parser's tracked manifest universe (e.g.
+  `lithos.json` quoted inside served source) are no longer citable in
+  code-span/path form; the mention remains discussable in ordinary prose
+  (which is not a citation shape). Supporting such names citably would
+  require the parser to track and render them as manifest evidence — a
+  separate, unscheduled scope. Cached answers that passed only through the
+  rescue self-heal: hit-path verification now rejects, the entry is deleted
+  and regenerated once, before serving.
+- **Regression coverage:** `scripts/test-citations.ts` ("F5 (Phase 2)"
+  section — comment/string-literal/markdown/prose/packaging-shape mentions and
+  nonexistent mentions rejected, window bounds unchanged),
+  `scripts/test-citation-context-integration.ts` (prompt still embeds
+  `contextText` verbatim as *generation* input, while verification consults
+  only structure; cache invalidation of rescue-shaped entries),
+  `scripts/test-qa.ts` (answer-seam: refusal + no caching, single
+  regeneration, citations leaking no unserved path).
+
+### D11. Explain tasks verify whole-file paths; line-bound citations are not verifiable there (Phase 2, F8)
+
+- **Code (2026-11-09):** `lib/ai/citations.ts` — inside
+  `verifyCitations`'s line-bound branch, after path matching, the legacy Set
+  tier (`isLegacySet`: a plain `Set` with no options — `explainFile` and
+  `explainFolder`) rejects every line-cited token (`path#L10-L25`, `path:2-2`,
+  single-line `path#L10`) with an `Unverifiable line citation` failure detail,
+  instead of silently skipping the evidence-map range checks
+  (`start ≥ 1`, `start ≤ end`, `end ≤ lines`, window containment) that only a
+  `Map` of `FileEvidence` can run. `lib/ai/tasks.ts`'s `verifyCitationsBody`
+  now throws the `CitationError` with its details, so explain refusals reach
+  the UI explainable.
+- **Two-tier contract (why bare naming is safe, line claims are not):** a
+  bare path citation in an explain task names a file whose path and structural
+  metadata (role, exports, import/importer edges, folder membership, boundary
+  endpoints) were explicitly supplied by parser-resolved input, and the
+  prompts sanction exactly those names (`HONESTY`: every repository path in
+  full, in backticks; no line references are ever requested). A line-bound
+  citation claims specific source evidence, and explain tasks never serve
+  line-addressable evidence: the file source is sent unnumbered (and capped at
+  `MAX_SOURCE_CHARS`), and the folder message carries no source at all. Any
+  line number in an explanation is therefore founded on nothing. Pre-fix, the
+  legacy branch accepted those tokens unchecked — verified reproduction: an
+  answer citing `path#L1-L9999`, an inverted `#L40-L1`, a zero-start
+  `#L0-L1` or a beyond-EOF `#L777` passed verification, was written to the
+  cache and re-served on every hit. Now such an answer is refused at write
+  time, and a previously poisoned entry fails closed on its next hit.
+- **Q&A unchanged:** the Map tier keeps all of its bounds, file-length and
+  union-window checks verbatim; `isLegacySet` still governs directory-span
+  candidate extraction; the manifest gate is untouched.
+- **Trade-off (deliberate):** cached explanations containing line citations —
+  rare, since prompts never request that shape — now refuse on their next hit
+  and are not healed by the task (explain tasks have no delete-and-regenerate
+  seam; F7 retention bounds the pollution window). Explanations gain no line
+  precision from this change; the whole-path contract stands unweakened.
+- **Regression coverage:** `scripts/test-citations.ts` ("F8 (Phase 2)"
+  section: bare target/neighbour/folder-member and directory-span acceptance
+  preserved, five line-citation shapes rejected, foreign paths unchanged,
+  single-line Map-tier bounds regression) and a rewritten legacy-line case
+  asserting the previously accepted `#L10-L25` token now rejects;
+  `scripts/test-citation-context-integration.ts` ("Phase 2, F8" block: fresh
+  line-cited explanation refused before caching via the intercepted
+  OpenAI-compatible transport, whole-path fresh control served and cached,
+  poisoned explain-file and explain-folder hits refused with the detail and
+  no healing, whole-path cached control serving unchanged).
 
 ## Pending (unresolved — do not decide unilaterally)
 

@@ -250,7 +250,7 @@ export async function answerQuestion(
     const hit = await deps.cache.read(key);
     if (hit !== null) {
       try {
-        verifyCitationsEvidence(hit, allowedEvidence, deps.allAnalysisFiles, deps.manifestsByPath, deps.analysisId, question.contextText);
+        verifyCitationsEvidence(hit, allowedEvidence, deps.allAnalysisFiles, deps.manifestsByPath, deps.analysisId);
         return {
           body: hit,
           model,
@@ -289,7 +289,7 @@ export async function answerQuestion(
 
     const completer = deps.complete ?? ((m, s, u) => complete(m, s, u, { task: "answer-question" }));
     const body = await completer(model, system, user);
-    verifyCitationsEvidence(body, allowedEvidence, deps.allAnalysisFiles, deps.manifestsByPath, deps.analysisId, question.contextText);
+    verifyCitationsEvidence(body, allowedEvidence, deps.allAnalysisFiles, deps.manifestsByPath, deps.analysisId);
     await deps.cache.write({ key, task: "answer-question", model, body });
     return {
       body,
@@ -307,21 +307,19 @@ export async function answerQuestion(
 }
 
 // Verifies a Q&A body against the evidence the generation stage actually saw:
-// the structured per-file evidence map, the analysis-wide path set for error
-// classification, rendered manifests — and `contextText`, the exact rendered
-// snippet text embedded in the user message. A bare path quoted verbatim in
-// that text is a discussion reference (e.g. a config filename string literal
-// inside retrieved source), not a fabricated citation, so it must be verified
-// against the same text the model was shown.
+// the structured per-file evidence map (what retrieval served), the
+// analysis-wide path set for error classification, and the manifest gate. A
+// bare path is acceptable only when its file was actually served or the
+// manifest itself was stored, rendered and field-trusted — never merely
+// because its string appears in the rendered context text (Phase 2, F5).
 function verifyCitationsEvidence(
   body: string,
   allowed: Map<string, FileEvidence>,
   allAnalysisFiles?: Set<string>,
   manifestsByPath?: Map<string, ManifestFile>,
   analysisId?: string,
-  contextText?: string,
 ): void {
-  const failing = verifyCitations(body, allowed, { allAnalysisFiles, manifestsByPath, analysisId, contextText });
+  const failing = verifyCitations(body, allowed, { allAnalysisFiles, manifestsByPath, analysisId });
   if (failing.paths.length) throw new CitationError(failing.paths, failing.details);
 }
 
@@ -353,7 +351,9 @@ function folderCitationsAllowed(input: FolderInput): Set<string> {
 
 function verifyCitationsBody(body: string, allowed: Set<string>): void {
   const failing = verifyCitations(body, allowed);
-  if (failing.paths.length) throw new CitationError(failing.paths);
+  // Details are carried through (Phase 2, F8): an explain refusal is
+  // explainable, including the "Unverifiable line citation" reason.
+  if (failing.paths.length) throw new CitationError(failing.paths, failing.details);
 }
 
 // "none" is a real answer, and cached like any other: the model wasn't made

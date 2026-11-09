@@ -222,6 +222,30 @@ marked fixed; every item cites code as of `e78ee56`.
   claims against such a path still fail, and the existence claim is visible
   to the user as a link, not hidden.
 
+**Resolution 2026-11-09 (audit confirmed reproducible at `3e6c7ff`, then
+fixed).** An end-to-end reproduction (verifier-level scenarios plus
+`answerQuestion` with a stub completer and in-memory cache) confirmed every
+clause: bare citations to real-but-unretrieved files quoted verbatim in served
+source, to files mentioned only in comments, and even to **nonexistent**
+"planned" paths were accepted; line-bound citations and union-window
+containment were untouched; a rescue-passing answer was cached and re-served,
+and hit-path verification re-checked against the current context.
+
+The narrow fix removes the rescue entirely: the bare branch of
+`verifyCitations` grounds a path only in the structured served-evidence map or
+the manifest gate; `CitationOptions.contextText` and the
+`verifyCitationsEvidence` text-forwarding parameter are gone — rendered prompt
+text is generation input, never a verification source (decision D10).
+Manifest handling is unchanged and unexpanded. Deliberate compatibility
+trade-off: downstream config filenames outside the tracked manifest universe
+(`lithos.json`) are no longer citable in code-span/path form, while remaining
+discussable in prose; a citable form would require parser-tracked manifest
+evidence — recorded in [DECISIONS.md](DECISIONS.md) D10. This supersedes the
+locked-behaviour verdict of test T-A5 above (whose test-citations cases now
+assert rejection, with the policy change documented in place). Regression
+coverage and old-implementation demonstration evidence are listed in
+[PROJECT_STATE.md](PROJECT_STATE.md).
+
 ### F6 — Medium — ContentHash is carried in the evidence map but never compared; staleness protection rests on a 32-bit header prefix
 - **Files:** `lib/ai/citations.ts:287` — `contentHash?: string` in
   `FileEvidence`; grep over `lib/ai/citations.ts` shows this is its only
@@ -275,6 +299,30 @@ marked fixed; every item cites code as of `e78ee56`.
   enforces do not apply. Scope decision needed: extend line-bound verification
   to explanations (whose served source is the full file, so legal ranges are
   1..totalLines) or formally accept the two-tier model.
+
+**Resolution 2026-11-09 (audit confirmed reproducible, then fixed).** The F8
+audit-only pass reproduced every clause against the post-F5 code at
+`3e6c7ff` (verifier-level scenarios A–G driving `explainFile` /
+`explainFolder` through poisoned cache hits plus direct `verifyCitations`
+calls): bare name-citing stayed intact on the legacy Set; foreign paths were
+rejected bare and line-bound; but `#L1-L9999`, an inverted `#L40-L1`, a
+zero-start `#L0-L1`, `#L777` and `:2-2` were all accepted against allowed
+paths — including never-served import neighbours and folder members, and the
+folder prompt carries no source at all — then cached (fail-closed on
+subsequent hits, never healed). The approved decision separates the two
+sides of the finding: the whole-path Set for **bare** naming is accepted as
+the explain tasks' contract (naming permission derived from parser-resolved
+input, prompts sanction exactly those names) — while **line-bound** tokens
+are rejected at the legacy tier, where no line-addressable evidence exists in
+principle (decision D11; the Map tier's checks and the manifest gate are
+untouched, and `verifyCitationsBody` now surfaces refusal details). Regression
+coverage: "F8 (Phase 2)" section in `scripts/test-citations.ts` and the
+"Phase 2, F8" block in `scripts/test-citation-context-integration.ts`
+(fresh refusal before caching, poisoned hit refusal, whole-path controls).
+Old-implementation demonstration without both lib hunks: 6 FAILs in
+test-citations (line tokens verified as accepted pre-fix) and 4 FAILs in the
+integration suite (the fresh line-cited explanation was written to the cache;
+hits were served).
 
 ### Doc drift (fiduciary, fixed by this audit's doc edit)
 `docs/DECISIONS.md` P5 row and `docs/ROADMAP.md` subphase rows still say
@@ -462,7 +510,10 @@ Recorded baseline (this audit, `e78ee56`): all suites 0 failed
   shows stale-cache symptomatology.
 - **Line-bound tier for explain-file/explain-folder** (F8): requires the
   workflow decision on whether explanations accept whole-file claims; also
-  touches the renderer's citation display.
+  touches the renderer's citation display. **Resolved 2026-11-09** — see the
+  Resolution block under finding F8: the two-tier model is formally accepted
+  for whole-path naming (D11), line-bound citations are now rejected at the
+  legacy tier; renderer untouched (line-cited spans already render inert).
 - **Coverage-category contamination hardening**: file paths and roles shape
   concept categories that appear in the coverage block; an attacker can
   steer category naming only — coverage stays a confidence guide, no

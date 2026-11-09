@@ -324,8 +324,6 @@ export type CitationOptions = {
    * excluded and legacy-unclassified manifests are not eligible through this
    * exception. */
   manifestsByPath?: Map<string, ManifestFile>;
-  /** Optional rendered evidence context text to check for literal in-code quotes. */
-  contextText?: string;
 };
 
 const RESOLVE_EXTENSIONS = [
@@ -534,30 +532,43 @@ export function verifyCitations(
               );
             }
           }
+          continue;
         }
+      }
+
+      // Legacy Set tier (Phase 2, F8): explainFile and explainFolder verify
+      // whole-path naming. Their served input names files and carries
+      // structural metadata (roles, exports, import/importer edges, folder
+      // membership, boundary endpoints) but never line-addressable evidence —
+      // the file source is sent unnumbered and the folder message carries no
+      // source at all. A line-cited token is therefore unverifiable here in
+      // principle and fails closed, instead of silently skipping the ranges
+      // check the Map branch runs above.
+      if (isLegacySet) {
+        offending.add(token);
+        details.push(
+          `Unverifiable line citation in "${token}": explanation answers verify whole-file paths only — cite the file by path, without line numbers`,
+        );
       }
       continue;
     }
 
-    // Bare file mentions without line numbers: must strictly be present in
-    // retrieved evidence (allowedEvidence) or authorized rendered manifests.
-    // Unretrieved repository files are rejected with a clear error.
     const allowedFiles = new Set(allowed instanceof Map ? Array.from(allowed.keys()) : Array.from(allowed));
     const existsInAllowed = findMatchingPath(normalizedPath, (p) => allowed.has(p), allowedFiles);
     const isStandard = isManifestFileGrounded(normalizedPath, options?.manifestsByPath, options?.analysisId);
 
+    // Bare file mentions without line numbers: must strictly be present in
+    // retrieved evidence (allowedEvidence) or authorized rendered manifests.
+    // A path's textual appearance inside the rendered context — in a comment,
+    // string literal, documentation line or packaging row — is never evidence
+    // of that file's content (Phase 2, F5): repository text of any kind can
+    // name any path, so only the structured evidence map and the manifest
+    // gate decide. Standard manifest filenames are specifically excluded
+    // from any textual shortcut: packaging blocks always render their names,
+    // so text presence could not distinguish an authorized manifest from an
+    // absent, quarantined or foreign one — those stay governed solely by
+    // isManifestFileGrounded.
     if (!existsInAllowed && !isStandard) {
-      // If the bare path appears verbatim within the retrieved source context text,
-      // the model was quoting or discussing a string literal / configuration name
-      // directly present in evidence rather than fabricating a file citation.
-      // Standard manifest filenames are excluded from this rescue: packaging
-      // blocks always render their names, so textual presence cannot
-      // distinguish an authorized manifest from an absent, quarantined or
-      // foreign one — those stay governed solely by isManifestFileGrounded.
-      const isStandardManifestName = STANDARD_PROJECT_FILES.has(normalizedPath);
-      if (!isStandardManifestName && options?.contextText && options.contextText.includes(token)) {
-        continue;
-      }
       offending.add(token);
       const existsInAllFiles = options?.allAnalysisFiles
         ? findMatchingPath(normalizedPath, (p) => options.allAnalysisFiles!.has(p), options.allAnalysisFiles)
