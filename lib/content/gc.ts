@@ -244,3 +244,230 @@ export async function garbageCollectOrphanedContent(
 
   return stats;
 }
+
+// Safe retention pruning for the answer cache (ai_cache).
+//
+// The answer cache grows without bound: prompt-version bumps, model repins
+// and source re-analysis re-key everything, leaving dead rows forever. The
+// policy (migration 20261109000000) is expiration plus a per-organization
+// row cap, enforced database-side by the service-role-only prune_ai_cache
+// function.
+//
+// Cleanup eligibility ONLY: an expiring entry or a cap eviction is never
+// evidence validity. Every cache read is verified against the current
+// evidence before serving, unchanged; pruning can only cost a regeneration,
+// never a stale answer. Ordinary cache reads never write to the table (the
+// members' client holds a select-only grant), and there is deliberately no
+// per-hit LRU tracking - reads stay read-only.
+
+/** Default retention age before an answer-cache row is cleanup-eligible. */
+export const DEFAULT_ANSWER_RETENTION_DAYS = 90;
+
+/** Default batch size for bounded pruning (rows deleted per batch). */
+export const DEFAULT_ANSWER_BATCH_SIZE = 500;
+
+/** Default maximum total deletions per pruning invocation. */
+export const DEFAULT_ANSWER_MAX_DELETIONS = 5_000;
+
+/** Default maximum rows held per organization before oldest-first eviction. */
+export const DEFAULT_ANSWER_CAP_ROWS_PER_ORG = 25_000;
+
+export type AnswerGcOptions = {
+  /**
+   * Scope to a specific organization. Normal application invocations must
+   * always pass an explicit scope; null runs across all organizations and
+   * is meant for service-role operators only.
+   */
+  organizationId?: string | null;
+
+  /** Rows deleted per batch. Default: 500. */
+  batchSize?: number;
+
+  /**
+   * Maximum total deletions for the invocation. The database function
+   * stops early once the budget is spent, so one request can never run an
+   * unbounded cleanup loop. Default: 5,000.
+   */
+  maxDeletions?: number;
+
+  /**
+   * Per-organization row cap enforced while pruning, oldest-by-creation
+   * evicted first, and only after expired rows are gone. Default: 25,000.
+   * The cap is a pruning target, not an instantaneous bound: ordinary
+   * inserts never lock or check it and may temporarily exceed it; the next
+   * pruning invocation converges the organization back to the cap.
+   */
+  capRowsPerOrg?: number;
+
+  /**
+   * If true, counts eligible rows without deleting anything.
+   * Superseded if execute: false.
+   */
+  dryRun?: boolean;
+
+  /**
+   * Explicit confirmation required to perform destructive deletions.
+   * Must be explicitly set to `true` to delete data.
+   * Default: false (dry-run).
+   */
+  execute?: boolean;
+};
+
+export type AnswerGcStats = {
+  /** Scope the run was made under (null = all organizations). */
+  organizationId: string | null;
+  /** Rows in scope evaluated: deleted rows when active, counted rows when dry. */
+  rowsExamined: number;
+  /** Rows whose retention age has passed (cleanup-eligible by expires_at). */
+  expiredRowsEligible: number;
+  /**
+   * Rows beyond the per-organization cap in scope. Always exact for an
+   * organization-scoped dry run; null for an all-organizations dry run,
+   * where the cap can only be judged per organization.
+   */
+  overCapRowsEligible: number | null;
+  /** Deleted expired rows. Active runs only; always 0 in a dry run. */
+  expiredRowsDeleted: number;
+  /** Deleted top-oldest rows from over-cap organizations. Active runs only. */
+  capEvictedRowsDeleted: number;
+  /**
+   * Exact bytes of deleted answer bodies (postgres octet_length summed over
+   * deleted rows). Body bytes only - no estimated row overhead is ever
+   * reported. Always 0 in a dry run because nothing was measured dead.
+   */
+  bodyBytesDeleted: number;
+  /** Whether the operation was a dry run (no rows deleted). */
+  dryRun: boolean;
+  /** Errors encountered during execution, if any. */
+  errors: string[];
+};
+
+/**
+ * Prunes expired answers and enforces the per-organization row cap on
+ * ai_cache, mirroring garbageCollectOrphanedContent's safety conventions.
+ *
+ * Safety guarantees:
+ * - Bounded: the database function deletes at most `maxDeletions` rows per
+ *   invocation in `batchSize`-sized batches, expired rows first, and caps
+ *   each organization at `capRowsPerOrg` (oldest evicted first, never while
+ *   at or under the cap). Callers that want to continue may invoke again.
+ * - Concurrency-safe: per-organization pruning is serialized by a
+ *   transaction-scoped advisory lock, so concurrent runs never double-count
+ *   the cap; cache writers never block and keep the documented
+ *   first-writer-wins insert semantics.
+ * - Correctness-neutral: pruning changes cleanup eligibility only. Serving
+ *   verifies every cache hit against current evidence regardless of
+ *   freshness or retention state.
+ * - Org-isolated: an organization-scoped run can never touch another
+ *   organization's rows.
+ */
+export async function garbageCollectExpiredAnswers(
+  db: Db,
+  options: AnswerGcOptions = {},
+): Promise<AnswerGcStats> {
+  const {
+    organizationId = null,
+    batchSize = DEFAULT_ANSWER_BATCH_SIZE,
+    maxDeletions = DEFAULT_ANSWER_MAX_DELETIONS,
+    capRowsPerOrg = DEFAULT_ANSWER_CAP_ROWS_PER_ORG,
+    dryRun: requestedDryRun = false,
+    execute = false,
+  } = options;
+
+  // Actual deletion requires execute === true AND dryRun !== true, exactly
+  // like the orphaned-content GC.
+  const isDryRun = requestedDryRun || !execute;
+
+  const stats: AnswerGcStats = {
+    organizationId,
+    rowsExamined: 0,
+    expiredRowsEligible: 0,
+    overCapRowsEligible: null,
+    expiredRowsDeleted: 0,
+    capEvictedRowsDeleted: 0,
+    bodyBytesDeleted: 0,
+    dryRun: isDryRun,
+    errors: [],
+  };
+
+  if (isDryRun) {
+    try {
+      const nowIso = new Date().toISOString();
+
+      // Rows whose retention age has passed, in scope.
+      let expiredQuery = db.from("ai_cache").select("key", { count: "exact", head: true }).lt("expires_at", nowIso);
+      if (organizationId) {
+        expiredQuery = expiredQuery.eq("organization_id", organizationId);
+      }
+      const { count: expiredCount, error: expiredError } = await expiredQuery;
+
+      if (expiredError) {
+        stats.errors.push(`Failed to count expired rows: ${expiredError.message}`);
+        return stats;
+      }
+
+      // Total rows in scope, to judge the cap against.
+      let scopedQuery = db.from("ai_cache").select("key", { count: "exact", head: true });
+      if (organizationId) {
+        scopedQuery = scopedQuery.eq("organization_id", organizationId);
+      }
+      const { count: scopedCount, error: scopedError } = await scopedQuery;
+
+      if (scopedError) {
+        stats.errors.push(`Failed to count rows in scope: ${scopedError.message}`);
+        return stats;
+      }
+
+      stats.rowsExamined = scopedCount ?? 0;
+      stats.expiredRowsEligible = expiredCount ?? 0;
+
+      if (organizationId) {
+        // The cap is per organization, so an organization-scoped count
+        // yields an exact over-cap figure. A global dry run leaves it
+        // null rather than guessing.
+        stats.overCapRowsEligible = Math.max(0, (scopedCount ?? 0) - capRowsPerOrg);
+      }
+
+      return stats;
+    } catch (err) {
+      stats.errors.push(`Dry-run execution failed: ${err instanceof Error ? err.message : String(err)}`);
+      return stats;
+    }
+  }
+
+  // Active mode: one bounded call into the database pruner. The function
+  // loops batch by batch inside its own transaction under the per-org
+  // advisory lock, spending at most p_max_deletions, so the client adds no
+  // loop of its own: more work is one more invocation, possibly with a
+  // larger budget, never an unbounded request.
+  try {
+    const { data, error: rpcError } = await db.rpc("prune_ai_cache", {
+      p_organization_id: organizationId ?? undefined,
+      p_batch_size: batchSize,
+      p_max_deletions: maxDeletions,
+      p_cap_rows: capRowsPerOrg,
+    });
+
+    if (rpcError) {
+      stats.errors.push(`Prune RPC failed: ${rpcError.message}`);
+      return stats;
+    }
+
+    for (const row of data ?? []) {
+      const expired = row.expired_rows_deleted ?? 0;
+      const capEvicted = row.cap_evicted_rows_deleted ?? 0;
+      stats.expiredRowsDeleted += expired;
+      stats.capEvictedRowsDeleted += capEvicted;
+      stats.bodyBytesDeleted += Number(row.body_bytes_deleted ?? 0);
+    }
+
+    stats.rowsExamined = stats.expiredRowsDeleted + stats.capEvictedRowsDeleted;
+    stats.expiredRowsEligible = stats.expiredRowsDeleted;
+    stats.overCapRowsEligible = stats.capEvictedRowsDeleted;
+
+    return stats;
+  } catch (err) {
+    stats.errors.push(`Prune execution failed: ${err instanceof Error ? err.message : String(err)}`);
+    return stats;
+  }
+}

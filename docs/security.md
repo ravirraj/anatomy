@@ -279,8 +279,12 @@ An answer is prose written by a model about a file's source. It may quote
 code. It is stored in `ai_cache`, scoped to the organization, and readable
 only by that organization under the same policy as everything else.
 
-There is **no eviction and no TTL**. The table grows with every distinct
-question.
+Retention bounds the growth (F7): rows become cleanup-eligible after
+90 days and are pruned once per successful analysis completion —
+service-role only, 500-row batches, 5,000 deletions max per invocation,
+plus a 25,000-row per-organization pruning target. Expiration is cleanup
+eligibility, never validity: every cached answer is still re-verified
+against the current evidence before it is served, exactly as before.
 
 ### 6.2 The browser keeps answers too
 
@@ -379,9 +383,13 @@ lands, so it will read as failed rather than as wrong.
 not bounded, and a repository with a highly compressible payload could
 occupy considerably more disk.
 
-### 9.6 The answer cache grows without bound
+### 9.6 The answer cache is bounded only by retention policy
 
-No eviction, no TTL. Over time this is a storage and a retention question.
+Growth is capped by the retention policy (F7): 90-day eligible expiry and a
+25,000-row per-organization pruning target, enforced once per successful
+analysis completion — not instantaneously against writes, and with nothing
+running between completions. Over time this is a convergence question, not
+a per-request guarantee.
 
 ### 9.7 The archive timeout and the stale window are the same length
 

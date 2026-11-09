@@ -146,10 +146,23 @@ organization's answer is not readable by another.
 The write goes through the admin client, because a member has no write grant.
 The organization id it writes is the one the policy just let the member read.
 
-### 4.3 The cache is never evicted
+### 4.3 Retention: bounded, never correctness-relevant
 
-There is no eviction and no TTL. The table grows with every distinct
-question. Tracked in [TODO.md](../TODO.md#7-ai-improvements).
+The cache retains with a bounded policy (F7, 2026-11-08). Every row carries
+`expires_at` — set 90 days ahead at insert — and rows are pruned once per
+successful analysis completion (`pruneRetiredAnswers` in
+`lib/pipeline/run.ts` calling `prune_ai_cache` through
+`garbageCollectExpiredAnswers`, `lib/content/gc.ts`): 500-row batches, at
+most 5,000 deletions per invocation, service-role only, plus a
+25,000-row per-organization pruning target that evicts oldest-first (the
+target is a convergence point, not a hard bound on writes). Full
+lifecycle: [architecture.md](architecture.md) §11.6; decision:
+[DECISIONS.md](DECISIONS.md) D7.
+
+Expiration is *cleanup eligibility*, never answer validity: an expired row
+is storage to reclaim, and an unexpired row guarantees nothing. Every hit —
+at any age — is still re-verified before serving, exactly as before, and a
+hit that stops verifying is deleted and regenerated once.
 
 ---
 

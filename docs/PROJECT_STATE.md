@@ -27,22 +27,31 @@ B1 (trust-boundary system rule + `PROMPT_VERSION` 3; 2026-11-06), B2
 hardening, F2/F3 closed; 2026-11-08) and B4 (JSDoc appendix hardening, F4
 closed; 2026-11-08) — are implemented, gates-verified and **committed
 2026-11-08** in the Phase 2 consolidation commit
-(`feat(security): harden answer integrity and evidence boundaries`). Deferred
-(separate approval): F5 path-rescue, F7 cache TTL/eviction. Nothing pushed.**
+(`feat(security): harden answer integrity and evidence boundaries`). F5
+path-rescue still deferred; **F7's approved batches F7-1+F7-2 are
+implemented 2026-11-08 and verified end-to-end against the local Supabase** —
+migration `20261109000000` applied to the local DB, catalog-verified, the
+full `test:db` chain green (incl. 17 answer-gc checks), all offline gates
+green — but the work is **uncommitted**. F7-3 (pipeline wiring into
+`continueRun`) and F7-4 (documentation consolidation: D7, architecture
+§10.2–10.3 + §11.6, ROADMAP Phase 2, and the contradiction sweep) are also
+implemented and verified (2026-11-08–09). A commit (and separately a push
+and a deployment of the migration to the linked remote Supabase) awaits
+explicit approval (§4). Nothing pushed.**
 
 ## 2. Verified Git state
 
-Verified 2026-11-06 during the Phase 2 audit, via `git log --oneline`,
-`git branch --show-current`, `git status --porcelain`:
+Verified 2026-11-08 during F7-1/F7-2, via `git log --oneline`,
+`git branch --show-current`, `git status --porcelain`, `git ls-remote origin ravi`:
 
 | Fact | Value |
 |---|---|
 | Branch | `ravi` |
-| HEAD | `e78ee56` — *docs(state): record the 2026-11-06 fresh full-16 answer-stage attempt and commit-push state* |
-| Commits | `7262316` fix(retrieval): Phase 1C · `c51f018` feat(qa): Phase 1D · `e78ee56` docs/eval follow-up · `c1ac975` Phases 1A+1B (preserved, untouched) |
+| HEAD | `9f4f942` — *feat(security): harden answer integrity and evidence boundaries* (2026-11-08 consolidation commit; parent `e78ee56`) |
+| Commits | `9f4f942` Phase 2 consolidation (B1–B4, 19 files) · `e78ee56` docs/eval follow-up · `c51f018` feat(qa): Phase 1D · `7262316` fix(retrieval): Phase 1C · `c1ac975` Phases 1A+1B (preserved, untouched) |
 | Remote | `https://github.com/ravirraj/anatomy.git` (`origin`) |
-| Pushed | No — `origin/ravi` is at `e78ee56`; after the 2026-11-08 consolidation commit, unpushed commits: **1** (push **not** approved) |
-| Working tree | **Clean** — Phase 2 Batches B1+B2+B3+B4 committed 2026-11-08 as the consolidation commit `feat(security): harden answer integrity and evidence boundaries` (B1 — trust-boundary prompts + `PROMPT_VERSION` 3 + `scripts/test-prompt-hardening.ts` (new), `package.json` test-chain registration; B2 — full-hash window headers (F6 closed): `lib/ai/retrieval.ts`, `lib/ai/retrieval-loop.ts`, `lib/ai/tasks.ts` (fail-closed `isContentHash` guard), fixtures/mirrors in 6 test scripts; B3 — packaging line hardening (F2/F3 closed): `lib/ai/packaging.ts` (`sanitizeEvidenceValue`, named `sanitizePackagingValue` when written), `scripts/test-packaging.ts` new B3 section; B4 — JSDoc appendix hardening (F4 closed): `lib/ai/retrieval.ts` (`formatApiSurfaceFor` renders the doc slice through the shared sanitizer; `formatRetrievedContext` delegates to it; row sort made byte-stable), `scripts/test-retrieval-loop.ts` new B4 section (+ optional 3rd `check` arg); plus the audit documentation: `docs/phase-2-audit.md` (new) and `docs/DECISIONS.md` + `docs/ROADMAP.md` + `docs/architecture.md` (1C/1D status corrections)). No migrations, no verification redesign, no dependencies. |
+| Pushed | No — `origin/ravi` is at `e78ee56`; unpushed local commits: **1** (the consolidation commit; push **not** approved) |
+| Working tree | **Dirty (F7-1…F7-4, uncommitted — no commit approved for them)** — modified: `supabase/migrations/20261109000000_ai_cache_retention.sql` (new), `lib/content/gc.ts`, `lib/content/types.ts`, `lib/supabase/database.types.ts`, `lib/pipeline/run.ts` (F7-3 wiring: `pruneRetiredAnswers` + one call after the durable completion update), `package.json`, `docs/DECISIONS.md`, `docs/architecture.md`, `docs/ROADMAP.md`, `docs/ai-system.md`, `docs/security.md`, `docs/features.md`, `docs/architecture/file-content-storage.md` (all F7-4), `docs/PROJECT_STATE.md` (status record), `scripts/test-answer-gc.ts` (new), `scripts/test-answer-gc-db.ts` (new), `scripts/test-cache-prune-integration.ts` (new, F7-3). All gates re-verified after the last code change (2026-11-08); documentation checks (`pnpm check-links`) green after F7-4. B1–B4 content itself is committed and untouched. |
 | Previous commits | `f05af36` (CLI flow/budget), `3fa177c` (cli-execution intent), `913e9d0`, `d1098bc`, `159dede`, `df85638` |
 
 Commit-integrity note: before partitioning, the full intended state
@@ -390,18 +399,199 @@ documentation slice only — window *text* stays verbatim (B1 trust rule +
 fail-closed citation verification are the fences there, and window evidence is
 exactly what citations verify against); `\u2028`/`\u2029` line separators
 inside a doc value are not collapsed (parse-level JSDoc summaries never carry
-them; recorded for completeness); F5 (path-rescue) and F7 (TTL/eviction)
-remain deferred.
+them; recorded for completeness); F5 (path-rescue) remains deferred.
+
+### F7-1/F7-2 — `ai_cache` retention & eviction (implemented 2026-11-08, uncommitted)
+
+Approved scope: F7-1 (schema + prune function) and F7-2 (application client)
+only per the F7 audit's approved policy: 90-day retention, 25,000-row
+per-org cap, 500-row batches, service-role pruning, verification of every
+hit unchanged. F7-4 (docs consolidation) is **not approved yet**; nothing
+about the serving path changed.
+
+| File | Change |
+|---|---|
+| `supabase/migrations/20261109000000_ai_cache_retention.sql` | New. `expires_at timestamptz NOT NULL DEFAULT now() + '90 days'` (cleanup eligibility only, never validity); deterministic backfill `expires_at = created_at + 90 days` for existing rows; indexes `(organization_id, expires_at)` and `(organization_id, created_at)`; `prune_ai_cache(p_organization_id, p_batch_size, p_max_deletions, p_cap_rows)` — plpgsql `security definer set search_path = ''`, EXPIRED-first then per-org cap trim (oldest by `created_at`), batched via CTE `DELETE ... FOR UPDATE SKIP LOCKED`, one `pg_advisory_xact_lock(hashtextextended(...))` per organization held for the whole invocation; per-org stats rows (expired deleted, cap-evicted deleted, exact `octet_length(body)` bytes); revoke from public/anon/authenticated, grant only `service_role`. All table references qualified (the out-parameter names collide with column names in plpgsql). RLS/grants/policies untouched. |
+| `lib/content/gc.ts` | New constants `DEFAULT_ANSWER_RETENTION_DAYS` (90), `DEFAULT_ANSWER_BATCH_SIZE` (500), `DEFAULT_ANSWER_MAX_DELETIONS` (5,000), `DEFAULT_ANSWER_CAP_ROWS_PER_ORG` (25,000); `AnswerGcOptions`/`AnswerGcStats` types; `garbageCollectExpiredAnswers(db, options)` mirroring the orphaned-content GC conventions: dry-run default, `execute: true` required, explicit org scope for normal invocations, structured errors, no serving-path changes, no writes on cache reads, no LRU tracking; single bounded RPC call (the function loops internally under its own budget), exact byte aggregation of returned org rows. |
+| `lib/content/types.ts` | GC-contract export extended with `AnswerGcOptions`/`AnswerGcStats`. |
+| `lib/supabase/database.types.ts` | First hand-extended deterministically (`ai_cache.expires_at: string` in Row, optional in Insert/Update since DEFAULT'd; alphabetized `prune_ai_cache` Functions entry), then **regenerated with the supported workflow** (`supabase gen types typescript --local`) once the DB gate ran — the regenerated file matches the hand extension for `ai_cache`/`prune_ai_cache` exactly, and additionally includes 6 pre-existing `symbols` enrichment columns the committed file never reflected (see the DB-verification paragraph below). |
+| `scripts/test-answer-gc.ts` | New unit suite (28 checks): dry-run default, dryRun overrides execute, scope/bounds forwarding + defaults, rpc-error capture, empty result, global vs scoped aggregation, exact-cap dry-run math. |
+| `scripts/test-answer-gc-db.ts` | New DB-gated suite (11 sections D1–D11) covering all 12 required DB assertions: default 90-day stamp, backfill universality, expired-first over cap eviction, under-cap retention, oldest-first cap eviction, invocation budget bounds, org isolation, advisory-locked concurrent prunes holding the cap exactly, deterministic first-writer-wins concurrent inserts, poisoned in-TTL row still verified and healed, evicted answer regenerated + verified before re-store. Registered in the `test:db` chain; never calls the pruner unscoped. |
+| `package.json` | `test` chain: `test-answer-gc.ts` after `test-content-gc.ts`, `test-cache-prune-integration.ts` after it (F7-3); `test:db` chain: `test-answer-gc-db.ts` after the GC-concurrency suite. |
+
+**Concurrency guarantees:** same-org prune invocations serialize on the
+transaction-scoped advisory lock, so the cap is evaluated at most once at a
+time and never double-evicts; `FOR UPDATE SKIP LOCKED` is layered on top but
+is never load-bearing for the cap. Concurrent inserts keep the documented
+first-writer-wins semantics (`unique (organization_id, key)` +
+`ignoreDuplicates`); a prune may delete a just-written row — that answer
+misses and regenerates, a performance cost only.
+
+**Work bounds:** `p_batch_size` bounds each batch, `p_max_deletions` (shared
+across phases and orgs) bounds the invocation total; the client adds no loop
+of its own.
+
+**Verification evidence (2026-11-08, after the last relevant change):**
+`pnpm test` exit 0; `pnpm test:budget` exit 0; `pnpm test:qa-eval` 15 PASS /
+1 WARN (QA-05 18.8%), identical to the frozen baseline; `pnpm typecheck`
+exit 0; `pnpm lint` 0 errors / 56 warnings (baseline restored after fixing
+the new files' warnings); `node scripts/test-answer-gc.ts` 28/28 checks pass.
+
+**Database verification (2026-11-08 DB gate, local Supabase):** Docker was
+started and the local stack brought up from its existing configuration
+(remote `finalyear` linked project untouched — one `supabase migration list`
+attempt timed out against the *remote* and was abandoned before doing
+anything). `supabase migration up` applied `20261109000000` to the LOCAL
+database (previously migrated through `20261103000000`). Catalog verified
+via `psql`: `expires_at` NOT NULL with default `now() + '90 days'`; all 8
+pre-existing rows backfilled exactly `created_at + 90 days`; indexes
+`(organization_id, expires_at)` and `(organization_id, created_at)` present;
+signature `prune_ai_cache(text,integer,integer,integer)` with defaults
+`NULL::text, 500, 5000, 25000`; `security definer` + `search_path=""`;
+`proacl` = postgres+service_role only, anon denied; RLS/`relacl`/policy/
+authenticated SELECT-only grant the same as pre-migration. The full
+`pnpm test:db` chain passed (exit 0), including all 17 answer-gc checks
+(D1–D11): default 90-day stamp, backfill universality, expired-first over
+cap eviction, under-cap retention, oldest-first cap eviction, budget bounds
+and exact octet_length bytes (30 = 5×6-byte bodies), org isolation,
+concurrent prunes holding the cap exactly (20 evicted from a 40-row
+over-cap org, final count exactly 20), first-writer-wins concurrent
+inserts, a poisoned in-TTL row verified-healed, and an evicted answer
+regenerated + verified before re-store. Cap semantics verified live: an
+ordinary insert completed in 85 ms while a prune-style advisory lock was
+held for 6 s — **the 25,000-row cap is a pruning target, not an
+instantaneous bound**; inserts never lock or check it, over-cap orgs
+converge on the next prune invocation; documented in the migration header
+and `AnswerGcOptions.capRowsPerOrg`. `database.types.ts` was regenerated
+with the supported workflow (`supabase gen types typescript --local`) rather
+than hand-edited: it matches the deterministic hand-extension for
+`ai_cache.expires_at` and `prune_ai_cache` exactly, adds the standard
+`ComputedFields: never`/`graphql_public` blocks of the newer generator
+format, and reveals three pre-existing `symbols` enrichment columns
+(`documentation`, `end_line`, `export_kind`) plus `parameters`,
+`return_type`, `signature` that migration `20261101000000` added but the
+committed types file never reflected — a genuine, pre-existing drift now
+corrected by the regeneration (typecheck confirms no code breakage).
+
+**Uncommitted:** all of F7-1/F7-2 remains in the working tree (no commit was
+approved for it — see restrictions).
+
+### F7-3 — production wiring of answer-cache pruning (implemented 2026-11-08, uncommitted)
+
+Approved scope: wire `garbageCollectExpiredAnswers()` into the analysis
+lifecycle's completion seam only.
+
+**Integration point (traced, not assumed):** `lib/pipeline/run.ts`
+`continueRun` is the lifecycle; its durable completion is the final
+`update(db, claimed, { status: "complete", ... })`, which throws on error or
+`SupersededError`. The pruning call is the statement immediately after that
+update, still inside the `try` — so it executes **only** when persistence
+succeeded, never on the failure path (the catch marks the row failed before
+the prune line could be reached) and never on supersession (the rethrow
+precedes it). Both production call sites pass a service-role `db` and await
+the run: `app/(workspace)/actions.ts` `start()` schedules
+`await continueRun(createAdminSupabase(), claimed)` inside Next.js `after()`
+(Next awaits the continuation), and `scripts/analyze.ts` awaits
+`runAnalysis`. Accordingly the prune is a **bounded awaited call**, not a
+detached promise; no worker/scheduler/Redis/dependency was added.
+
+**Wiring shape:** `pruneRetiredAnswers(db, analysisId, organizationId)` in
+`lib/pipeline/run.ts` — reuses the pipeline's service-role writer, calls
+`garbageCollectExpiredAnswers(db, { organizationId, execute: true })` with
+all other bounds at their approved defaults (500 batch / 5,000 deletions /
+25,000 cap / 90-day retention, all exercised server-side), and treats a
+non-empty `stats.errors` as a failure. Exactly one RPC per completion
+(`prune_ai_cache`); the client adds no loop, so more work is the next
+completion's invocation.
+
+**Failure isolation & logging:** `pruneRetiredAnswers` never rethrows. A
+failure is caught at the function and recorded as one structured JSON
+`console.error` line (`{event:"answer_cache_prune_failed", analysisId,
+organizationId, error}`) — no client/connection/credential detail. A
+success that removed rows logs one compact `console.warn` summary with the
+analysis id and deletion counts; nothing to prune stays silent. Because the
+error is swallowed inside the helper, it can never reach `continueRun`'s
+catch, so a completed analysis always stays complete and no result is ever
+rolled back.
+
+**Verification evidence (2026-11-08, after the last relevant change):**
+`pnpm test` exit 0 (now includes the new suite); `pnpm test:budget` exit 0;
+`pnpm test:qa-eval` 15 PASS / 1 WARN (QA-05 18.8%), frozen baseline
+identical; `pnpm typecheck` exit 0; `pnpm lint` 0 errors / 56 warnings
+(exact baseline); the full `pnpm test:db` chain exit 0 against the running
+local Supabase. New: `scripts/test-cache-prune-integration.ts` (35 checks,
+all pass): org-explicit scope (`p_organization_id`) never null; defaults
+500/5,000/25,000 forwarded; one RPC even when the result reports remaining
+work (no client loop); rpc error, thrown rpc, and stats-level errors are
+all logged structurally with analysis+organization context and never
+rethrown; the failure log carries no credential-shaped detail; summary
+logged only when rows were removed; the source contract asserts the prune
+call sits after the `status: "complete"` update, inside the try, exactly
+once. A one-off live smoke through the real wiring + real
+`createAdminSupabase` client against the local DB pruned a seeded expired
+row (12 body bytes) and cleaned up (scaffolding removed after the run).
+
+**Uncommitted:** F7-1/F7-2 and F7-3 all remain uncommitted (no commit
+approval).
+
+### F7-4 — documentation consolidation (completed 2026-11-09, uncommitted)
+
+Approved scope: make the authoritative documents reflect the implemented
+retention architecture; no code, migration, or test changes.
+
+- **`docs/DECISIONS.md`** — D7 rewritten from "cache-never-evicted (until
+  challenged)" to the implemented policy: 90-day expiration *eligibility*
+  (cleanup only, never validity), 25,000-row per-organization pruning
+  target (not an instantaneous bound), 500-row batches, 5,000-deletion
+  maximum per invocation, service-role-only pruning, mandatory
+  verify-before-serve on every hit preserved, no scheduler/retries and
+  eventual convergence, and the local-vs-remote deployment distinction.
+  Ledger header note updated.
+- **`docs/architecture.md`** — §10.2 trade-off row and §10.3 "not yet
+  decided" cache-invalidation bullet corrected (the invalidation question
+  is answered: hash re-verification per hit + bounded retention); a new
+  **§11.6 "Answer-cache retention (as implemented)"** documents key
+  identity, verify-before-serve, expired-first pruning, oldest-first cap
+  eviction, advisory-lock serialization, the GC wrapper and the
+  `continueRun` invocation point, failure isolation + structured logging,
+  bounded execution and eventual convergence, and the pending remote
+  deployment; §11.3 limitation bullet updated.
+- **`docs/ROADMAP.md`** — Phase 2 marked **implemented 2026-11-06…09 with
+  F5 deliberately deferred** (not claimed complete): B1–B4 committed at
+  `9f4f942`; F7-1…F7-3 implemented and DB-verified, uncommitted; near-term
+  P1 prompt-injection row struck through as done.
+- **Contradiction sweep** (same change): `docs/ai-system.md` §4.3
+  ("never evicted" → bounded retention), `docs/security.md` §6.1 and §9.6,
+  `docs/features.md` limitations, `docs/architecture/file-content-storage.md`
+  §7.1. Historical documents kept as history:
+  `docs/phase-2-audit.md` untouched (F7/eviction still accurately cited as
+  *findings at `e78ee56`*), `docs/phase-1d-qa-audit.md` §table untouched,
+  and PROJECT_STATE's own §3 batch chronicles (B2/B4 notes) kept — they
+  record what was true at that batch's time.
+- **Validation:** `pnpm check-links` green; no contradicting
+  cache-retention statements remain outside historical records (verified by
+  grep sweep); ROADMAP and PROJECT_STATE agree on the F5-deferred,
+  uncommitted, unpushed state.
+
+**Uncommitted:** F7-1/F7-2/F7-3/F7-4 all remain uncommitted (no commit
+approval).
 
 ## 4. Exact next approved task
 
-Phase 2 implementation is **complete through B4 and committed** (2026-11-08
-consolidation commit, `feat(security): harden answer integrity and evidence
-boundaries`); the working tree is clean. **No next batch is approved.** The
-audit's F5 (path-rescue) and F7 (cache TTL/eviction) remain deferred and
-unstarted unless separately approved — cache TTL/eviction in particular is
-still unresolved, so Phase 2's roadmap item is not wholly closed. A push of
-the consolidation commit is **not** approved.
+**F7-1 (schema/prune function), F7-2 (application pruning client), F7-3
+(production wiring), and F7-4 (documentation consolidation) are implemented
+and verified 2026-11-08–09 but remain uncommitted in the working tree** (no
+commit approved for them; see §3 F7 sections). The 2026-11-08 DB gate ran
+the FULL `pnpm test:db` chain live: migration `20261109000000` is **applied
+to the local Supabase** and catalog-verified, and all DB-gated suites —
+including the 17 answer-gc checks — **passed**. The migration has **not**
+been deployed to the linked remote Supabase project.
+
+**No next batch is approved yet.** Awaiting explicit user approval for:
+
+1. A commit of F7-1/F7-2/F7-3/F7-4 (currently nothing is committed), and
+   separately, a push and/or a deployment of migration `20261109000000` to
+   the linked remote Supabase project.
 
 Optional follow-ups, **not approved and not started** (each needs its own
 approval):
@@ -420,8 +610,9 @@ approval):
 
 | Item | Type | Note |
 |---|---|---|
-| Phase 2 batches B1–B4: implemented, verified, committed | Resolved 2026-11-08 | Committed as the consolidation commit `feat(security): harden answer integrity and evidence boundaries` (B1 trust rule, B2 full-hash headers, B3 packaging hardening, B4 JSDoc appendix hardening per [phase-2-audit.md](phase-2-audit.md) §5). F5 (path-rescue) and F7 (TTL/eviction) remain **deferred, each needing separate approval**. Push of this commit: **not requested/approved**. |
+| Phase 2 batches B1–B4: implemented, verified, committed | Resolved 2026-11-08 | Committed as the consolidation commit `feat(security): harden answer integrity and evidence boundaries` (B1 trust rule, B2 full-hash headers, B3 packaging hardening, B4 JSDoc appendix hardening per [phase-2-audit.md](phase-2-audit.md) §5). F5 (path-rescue) remains **deliberately deferred** (behaviour locked per the audit's T-A5); F7 was implemented 2026-11-08–09 (see next row). Push of this commit: **not requested/approved**. |
 | Push approval for the 2026-11-08 Phase 2 consolidation commit | Awaiting approval | Not requested by the approved batch; `origin/ravi` still at `e78ee56`, one unpushed local commit. |
+| F7 — `ai_cache` retention/eviction | F7-1…F7-4 implemented + DB-verified 2026-11-08–09, **uncommitted**; commit/push approval outstanding | Migration `20261109000000` applied to the local Supabase and catalog-verified (RLS/grants unchanged); full `pnpm test:db` chain green incl. all 17 answer-gc checks (D1–D11); cap verified as a pruning target (insert completed in 85 ms under a held prune lock; over-cap org converges on the next prune). F7-3: `continueRun` calls failure-isolated `pruneRetiredAnswers` (service-role writer, org-explicit, bounded single RPC, structured error logging) after the durable `status: "complete"` update; 35 wiring checks pass; live smoke pruned a seeded expired row. F7-4: documentation consolidated (DECISIONS D7 rewritten from "never evicted"; architecture §10.2–10.3 + new §11.6; ROADMAP Phase 2 marked implemented with F5 deferred; ai-system §4.3, security §6.1/§9.6, features, file-content-storage §7.1 corrected; `pnpm check-links` green). Serving path, verification, key identity, RLS untouched. Type regeneration also surfaced + fixed pre-existing `symbols` types drift. **F5 remains deferred (audit finding: the `contextText` bare-path rescue).** |
 | Commit approval for 1C + 1D + docs | Resolved 2026-11-06 | `7262316` (1C), `c51f018` (1D), plus one small docs/eval follow-up commit. |
 | Push approval for `ravi` → `origin` | Approved 2026-11-06 | Push covers `c1ac975`, `7262316`, `c51f018`, and the follow-up commit; remote HEAD verified after push via `git ls-remote origin ravi`. |
 | Retrieval-side precision for QA-05 / QA-08 | Awaiting approval | QA-05 is the one frozen WARN (18.8% < 20%); QA-08 passes but is adjacent (24.2%). Not 1D scope. |

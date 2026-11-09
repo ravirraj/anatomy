@@ -2,6 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { garbageCollectExpiredAnswers } from "../content/gc.ts";
 import { parseSelection, selectFiles } from "../parser/index.ts";
 import { SCHEMA_VERSION } from "../parser/types.ts";
 import type { Database, Enums } from "../supabase/database.types.ts";
@@ -75,6 +76,13 @@ export async function continueRun(db: Db, claimed: ClaimedRun): Promise<void> {
       schema_version: SCHEMA_VERSION,
       stage_message: `Mapped ${count(result.files.length, "file")} and ${count(result.edges.length, "edge")}; content stored for ${count(contentStats.stored, "file")}${contentStats.absent > 0 ? `, ${count(contentStats.absent, "file")} without content` : ""}`,
     });
+
+    // The row is durable-complete only once that update succeeded. Retention
+    // pruning happens here, exactly once per successful run, after
+    // persistence: the same service-role writer, scoped to this analysis's
+    // organization. pruneRetiredAnswers isolates its own failures, so this
+    // call can never make the catch below mark a completed run failed.
+    await pruneRetiredAnswers(db, analysisId, organizationId);
   } catch (error) {
     // A newer run owns the row now; its outcome is the one to record.
     if (error instanceof SupersededError) throw error;
@@ -91,6 +99,43 @@ export async function continueRun(db: Db, claimed: ClaimedRun): Promise<void> {
     throw error;
   } finally {
     if (workdir) await rm(workdir, { recursive: true, force: true });
+  }
+}
+
+// Answer-cache retention is maintenance, never part of answer correctness:
+// the analysis is already complete and durable when this runs, so a pruning
+// failure must not change the run's outcome. Invocation is single and
+// bounded - one database RPC with the built-in deletion budget, scoped to
+// this analysis's organization, with the safe defaults. Failures are
+// structured and secret-free, and never rethrown.
+export async function pruneRetiredAnswers(
+  db: Db,
+  analysisId: string,
+  organizationId: string,
+): Promise<void> {
+  try {
+    const stats = await garbageCollectExpiredAnswers(db, { organizationId, execute: true });
+    if (stats.errors.length > 0) {
+      throw new Error(stats.errors.join("; "));
+    }
+    const { expiredRowsDeleted, capEvictedRowsDeleted, bodyBytesDeleted } = stats;
+    if (expiredRowsDeleted + capEvictedRowsDeleted > 0) {
+      console.warn(
+        `${analysisId}: answer-cache pruning removed ${expiredRowsDeleted} expired and ${capEvictedRowsDeleted} over-cap rows (${bodyBytesDeleted} body bytes)`,
+      );
+    }
+  } catch (error) {
+    // Swallowed here so a maintenance failure can never reach continueRun's
+    // catch and mark a completed run failed. Context identifies the run; no
+    // client, connection, or credential detail is ever included.
+    console.error(
+      JSON.stringify({
+        event: "answer_cache_prune_failed",
+        analysisId,
+        organizationId,
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    );
   }
 }
 

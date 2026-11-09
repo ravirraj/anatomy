@@ -613,23 +613,27 @@ again is instant even if the browser forgot.
 | The parser is unauthenticated against GitHub | No token to store, no token to leak | The anonymous rate limit. |
 | Routes are withheld rather than approximated | A wrong route is the same failure as an invented edge | Some frameworks have no route table at all. |
 | The graph is computed in the browser | No request for anything derivable from data already there | A very large repository costs browser memory. |
-| Explanations are cached in Postgres, scoped by organization | A repeat is instant, and isolation is the policy's job | The cache grows; there is no eviction yet. |
+| Explanations are cached in Postgres, scoped by organization | A repeat is instant, and isolation is the policy's job | Retention bounds the growth: expired rows and over-cap rows (per organization, 25,000-row pruning target) are reclaimed once per successful analysis completion; eviction can cost one regeneration. |
 
 ### 10.3 Not yet decided
 
 - **Where the pipeline should run** for large repositories. See
   [TODO.md](../TODO.md#8-security-reliability-and-performance).
 - **Whether a public deployment exists.** There is none yet.
-- **How the AI cache should be invalidated** when a repository moves. The
-  answer currently re-reads the source and compares hashes, which is correct
-  but costs a request.
+
+The earlier open question — "how the AI cache should be invalidated when a
+repository moves" — was answered in Phase 2 (decision F7): invalidation
+stays hash re-verification on every hit, and growth is bounded by the
+retention/pruning policy documented in §11.6.
 
 ---
 
 ## 11. Current state of the retrieval and Q&A path (as implemented)
 
 > This section records the *implemented* state of the repository-wide Q&A
-> path, last verified on branch `ravi` at `e78ee56` (2026-11-06); see
+> path, last verified on branch `ravi` at `e78ee56` (2026-11-06), with the
+> answer-cache retention path (§11.6) verified against the uncommitted F7
+> work and the running local Supabase (2026-11-09); see
 > [PROJECT_STATE.md](PROJECT_STATE.md). The
 > rest of this document describes the system paragraphs above it; the only
 > future-tense text in this section is §11.5. Deep design narrative lives in
@@ -691,8 +695,10 @@ taxonomy keep the legacy values (`route`, `frontend`, `cli`) working.
   route axis for them.
 - Retrieval is lexical/symbol/path/role only — no semantic retrieval
   (deliberate; see [DECISIONS.md](DECISIONS.md) D1).
-- The answer cache has no eviction; invalidation re-verifies source hashes
-  at serving time ([architecture.md](architecture.md) §10.2–10.3).
+- The answer cache retains bounded, not indefinitely: rows become cleanup-
+  eligible after 90 days; the growth bound is a per-organization pruning
+  target of 25,000 rows, enforced once per successful analysis completion
+  (§11.6).
 
 ### 11.4 Where the reliability programme sits
 
@@ -701,6 +707,98 @@ subphases 1A/1B are committed (`c1ac975`), subphase 1C (role-taxonomy audit
 fixes F1–F4) and subphase 1D (Q&A reliability batches) are committed and
 pushed (1C at `7262316`, 1D closure at `e78ee56`, both on `origin/ravi`).
 Current status and evidence: [PROJECT_STATE.md](PROJECT_STATE.md).
+
+### 11.5 Long-term multi-language direction (NOT implemented — future tense)
+
+This subsection is the deliberate exception to this document's "everything
+here describes code that exists" rule, kept separate so it can never be
+mistaken for the implemented system. The long-term target is one shared
+ingestion infrastructure with multiple language-specific parser adapters and
+framework-specific adapters, all feeding one canonical repository model
+(a language-neutral intermediate representation), one shared relationship
+graph, and one shared retrieval and Q&A engine. Order of work: the
+intermediate representation first, then parser adapters (Python, Go, Java,
+Rust), then framework adapters (Django, FastAPI, Gin, Spring). Today
+everything above assumes TypeScript; `ParsedFile` has no language field and
+the resolver is TypeScript's
+([TODO.md](../TODO.md) §4.1). Tree-sitter is a candidate technology to
+evaluate during the Phase 5 architecture research — not a selection.
+Tracking and status: [ROADMAP.md](ROADMAP.md), Phases 5–8.
+
+### 11.6 Answer-cache retention (as implemented)
+
+> Verified 2026-11-09 against the uncommitted F7 code and the running
+> local Supabase (`20261109000000_ai_cache_retention.sql`,
+> `lib/content/gc.ts`, `lib/pipeline/run.ts`); see
+> [PROJECT_STATE.md](PROJECT_STATE.md) for evidence and
+> [DECISIONS.md](DECISIONS.md) D7 for the decision. Migration deployment to
+> the linked remote project is **pending** — everything below describes the
+> locally verified schema and code.
+
+**Cache key identity.** The key is a sha256 of the task, `PROMPT_VERSION`,
+the pinned model, and the fully rendered prompt input — including the
+per-file content hashes in every window header, so a byte change changes
+the key ([ai-system.md](ai-system.md) §4). Retention never touches the
+key: pruning removes rows; it never rewrites or reinterprets them.
+
+**Verify-before-serve is untouched.** Expiration is *cleanup eligibility*,
+not answer validity. An expired row is storage to reclaim; an unexpired row
+is not a guarantee. Every cache hit — at any age — re-verifies its
+citations against the current evidence map before serving, and a hit that
+stops verifying is deleted and regenerated exactly once
+([ai-system.md](ai-system.md) §4.3). Read path, RLS scope, and key
+behaviour are byte-for-byte unchanged by retention.
+
+**The prune function.** `prune_ai_cache(p_organization_id, p_batch_size,
+p_max_deletions, p_cap_rows)` (plpgsql, `security definer`,
+`search_path = ""`): deletes *expired-first* (`expires_at < now()`), then —
+only after expired rows are gone — trims an organization past its cap,
+evicting *oldest by `created_at`*. Batches of 500 within one invocation,
+bounded overall by `p_max_deletions = 5,000`, each batch a CTE
+`DELETE … FOR UPDATE SKIP LOCKED`; the whole organization is held under one
+`pg_advisory_xact_lock`, so two concurrent prunes of the same organization
+serialize instead of racing. Exact `octet_length(body)` bytes are summed
+over deleted rows and returned per organization. Execution privilege is
+service-role only (anon/authenticated denied); RLS policies and table
+grants are unchanged.
+
+**The GC wrapper and the production invocation point.**
+`garbageCollectExpiredAnswers(db, options)` (`lib/content/gc.ts`) refuses
+destructive behaviour unless `execute: true` is passed explicitly, and
+normally applications pass an explicit `organizationId` — a `null` scope
+(all organizations) is an operator-only mode. The production wiring,
+`pruneRetiredAnswers(db, analysisId, organizationId)`
+(`lib/pipeline/run.ts`), reuses the pipeline's service-role writer and is
+called from `continueRun` immediately after the durable
+`update(… status: "complete", …)` that ends every successful analysis —
+so pruning runs *only* when persistence succeeded, never on the failure
+path (the catch marks the run failed before that line is reachable) and
+never on supersession (`SupersededError` is rethrown first). Exactly one
+RPC per completion.
+
+**Failure isolation and logging.** The wrapper never rethrows. A failure
+is caught inside `pruneRetiredAnswers` and recorded as one structured JSON
+`console.error` line — `{event: "answer_cache_prune_failed", analysisId,
+organizationId, error}` — carrying no client, connection, or credential
+detail. Because the error is swallowed at the wrapper, it can never reach
+`continueRun`'s catch, so retention can never mark a completed analysis
+failed or roll back its results. A prune that removed rows logs a compact
+summary (`<analysisId>: answer-cache pruning removed N expired and M
+over-cap rows (B body bytes)`); nothing removed logs nothing.
+
+**Bounded execution, eventual convergence.** There is no scheduler, no
+worker, and no retry between completions. Each successful analysis
+completion costs one bounded, awaited pruning call (inside `after()` in the
+app; awaited in `scripts/analyze.ts`), capped at 5,000 deletions. The
+25,000-row cap is a **pruning target, not an instantaneous bound**: ordinary
+cache writes never take the prune lock, never check the cap, and are never
+rejected for exceeding it (verified live — an insert completed in 85 ms
+under a held 6 s prune lock), so a burst of inserts can temporarily push an
+organization past the target; the next completion's prune converges it
+back. A prune may also delete a row a concurrent writer just added; that
+answer simply misses on the next ask and regenerates through the normal
+path — one regeneration, never a correctness change, since every read is
+still verified before serving.
 
 ### 11.5 Long-term multi-language direction (NOT implemented — future tense)
 

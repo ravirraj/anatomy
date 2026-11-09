@@ -14,7 +14,10 @@ Recorded 2026-11-04; evidence pointers verified against the repository on
 that date. Updated 2026-11-06 (Phase 1D closure): D8 (glue-term breadth cap)
 and D9 (explicit-anchor stop) added. Updated later on 2026-11-06: P5 and the
 1C/1D status rows corrected to the verified committed-and-pushed state
-(`7262316`, `e78ee56` at `origin/ravi`).
+(`7262316`, `e78ee56` at `origin/ravi`). Updated 2026-11-09 (F7 closure):
+D7 rewritten from "cache-never-evicted" to the implemented bounded-retention
+policy (90-day eligibility, 25,000-row org pruning target, service-role
+pruning once per successful analysis completion).
 
 ---
 
@@ -82,13 +85,42 @@ and D9 (explicit-anchor stop) added. Updated later on 2026-11-06: P5 and the
 - **Deferred:** F5 planner `guards` category — planner semantics out of that
   subphase's scope.
 
-### D7. One AI client, pinned models, cache-never-evicted (until challenged)
+### D7. One AI client, pinned models, bounded answer retention (F7)
 - **Code:** `lib/ai/client.ts` (single wrapped client), pinned profiles in
-  `lib/ai/budget.ts`; the answer cache never evicts by design
-  ([ai-system.md](ai-system.md) §4.3).
-- **Trade-off:** unbounded cache growth; invalidation currently re-verifies
-  source hashes — [architecture.md](architecture.md) §10.3 leaves the longer
-  term policy open (feeds Phase 2).
+  `lib/ai/budget.ts`. Retention (F7, approved 2026-11-09): every `ai_cache`
+  row carries `expires_at` (default `now() + 90 days`), pruning lives in
+  `prune_ai_cache` (`supabase/migrations/20261109000000_ai_cache_retention.sql`),
+  is invoked through `garbageCollectExpiredAnswers` (`lib/content/gc.ts`) and
+  wired into the analysis lifecycle via `pruneRetiredAnswers`
+  (`lib/pipeline/run.ts`). Full lifecycle: [architecture.md](architecture.md)
+  §11.6. Supersedes the earlier "cache never evicted (until challenged)"
+  stance — this is the challenge.
+- **Retention policy:** 90-day expiration eligibility, a 25,000-row
+  per-organization pruning target, 500-row deletion batches, a 5,000-row
+  maximum per invocation, and service-role-only pruning.
+- **What retention is not:** `expires_at` is *cleanup eligibility*, never
+  answer validity. An expired row is storage to reclaim; an unexpired row is
+  not evidence of correctness. Verification remains mandatory on every hit
+  — a cached answer is never served without re-verifying its citations
+  against the current evidence (D2), so retention changes nothing about what
+  a cache hit can claim.
+- **The cap is a pruning target, not a hard bound:** ordinary cache inserts
+  never take the prune lock and are never rejected for exceeding the cap;
+  an organization pushed past 25,000 rows converges on the next pruning
+  invocation. Verified live against the local database (an insert completed
+  in 85 ms while a prune lock was held for 6 s).
+- **No scheduler:** pruning happens exactly once per successful analysis
+  completion (inside `after()` in the app, awaited in the CLI), bounded by
+  the deletion budget; there are no background workers and no retries
+  between completions — an organization over budget is trimmed further by
+  subsequent completions.
+- **Deployment status:** migration applied and catalog-verified against the
+  **local** Supabase only; the linked remote project has not received it
+  yet.
+- **Trade-off:** eviction can cost one regeneration (the cache is a
+  performance layer, never a correctness one); rows rendered stale by
+  `PROMPT_VERSION`/model changes still occupy storage for up to 90 days
+  because their keys can never match again — accepted, bounded waste.
 
 ### D8. Glue terms are dropped from concept clustering once the repository is
 big enough to distinguish noise from a real concept (Phase 1D, V7a)

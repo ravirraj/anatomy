@@ -99,7 +99,10 @@ language field in the data model.
 5. **The blast radius stops at two steps.** Files further out are counted, not
    listed.
 6. **A panel shows 14 rows at a time.**
-7. **The answer cache never evicts.**
+7. **The answer cache prunes only when an analysis completes.** Retention
+   (F7): rows become cleanup-eligible after 90 days and organizations are
+   trimmed toward a 25,000-row pruning target, applied once per successful
+   analysis completion — nothing runs between completions.
 8. **No public deployment and no recorded demonstration.**
 
 ### 1.4 Important technical debt
@@ -393,15 +396,27 @@ designed in [docs/architecture/file-content-storage.md](docs/architecture/file-c
 
 ### 2.7 Organization isolation and database security
 
-- [ ] **Give the answer cache an eviction policy**
-  - **Status:** Planned
+- [x] **Give the answer cache an eviction policy**
+  - **Status:** Done — implemented as F7 (2026-11-08–09): `expires_at` on
+    every row (90-day eligibility), pruning via `prune_ai_cache`
+    (migration `20261109000000_ai_cache_retention.sql`, service-role only),
+    invoked once per successful analysis completion through
+    `pruneRetiredAnswers` (`lib/pipeline/run.ts`); decision
+    [DECISIONS.md](docs/DECISIONS.md) D7, lifecycle
+    [architecture.md](docs/architecture.md) §11.6.
   - **Problem:** `ai_cache` grows without bound, and an answer can contain
     quoted source code.
   - **Outcome:** A retention rule.
   - **Acceptance criteria:**
-    - [ ] A stated maximum age or size.
-    - [ ] A scheduled job, or a rule applied on write.
-    - [ ] The rule is in the security documentation.
+    - [x] A stated maximum age or size — 90-day eligibility; a 25,000-row
+      per-organization pruning target (a pruning target, not an
+      instantaneous bound on writes).
+    - [x] A scheduled job, or a rule applied on write — *deliberately
+      neither*: the rule runs once per successful analysis completion
+      (no scheduler, no worker, no per-write locking); over-budget
+      organizations converge on later completions (D7).
+    - [x] The rule is in the security documentation — `docs/security.md`
+      §6.1 and §9.6.
   - **Dependencies:** None.
   - **Effort:** S.
 
@@ -433,13 +448,23 @@ designed in [docs/architecture/file-content-storage.md](docs/architecture/file-c
 ### 2.8 AI caching, observability and error handling
 
 - [ ] **Make the answer cache invalidatable by repository head**
-  - **Status:** Planned
-  - **Problem:** The cache key is the question, not the repository's state. A
-    repository that moved can have a stale answer served.
+  - **Status:** Partially done — the key already depends on the
+    analysis's actual bytes: it hashes the task, `PROMPT_VERSION`, the
+    pinned model and the fully rendered input, whose window headers carry
+    each served file's content hash (full sha since B2), so a file change
+    changes the key even at the same repository head. Residual staleness
+    is caught by per-hit citation re-verification; retention (F7)
+    retires unreachable rows. Explicit invalidation *by repository head*
+    (a stated head-aware key) is still unimplemented.
+  - **Problem:** The cache key must be sensitive to the repository state
+    the answer describes, not just to the question text.
   - **Outcome:** A key that includes what the answer depends on.
   - **Acceptance criteria:**
-    - [ ] A change to the file or its neighbours produces a different key.
-    - [ ] An unchanged file keeps its cached answer.
+    - [x] A change to the file or its neighbours produces a different key
+      (content-hash binding of rendered windows; `scripts/test-qa.ts`, and
+      the DB-level self-healing in `scripts/test-qa-integration.ts`).
+    - [x] An unchanged file keeps its cached answer (byte-stable render,
+      same key).
   - **Dependencies:** None.
   - **Effort:** M.
 
@@ -1103,14 +1128,26 @@ as such deliberately: none of it exists.
   - **Effort:** M.
 
 - [ ] **[P1] Answer caching and invalidation**
-  - **Status:** Planned
-  - **Problem:** The cache key is the question. A repository that moved can
-    have a stale answer served.
+  - **Status:** Partially done — the key is no longer "just the question":
+    it hashes the task, `PROMPT_VERSION`, the pinned model and the fully
+    rendered input, whose window headers carry each served file's content
+    hash (full sha since B2), so a file change changes the key;
+    retention is done (F7). Explicit head-driven invalidated remains
+    unimplemented; staleness detection is the per-hit citation
+    re-verification.
+  - **Problem:** A repository that moved can have a stale answer served
+    unless the key is sensitive to the analysis's actual bytes.
   - **Outcome:** A cache that knows when its answer is out of date.
   - **Acceptance criteria:**
-    - [ ] A change to the file or its neighbours produces a different key.
-    - [ ] An unchanged file keeps its answer.
-    - [ ] A retention rule for the cache.
+    - [x] A change to the file or its neighbours produces a different key
+      (content-hash binding of rendered windows; `scripts/test-qa.ts`
+      key-vs-version and the DB-level self-healing in
+      `scripts/test-qa-integration.ts`).
+    - [x] An unchanged file keeps its answer (same key, byte-stable
+      render).
+    - [x] A retention rule for the cache — F7: 90-day eligibility + a
+      25,000-row per-organization pruning target, pruned once per
+      successful analysis completion.
   - **Dependencies:** None.
   - **Effort:** M.
 
@@ -1201,7 +1238,9 @@ as such deliberately: none of it exists.
     - [x] `.env.local` is gitignored.
     - [x] The Supabase secret key is not in the client bundle.
     - [ ] The browser's session store is cleared on sign-out.
-    - [ ] The answer cache has a retention rule.
+    - [x] The answer cache has a retention rule — F7: 90-day eligibility
+      and a once-per-completion prune, service-role only
+      ([DECISIONS.md](docs/DECISIONS.md) D7).
   - **Dependencies:** None.
   - **Effort:** S.
 
@@ -1216,14 +1255,23 @@ as such deliberately: none of it exists.
 
 - [ ] **[P1] Cache isolation and invalidation**
   - **Status:** Partially done
-  - **Problem:** The cache is isolated by the policy. It is not invalidated
-    when the repository moves, and it never evicts.
+  - **Problem:** The cache is isolated by the policy. Its key includes the
+    repository's state through content-hash-bound window headers (full sha
+    since B2), and retention (F7) retires unreachable rows once per
+    successful analysis completion; explicit head-driven invalidation
+    remains unimplemented — staleness is caught by per-hit citation
+    re-verification.
   - **Outcome:** As in section 7.
   - **Acceptance criteria:**
     - [x] The cache is scoped to the organization by a policy.
     - [x] The cache key includes the model and the prompt version.
-    - [ ] The key includes the repository's state.
-    - [ ] There is a retention rule.
+    - [x] The key includes the repository's state (content hashes of every
+      served file are part of the rendered input; `scripts/test-qa.ts`,
+      `scripts/test-qa-integration.ts`).
+    - [x] There is a retention rule — F7: 90-day eligibility + a
+      25,000-row per-organization pruning target, pruned once per
+      successful analysis completion ([DECISIONS.md](docs/DECISIONS.md)
+      D7).
   - **Dependencies:** None.
   - **Effort:** M.
 

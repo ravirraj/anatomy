@@ -105,3 +105,12 @@ export interface ContentStore {
  * references, with a grace period and atomic database-side check-and-delete.
  */
 export type { GcOptions, GcStats } from "./gc.ts";
+
+/**
+ * The answer-cache retention pruning contract, implemented in
+ * `lib/content/gc.ts`. Deletes expired `ai_cache` rows and evicts the
+ * oldest rows of organizations past their row cap, database-side and
+ * bounded. Cleanup eligibility only: it never replaces verification of a
+ * cache hit and never short-circuits regeneration on a miss.
+ */
+export type { AnswerGcOptions, AnswerGcStats } from "./gc.ts";

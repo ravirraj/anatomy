@@ -102,17 +102,27 @@ records D8 and D9 in [DECISIONS.md](DECISIONS.md).
   with fact-scoring gaps (`reads_config`, wildcard `imports`) fixed
   afterwards and the affected cases re-run PASS.
 
-### Phase 2 — Answer integrity & safety hardening (planned)
+### Phase 2 — Answer integrity & safety hardening (implemented 2026-11-06…09; F5 deliberately deferred)
 
 Untrusted repository content today reaches a powerful model with limited
-defences. Planned (not started): prompt-injection defences for retrieved
-content ([TODO.md](../TODO.md) near-term P1), an eviction/invalidation policy
-for the answer cache (the cache currently never evicts —
-[architecture.md](architecture.md) §10.2), and evolve hash-bound citations
-without ever weakening their fail-closed property. Acceptance: the existing
-citation and cache tests still pass, plus new tests demonstrating a poisoned
-repository cannot make the answer cite or reveal what the evidence does not
-contain.
+defences. Implemented: prompt-injection defences for retrieved content
+(audit batches B1–B4 — trust-boundary system prompt rule with
+`PROMPT_VERSION` 2→3, full-hash window headers, packaging-line sanitizing,
+JSDoc appendix cap — committed as `9f4f942`, tests in
+`scripts/test-prompt-hardening.ts` and [TODO.md](../TODO.md) near-term P1),
+and a bounded eviction/retention policy for the answer cache (F7-1…F7-3:
+90-day `expires_at`, per-organization pruning target of 25,000 rows,
+service-role pruning once per successful analysis completion — implemented
+and DB-verified against the local Supabase, uncommitted; lifecycle in
+[architecture.md](architecture.md) §11.6, decision in
+[DECISIONS.md](DECISIONS.md) D7). Hash-bound citations evolved without
+weakening their fail-closed property (B2/B1 re-keying). **Explicitly
+deferred:** audit finding F5 — the `contextText` bare-path rescue
+(quote-integrity gate work); its behaviour stays locked as recorded in the
+audit's T-A5 and needs separate approval. Acceptance: the existing
+citation and cache tests still pass, plus new tests demonstrating a
+poisoned repository cannot make the answer cite or reveal what the
+evidence does not contain (prompt-hardening and golden-QA suites).
 
 ### Phase 3 — Retrieval quality & performance measurement (planned)
 
@@ -230,7 +240,7 @@ the rest live in the delivery programme above.
 | **P0** | Tenant-isolation tests, runnable against a test database | Phase 2 |
 | **P1** | Symbol and full-text search | Phase 4 |
 | **P1** | Change impact analysis beyond a fixed depth | Phase 8 |
-| **P1** | Prompt-injection defences for untrusted repository content | Phase 2 |
+| **P1** | ~~Prompt-injection defences for untrusted repository content~~ — **done** (audit batches B1–B4, committed `9f4f942`) | Phase 2 |
 | **P1** | A public demo deployment, with screenshots and a recorded demo | Phase 8 |
 
 ---

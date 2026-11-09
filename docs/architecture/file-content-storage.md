@@ -382,9 +382,11 @@ the parser skipped, ever.
 
 - **Browser-side** `explanation-store.ts` (`sessionStorage`) *does* have an
   eviction policy: `LIMIT = 100` answers, oldest-first. Verified. The often-
-  quoted "nothing evicts" target is the **DB-side `ai_cache`** — no TTL, no
-  delete, anywhere (`docs/security.md §9.6` confirms). This design does not
-  touch `ai_cache` (out of scope).
+  quoted "nothing evicts" target was the **DB-side `ai_cache`**; as of F7
+  (2026-11-08) it carries a bounded retention policy — `expires_at` at
+  90 days and a once-per-completion prune with a 25,000-row per-org pruning
+  target (`docs/security.md §9.6` and `docs/architecture.md §11.6`). This
+  design does not touch `ai_cache` (out of scope).
 - **Per-request** in-flight memoization of a single file's source already
   exists: `sourceAtAnalysedCommit` wraps its fetch in a `pending ??=`
   Promise, fetched once per request. The proposal buys a *cross-request*
