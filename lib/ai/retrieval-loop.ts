@@ -115,6 +115,62 @@ export type IterationPass = {
   /** Existing files displaced by strictly stronger targeted evidence. */
   replacedFiles: number;
   ms: number;
+  // ── Phase 3B.2 trace (additive, optional; evaluation-only consumers) ────────
+  /** Candidates that entered the merge's fold loop this pass. */
+  candidatesConsidered?: number;
+  /** Candidates skipped because an identical/overlapping slice was already
+   * served ("already covered" — never restamped, never counted as additions). */
+  rejectedOverlap?: number;
+  /** Candidates skipped by the per-file window cap. */
+  rejectedPerFileCap?: number;
+  /** New-file candidates rejected by the score floor (quality rejection —
+   * deliberately NOT a budget rejection; see the 3B.2 stop-reason fix). */
+  rejectedQuality?: number;
+  /** Candidates rejected by a genuine budget or cap limit: file cap after a
+   * failed replacement, character/token overflow (including truncation
+   * failures). A pass whose only rejections are quality ones must NOT read
+   * as budget exhaustion. */
+  rejectedBudget?: number;
+  /** Actual post-pass window state (the merge's adopted result). Historical
+   * snapshots; windows later replaced or removed do not appear here. */
+  windowsAfterPass?: { fileId: string; path: string; startLine: number; endLine: number }[];
+  /** Enforced-ledger figures immediately before the merge. */
+  charactersBefore?: number;
+  renderedCharactersBefore?: number;
+  tokensBefore?: number;
+  /** Enforced-ledger figures immediately after the merge (before → after
+   * deltas and the remaining budget are derived from these pairs). */
+  charactersAfter?: number;
+  renderedCharactersAfter?: number;
+  tokensAfter?: number;
+  /** Served cost released by committed replacements (removed windows'
+   * header/appendix-inclusive figures). */
+  replacedCharacters?: number;
+  replacedTokens?: number;
+  /** Remaining evidence budget after the pass: limits minus the after figures. */
+  remainingCharacters?: number;
+  remainingTokens?: number;
+  /** Full candidate funnel (3B.2): focusedWindowsSeen = affiliationRejected +
+   * intraPassDuplicates + candidatesCollected; collected candidates then flow
+   * into `candidatesConsidered` at the merge. */
+  focusedWindowsSeen?: number;
+  affiliationRejected?: number;
+  intraPassDuplicates?: number;
+  candidatesCollected?: number;
+};
+
+/** Per-window pass attribution from actual loop merge events (Phase 3B.2).
+ * `originPass` 0 = the base retrieval; k = the targeted pass whose merge
+ * first contributed the window. Overlap-skipped candidates are never
+ * restamped; replaced/removed windows drop out of the ledger with the state
+ * they were removed from, so the ledger always mirrors the final retained
+ * window set. Evaluation-specific (gold-free); additive and optional. */
+export type WindowProvenanceEntry = {
+  fileId: string;
+  path: string;
+  startLine: number;
+  endLine: number;
+  originPass: number;
 };
 
 export type IterativeRetrievalResult = {
@@ -133,6 +189,13 @@ export type IterativeRetrievalResult = {
      * drilling broad path noise (Phase 1D, V10). */
     | "explicit-anchor";
   totalMs: number;
+  // ── Phase 3B.2 trace (additive, optional; evaluation-only consumers) ────────
+  /** The pass-0 window state the loop started from (base retrieval output,
+   * minimal descriptors). Absent only for hand-constructed results. */
+  initialWindows?: { fileId: string; path: string; startLine: number; endLine: number }[];
+  /** Final retained-window pass attribution; always mirrors
+   * `result.windows` (same set, keyed by fileId + line range). */
+  windowProvenance?: WindowProvenanceEntry[];
 };
 
 type MissingPair = { token: string; category: string; status: string };
@@ -253,8 +316,21 @@ export function mergeIterationWindows(
   added: number;
   addedFiles: number;
   replacedFiles: number;
+  /** Genuine budget/cap rejections: file cap after failed replacement,
+   * character/token overflow (including truncation failures). Quality
+   * rejections are counted separately in `rejectedQuality` (Phase 3B.2
+   * correction — see the stop-reason fix in `retrieveWithCoverageLoop`). */
   rejectedBudget: number;
+  /** New-file score-floor rejections (quality, never budget). */
+  rejectedQuality: number;
+  /** Candidates skipped as exact/overlapping duplicates of served evidence. */
+  rejectedOverlap: number;
+  /** Candidates skipped by the per-file window cap. */
+  rejectedPerFileCap: number;
   candidatesConsidered: number;
+  /** Served cost released by committed replacements (0 when none). */
+  replacedCharacters: number;
+  replacedTokens: number;
 } {
   const windows = [...current.windows];
   let totalCharacters = current.totalCharacters;
@@ -316,6 +392,11 @@ export function mergeIterationWindows(
   let addedFiles = 0;
   let replacedFiles = 0;
   let rejectedBudget = 0;
+  let rejectedQuality = 0;
+  let rejectedOverlap = 0;
+  let rejectedPerFileCap = 0;
+  let replacedCharacters = 0;
+  let replacedTokens = 0;
   let candidatesConsidered = 0;
 
   const margin = options?.replacementMargin ?? 10;
@@ -327,15 +408,23 @@ export function mergeIterationWindows(
       (w) => w.startLine === cand.startLine && w.endLine === cand.endLine,
     );
     if (exactDuplicate || existing.some((w) => windowOverlaps(w, cand))) {
-      continue; // same or overlapping slice already retrieved — never re-serve evidence
+      // Same or overlapping slice already retrieved — never re-serve evidence,
+      // never restamp provenance. Counted as an overlap rejection (Phase 3B.2).
+      rejectedOverlap += 1;
+      continue;
     }
     if ((perFile.get(cand.fileId) ?? 0) >= limits.maxWindowsPerFile) {
-      continue; // per-file window cap
+      // Per-file window cap.
+      rejectedPerFileCap += 1;
+      continue;
     }
     const isNewFile = !files.has(cand.fileId);
     if (isNewFile) {
       if (cand.score < limits.scoreFloor) {
-        rejectedBudget += 1;
+        // Quality rejection, NOT a budget rejection (Phase 3B.2 correction:
+        // this previously incremented rejectedBudget, which could surface a
+        // quality-only pass as "budget-exhausted").
+        rejectedQuality += 1;
         continue; // weak relationship-only padding
       }
       const candCost = servedCostOf(cand);
@@ -396,7 +485,13 @@ export function mergeIterationWindows(
           // counts, raw characters and both ledger figures move together.
           const removedSet = new Set(removedFileIds);
           for (const w of windows) {
-            if (removedSet.has(w.fileId)) totalCharacters -= w.text.length;
+            if (removedSet.has(w.fileId)) {
+              totalCharacters -= w.text.length;
+              // Phase 3B.2 trace: the exact served cost the package released.
+              const cost = servedCostOf(w);
+              replacedCharacters += cost.chars;
+              replacedTokens += cost.tokens;
+            }
           }
           const kept = windows.filter((w) => !removedSet.has(w.fileId));
           windows.length = 0;
@@ -490,7 +585,12 @@ export function mergeIterationWindows(
     addedFiles,
     replacedFiles,
     rejectedBudget,
+    rejectedQuality,
+    rejectedOverlap,
+    rejectedPerFileCap,
     candidatesConsidered,
+    replacedCharacters,
+    replacedTokens,
   };
 }
 
@@ -543,6 +643,23 @@ export async function retrieveWithCoverageLoop(
   const base = await retrieveGroundedContext(db, analysisId, rawQuery, retrievalBudget, conceptIndex);
   let windows: RetrievedWindow[] = [...base.windows];
   let totalCharacters = base.totalCharacters;
+
+  // Phase 3B.2 trace: pass-0 window attribution and the stable window
+  // identity (fileId + line range) the merge events update. Provenance is
+  // maintained from actual merge events only: overlap-skipped candidates are
+  // never restamped, and a committed replacement rebuilds the ledger from the
+  // adopted state so removed windows drop out together with their origin.
+  const windowKeyOf = (w: { fileId: string; startLine: number; endLine: number }): string =>
+    `${w.fileId}#${w.startLine}-${w.endLine}`;
+  let provenance = new Map<string, WindowProvenanceEntry>(
+    base.windows.map((w) => [
+      windowKeyOf(w),
+      { fileId: w.fileId, path: w.path, startLine: w.startLine, endLine: w.endLine, originPass: 0 },
+    ]),
+  );
+  const minimalWindows = (list: RetrievedWindow[]) =>
+    list.map((w) => ({ fileId: w.fileId, path: w.path, startLine: w.startLine, endLine: w.endLine }));
+
   // Symbol knowledge for appendix accounting: every retrieval pass (base and
   // focused alike) loads the symbol rows of the files it served, and
   // `formatRetrievedContext` attaches the same `[API surface]` text under
@@ -702,6 +819,8 @@ export async function retrieveWithCoverageLoop(
       passes,
       stoppedBecause: "sufficient-coverage",
       totalMs: Math.round(performance.now() - startedAt),
+      initialWindows: minimalWindows(base.windows),
+      windowProvenance: [...provenance.values()],
     };
   }
 
@@ -724,6 +843,12 @@ export async function retrieveWithCoverageLoop(
     const queries = pairs.map((pair) => focusedQuery(pair));
     const wanted = new Set(pairs.map((p) => p.category));
     const candidates: RetrievedWindow[] = [];
+    // Phase 3B.2 funnel trace: where every focused window went — accepted as
+    // a candidate, rejected by the affiliation gate, skipped as an
+    // intra-pass duplicate, or (via the merge counters) rejected later.
+    let focusedWindowsSeen = 0;
+    let affiliationRejected = 0;
+    let intraPassDuplicates = 0;
 
     for (const query of queries) {
       const focused = await retrieveGroundedContext(
@@ -747,6 +872,7 @@ export async function retrieveWithCoverageLoop(
         if (!symbolKnowledge.has(path)) symbolKnowledge.set(path, list);
       }
       for (const win of focused.windows) {
+        focusedWindowsSeen += 1;
         // Per-pair acceptance (Phase 1D: V1/V7b self-named drills). A window
         // is a candidate when it affiliates with one of the missing pairs'
         // categories. A self-named pair (category === token — the concept's
@@ -771,7 +897,11 @@ export async function retrieveWithCoverageLoop(
         if (aff !== null && wanted.has(aff)) {
           if (!candidates.some((c) => c.fileId === win.fileId && c.startLine === win.startLine && c.endLine === win.endLine)) {
             candidates.push(win);
+          } else {
+            intraPassDuplicates += 1;
           }
+        } else {
+          affiliationRejected += 1;
         }
       }
     }
@@ -788,6 +918,10 @@ export async function retrieveWithCoverageLoop(
         }
       }
     }
+
+    const charactersBefore = totalCharacters;
+    const renderedCharactersBefore = renderedCharacters;
+    const tokensBefore = totalTokens;
 
     const merged = mergeIterationWindows(
       {
@@ -809,9 +943,38 @@ export async function retrieveWithCoverageLoop(
       addedFiles: merged.addedFiles,
       replacedFiles: merged.replacedFiles,
       ms: Math.round(performance.now() - passStartedAt),
+      // Phase 3B.2 trace (additive): candidate accounting, post-pass window
+      // state and enforced-ledger deltas from actual merge events.
+      candidatesConsidered: merged.candidatesConsidered,
+      rejectedOverlap: merged.rejectedOverlap,
+      rejectedPerFileCap: merged.rejectedPerFileCap,
+      rejectedQuality: merged.rejectedQuality,
+      rejectedBudget: merged.rejectedBudget,
+      windowsAfterPass: minimalWindows(merged.windows),
+      charactersBefore,
+      charactersAfter: merged.totalCharacters,
+      renderedCharactersBefore,
+      renderedCharactersAfter: merged.renderedCharacters,
+      tokensBefore,
+      tokensAfter: merged.totalTokens,
+      replacedCharacters: merged.replacedCharacters,
+      replacedTokens: merged.replacedTokens,
+      remainingCharacters: limits.maxCharacters - merged.renderedCharacters,
+      remainingTokens: limits.maxTokens - merged.totalTokens,
+      // Full candidate funnel (3B.2): focusedWindowsSeen = affiliationRejected
+      // + intraPassDuplicates + candidatesCollected; collected candidates then
+      // flow into `candidatesConsidered` at the merge.
+      focusedWindowsSeen,
+      affiliationRejected,
+      intraPassDuplicates,
+      candidatesCollected: candidates.length,
     });
 
     if (merged.added === 0) {
+      // Phase 3B.2: `merged.rejectedBudget` now counts only genuine budget or
+      // cap rejections — score-floor rejections are counted separately in
+      // `rejectedQuality`, so a quality-only dry pass can no longer surface
+      // as budget exhaustion.
       stoppedBecause =
         merged.candidatesConsidered === 0
           ? "no-candidates"
@@ -825,6 +988,27 @@ export async function retrieveWithCoverageLoop(
     totalCharacters = merged.totalCharacters;
     totalTokens = merged.totalTokens;
     renderedCharacters = merged.renderedCharacters;
+    // Provenance rebuild from the adopted merge state: surviving windows keep
+    // their original origin pass; newly accepted windows (including a
+    // replacement's stronger candidate, possibly a truncated slice) gain this
+    // pass; removed windows drop out with the state they left.
+    {
+      const nextProvenance = new Map<string, WindowProvenanceEntry>();
+      for (const w of merged.windows) {
+        const key = windowKeyOf(w);
+        nextProvenance.set(
+          key,
+          provenance.get(key) ?? {
+            fileId: w.fileId,
+            path: w.path,
+            startLine: w.startLine,
+            endLine: w.endLine,
+            originPass: pass,
+          },
+        );
+      }
+      provenance = nextProvenance;
+    }
     symbolsStale = true;
     coverage = evaluateCurrent(buildResult());
 
@@ -878,5 +1062,7 @@ export async function retrieveWithCoverageLoop(
     passes,
     stoppedBecause,
     totalMs: Math.round(performance.now() - startedAt),
+    initialWindows: minimalWindows(base.windows),
+    windowProvenance: [...provenance.values()],
   };
 }

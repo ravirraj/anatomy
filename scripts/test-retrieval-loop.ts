@@ -6,6 +6,8 @@
 
 import { createHash } from "node:crypto";
 import { estimateCodeTokens, estimateProseTokens } from "../lib/ai/budget.ts";
+import { sliceLines } from "../lib/content/read.ts";
+import { computeGoldYieldTrace } from "./eval-golden-qa.ts";
 import {
   CATEGORY_QUERY_WORDS,
   mergeIterationWindows,
@@ -128,7 +130,11 @@ const mk6 = mergeIterationWindows(
   [mkWindow({ fileId: "fW", path: "src/weak.js", score: 40 })],
   limits,
 );
-check(mk6.added === 0 && mk6.rejectedBudget === 1, "weak new-file candidate below score floor rejected", "score floor failed");
+check(
+  mk6.added === 0 && mk6.rejectedQuality === 1 && mk6.rejectedBudget === 0,
+  "weak new-file candidate below score floor rejected (quality, not budget)",
+  "score floor failed",
+);
 
 // An already-included file's weak candidate may still drill (no displacement).
 const mk7 = mergeIterationWindows(
@@ -1663,6 +1669,288 @@ console.log("=== B4. formatRetrievedContext appendix: JSDoc doc slice bounded an
     "each exported symbol renders exactly one appendix row (rows cannot be minted)",
     `rows: ${appendixRows.length}`,
   );
+}
+
+
+// ---- Section 11: Phase 3B.2 multi-pass provenance integration --------------
+// Real retrieveWithCoverageLoop across multiple passes: pass 0 serves two
+// windows, pass 1 adds a genuinely new window, pass 2 replaces the weak
+// pass-0 window through the real merge path, pass 3 runs dry. The ledger,
+// provenance and gold-yield figures are reconciled byte-exactly against
+// replicas of the serving contract (window text via sliceLines, sha256
+// header, line-1 [API surface] appendix). Deterministic: mock db, no LLM.
+console.log("");
+console.log("=== 11. Phase 3B.2 integration: multi-pass provenance (add, then replace) ===");
+{
+  type Range = [number, number];
+
+  const mpSpecs = [
+    {
+      id: "mp_ctrl",
+      path: "backend/src/controllers/uploadPanel.js",
+      role: "controller",
+      lines: 70,
+      symbols: [["uploadPanel", 9, true] as [string, number, boolean]],
+      customLine: 9,
+      customText: "module.exports.uploadPanel = combine(body);",
+    },
+    {
+      id: "mp_route",
+      path: "backend/routes/uploadStats.js",
+      lines: 70,
+      symbols: [] as [string, number, boolean][],
+      customLine: 0,
+      customText: "",
+    },
+    {
+      id: "mp_sdkroute",
+      path: "backend/routes/registry.js",
+      lines: 70,
+      symbols: [["routeRegistry", 4, true] as [string, number, boolean]],
+      customLine: 4,
+      customText: "const sdk = openRoute(table); module.exports.routeRegistry = sdk;",
+    },
+    {
+      id: "mp_service",
+      path: "backend/src/services/orderGateway.js",
+      role: "service",
+      lines: 70,
+      symbols: [["orderService", 9, true] as [string, number, boolean]],
+      customLine: 9,
+      customText: "module.exports.orderService = dispatch(req);",
+    },
+  ];
+  const mpTexts = new Map<string, string>(
+    mpSpecs.map((spec) => {
+      const parts: string[] = [];
+      for (let i = 1; i <= spec.lines; i++) parts.push(i === spec.customLine ? spec.customText : FILLER(i));
+      return [spec.id, parts.join("\n") + "\n"];
+    }),
+  );
+  const mpText = (id: string, startLine: number, endLine: number): string => {
+    const sliced = sliceLines(mpTexts.get(id)!, startLine, endLine);
+    if (sliced === null) throw new Error(`range ${startLine}..${endLine} past the file`);
+    return sliced;
+  };
+  const mpHash = (id: string): string => createHash("sha256").update(mpTexts.get(id)!).digest("hex");
+  const mpHeaderLen = (id: string, path: string, startLine: number, endLine: number): number =>
+    `--- File: ${path} (lines ${startLine}-${endLine}) [hash: ${mpHash(id)}] ---\n`.length + 2;
+  const mpAppendix = (id: string): string => {
+    const spec = mpSpecs.find((s) => s.id === id)!;
+    const exported = spec.symbols.filter(([, , exported]) => exported);
+    if (exported.length === 0) return "";
+    const rows = exported.map(([name]) => `- ${name} (${name[0] === name[0]!.toUpperCase() ? "class" : "function"}): ${name}`);
+    return `\n\n[API surface]\n${rows.join("\n")}`;
+  };
+  const mpCostR = (id: string, path: string, startLine: number, endLine: number): number => {
+    const text = mpText(id, startLine, endLine);
+    const appendix = startLine === 1 ? mpAppendix(id) : "";
+    return text.length + mpHeaderLen(id, path, startLine, endLine) + appendix.length;
+  };
+  const mpCostT = (id: string, path: string, startLine: number, endLine: number): number => {
+    const text = mpText(id, startLine, endLine);
+    const appendix = startLine === 1 ? mpAppendix(id) : "";
+    return estimateCodeTokens(text) + estimateProseTokens(path) + 15 + (appendix ? estimateCodeTokens(appendix) : 0);
+  };
+
+  const multi = buildMock("loop_multi",
+    mpSpecs.map((spec) => ({
+      id: spec.id,
+      path: spec.path,
+      role: spec.role,
+      lines: spec.lines,
+      symbols: spec.symbols,
+      text: (n: number) => (n === spec.customLine ? spec.customText : null),
+    })));
+
+  const loop = await retrieveWithCoverageLoop(
+    multi.db as unknown as Db,
+    "loop_multi",
+    "How does the upload SDK work in this repo?",
+    { adaptive: false, maxCharacters: 2800, maxTokens: 4000 },
+  );
+
+  const keyOf = (w: { fileId: string; startLine: number; endLine: number }): string =>
+    `${w.fileId}#${w.startLine}-${w.endLine}`;
+  const keysOf = (list: { fileId: string; startLine: number; endLine: number }[]): string[] => list.map(keyOf);
+  const CTRL = "mp_ctrl#1-50";
+  const VICTIM = "mp_route#1-50";
+  const SDKROUTE = "mp_sdkroute#1-50";
+  const SERVICE = "mp_service#1-50";
+
+  // The loop ran the full multi-pass sequence: add (pass 1), replacement
+  // (pass 2), dry pass (pass 3) — stopping for the right reason, with no
+  // quality rejection ever misread as budget exhaustion.
+  check(loop.stoppedBecause === "no-candidates", "the multi-pass loop stops with the corrected no-candidates reason", `stop: ${loop.stoppedBecause}`);
+  check(loop.passes.length === 3, `exactly three targeted passes ran (got ${loop.passes.length})`, `passes: ${loop.passes.length}`);
+  check(
+    loop.passes[0]!.addedWindows === 1 && loop.passes[0]!.replacedFiles === 0,
+    "pass 1 adds a genuinely new window without replacement",
+    `pass1: ${JSON.stringify(loop.passes[0])}`,
+  );
+  check(
+    loop.passes[1]!.addedWindows === 1 && loop.passes[1]!.replacedFiles === 1,
+    "pass 2 replaces the weak pass-0 window through the real merge path",
+    `pass2: ${JSON.stringify(loop.passes[1])}`,
+  );
+  check(
+    loop.passes[2]!.addedWindows === 0 && loop.passes[2]!.rejectedBudget === 0 && loop.passes[2]!.rejectedQuality === 0,
+    "pass 3 is a clean dry pass (no budget or quality rejections)",
+    `pass3: ${JSON.stringify(loop.passes[2])}`,
+  );
+  assertBudgetInvariants("multi-pass replacement", loop.result);
+
+  // Final package: exactly [A, B, C], each a 1-50 window.
+  check(
+    JSON.stringify(loop.result.windows.map(keyOf)) === JSON.stringify([CTRL, SDKROUTE, SERVICE]),
+    "the final package is exactly the surviving pass-0 window, the pass-1 window and the pass-2 replacement",
+    `final: ${JSON.stringify(loop.result.windows.map(keyOf))}`,
+  );
+
+  // Pass 0 attribution: both base windows exist in the pass-0 snapshot...
+  check(
+    JSON.stringify(keysOf(loop.initialWindows ?? [])) === JSON.stringify([CTRL, VICTIM]),
+    "the pass-0 snapshot holds exactly the two base windows (survivor + later victim)",
+    `initial: ${JSON.stringify(loop.initialWindows)}`,
+  );
+
+  // Provenance ledger mirrors the final retained set with correct origins.
+  {
+    const prov = loop.windowProvenance ?? [];
+    const byKey = new Map(prov.map((e) => [keyOf(e), e]));
+    check(prov.length === 3 && byKey.size === 3, "every final retained window has exactly one provenance entry", `prov: ${JSON.stringify(prov)}`);
+    check(
+      loop.result.windows.every((w) => byKey.has(keyOf(w))),
+      "no provenance entry refers to a non-retained final window (ledger mirrors the final set)",
+    );
+    check(byKey.get(CTRL)?.originPass === 0, "the surviving pass-0 window retains its original origin 0", `ctrl origin: ${byKey.get(CTRL)?.originPass}`);
+    check(byKey.get(SDKROUTE)?.originPass === 1, "the pass-1 window carries origin 1", `sdkroute origin: ${byKey.get(SDKROUTE)?.originPass}`);
+    check(byKey.get(SERVICE)?.originPass === 2, "the replacement candidate carries the correct pass-2 origin", `service origin: ${byKey.get(SERVICE)?.originPass}`);
+    check(byKey.get(VICTIM) === undefined, "the replaced pass-0 window is absent from final provenance", `victim entry: ${JSON.stringify(byKey.get(VICTIM))}`);
+  }
+
+  // Historical post-pass snapshots are distinct and accurate.
+  check(
+    JSON.stringify(keysOf(loop.passes[0]!.windowsAfterPass ?? [])) === JSON.stringify([CTRL, VICTIM, SDKROUTE]),
+    "the post-pass-1 snapshot still holds the victim (removal happens later, not retroactively)",
+    `snap1: ${JSON.stringify(loop.passes[0]!.windowsAfterPass)}`,
+  );
+  check(
+    JSON.stringify(keysOf(loop.passes[1]!.windowsAfterPass ?? [])) === JSON.stringify([CTRL, SDKROUTE, SERVICE]),
+    "the post-pass-2 snapshot reflects the committed replacement exactly",
+    `snap2: ${JSON.stringify(loop.passes[1]!.windowsAfterPass)}`,
+  );
+  check(
+    JSON.stringify(keysOf(loop.passes[2]!.windowsAfterPass ?? [])) === JSON.stringify([CTRL, SDKROUTE, SERVICE]),
+    "the dry pass leaves the package untouched",
+    `snap3: ${JSON.stringify(loop.passes[2]!.windowsAfterPass)}`,
+  );
+
+  // Per-pass added-window counts reconcile with the actual accepted windows.
+  {
+    const history = [keysOf(loop.initialWindows ?? []), ...loop.passes.map((p) => keysOf(p.windowsAfterPass ?? []))];
+    let reconcileOk = true;
+    for (let i = 1; i < history.length; i++) {
+      const before = new Set(history[i - 1]!);
+      const after = history[i]!;
+      const added = after.filter((k) => !before.has(k));
+      const removed = history[i - 1]!.filter((k) => !after.includes(k));
+      if (loop.passes[i - 1]!.addedWindows !== added.length) reconcileOk = false;
+      if (after.length - history[i - 1]!.length !== added.length - removed.length) reconcileOk = false;
+      const origins = new Map((loop.windowProvenance ?? []).map((e) => [keyOf(e), e.originPass]));
+      for (const k of added) if (origins.get(k) !== i) reconcileOk = false;
+    }
+    check(reconcileOk, "added-window counts, size deltas and pass origins reconcile with the actual accepted windows across snapshots");
+  }
+
+  // Full candidate-funnel identity per pass.
+  check(
+    loop.passes.every((p) =>
+      p.focusedWindowsSeen === (p.affiliationRejected ?? 0) + (p.intraPassDuplicates ?? 0) + (p.candidatesCollected ?? 0)
+      && p.candidatesCollected === p.candidatesConsidered),
+    "per-pass funnel identity holds in the real loop (seen = rejected + duplicates + collected; collected = considered)",
+    `funnels: ${JSON.stringify(loop.passes.map((p) => [p.focusedWindowsSeen, p.affiliationRejected, p.intraPassDuplicates, p.candidatesCollected, p.candidatesConsidered]))}`,
+  );
+
+  // Budget ledger: before/after values reconcile byte-exactly against the
+  // serving-contract replicas, across the chain and through the replacement.
+  {
+    const [pass1, pass2, pass3] = loop.passes as [typeof loop.passes[number], typeof loop.passes[number], typeof loop.passes[number]];
+    const raw = (id: string): number => mpText(id, 1, 50).length;
+    const rA = mpCostR("mp_ctrl", "backend/src/controllers/uploadPanel.js", 1, 50);
+    const rV = mpCostR("mp_route", "backend/routes/uploadStats.js", 1, 50);
+    const rB = mpCostR("mp_sdkroute", "backend/routes/registry.js", 1, 50);
+    const rC = mpCostR("mp_service", "backend/src/services/orderGateway.js", 1, 50);
+    const tA = mpCostT("mp_ctrl", "backend/src/controllers/uploadPanel.js", 1, 50);
+    const tV = mpCostT("mp_route", "backend/routes/uploadStats.js", 1, 50);
+    const tB = mpCostT("mp_sdkroute", "backend/routes/registry.js", 1, 50);
+    const tC = mpCostT("mp_service", "backend/src/services/orderGateway.js", 1, 50);
+    check(
+      pass1.charactersBefore === raw("mp_ctrl") + raw("mp_route")
+        && pass1.renderedCharactersBefore === rA + rV
+        && pass1.tokensBefore === tA + tV,
+      "pass 1's before-ledger equals the pass-0 package's served cost exactly (raw, rendered, tokens)",
+      `before: ${pass1.charactersBefore}/${pass1.renderedCharactersBefore}/${pass1.tokensBefore} vs ${raw("mp_ctrl") + raw("mp_route")}/${rA + rV}/${tA + tV}`,
+    );
+    check(
+      pass1.renderedCharactersAfter === rA + rV + rB
+        && pass1.tokensAfter === tA + tV + tB
+        && pass1.charactersAfter === raw("mp_ctrl") + raw("mp_route") + raw("mp_sdkroute"),
+      "pass 1's after-ledger adds exactly the new window's served cost (appendix-inclusive)",
+      `after1: ${pass1.renderedCharactersAfter}/${pass1.tokensAfter} vs ${rA + rV + rB}/${tA + tV + tB}`,
+    );
+    check(
+      pass2.replacedCharacters === rV && pass2.replacedTokens === tV,
+      "the committed replacement releases exactly the victim's served cost",
+      `replaced: ${pass2.replacedCharacters}/${pass2.replacedTokens} vs ${rV}/${tV}`,
+    );
+    check(
+      pass2.renderedCharactersAfter === rA + rB + rC
+        && pass2.tokensAfter === tA + tB + tC
+        && pass2.charactersAfter === raw("mp_ctrl") + raw("mp_sdkroute") + raw("mp_service"),
+      "pass 2's after-ledger = before − victim + candidate, byte-exact in all three ledgers",
+      `after2: ${pass2.renderedCharactersAfter}/${pass2.tokensAfter}/${pass2.charactersAfter} vs ${rA + rB + rC}/${tA + tB + tC}/${raw("mp_ctrl") + raw("mp_sdkroute") + raw("mp_service")}`,
+    );
+    check(
+      pass2.renderedCharactersBefore === pass1.renderedCharactersAfter
+        && pass2.tokensBefore === pass1.tokensAfter
+        && pass2.charactersBefore === pass1.charactersAfter
+        && pass3.renderedCharactersBefore === pass2.renderedCharactersAfter
+        && pass3.tokensBefore === pass2.tokensAfter
+        && pass3.charactersBefore === pass2.charactersAfter,
+      "the ledger chain holds across consecutive passes (before_k = after_(k-1))",
+    );
+    check(
+      pass3.remainingCharacters === 2800 - (rA + rB + rC) && pass3.remainingTokens === 4000 - (tA + tB + tC),
+      "remaining budget figures are limits minus the after-ledger",
+      `remaining: ${pass3.remainingCharacters}/${pass3.remainingTokens}`,
+    );
+  }
+
+  // Gold-yield trace over the actual post-pass snapshots: the replacement's
+  // removal shows up as a negative net delta, and the marginals telescope.
+  {
+    const gold = new Map<string, Range[]>([
+      ["backend/src/controllers/uploadPanel.js", [[9, 9]]],
+      ["backend/routes/uploadStats.js", [[5, 7]]],
+      ["backend/routes/registry.js", [[4, 4]]],
+      ["backend/src/services/orderGateway.js", [[9, 9]]],
+    ]);
+    const trace = computeGoldYieldTrace(loop.initialWindows ?? [], loop.passes, gold, 6);
+    check(
+      trace.length === 4
+        && trace[0]!.windowCount === 2 && trace[0]!.cumulativeGoldOverlapLines === 4 && trace[0]!.cumulativeRecall === 4 / 6
+        && trace[1]!.cumulativeGoldOverlapLines === 5 && trace[1]!.marginalGoldLines === 1
+        && trace[2]!.cumulativeGoldOverlapLines === 3 && trace[2]!.marginalGoldLines === -2
+        && trace[3]!.cumulativeGoldOverlapLines === 3 && trace[3]!.marginalGoldLines === 0 && trace[3]!.cumulativeRecall === 0.5,
+      "gold yield: pass-0 baseline 4 lines, +1 from the pass-1 window, −2 net when the replacement removes the victim's 3 gold lines, telescoping to the final overlap",
+      `trace: ${JSON.stringify(trace)}`,
+    );
+    check(
+      trace.slice(1).reduce((a, g) => a + g.marginalGoldLines, 0) === trace[3]!.cumulativeGoldOverlapLines - trace[0]!.cumulativeGoldOverlapLines,
+      "the marginal gold yield telescopes to the final overlap minus the pass-0 baseline",
+    );
+  }
 }
 
 
