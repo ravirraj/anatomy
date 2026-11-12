@@ -1,0 +1,689 @@
+{
+  "schemaVersion": 7,
+  "root": "<repo>",
+  "projects": [
+    {
+      "path": ".",
+      "adapter": "none"
+    }
+  ],
+  "files": [
+    {
+      "path": "src/auth-service.ts",
+      "module": "src",
+      "lines": 9,
+      "bytes": 113,
+      "hash": "07973c172861af4d242adb88600921f6a8a56618d1786d900584bbbf25569cf6",
+      "fanIn": 0,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "AuthService"
+      ]
+    },
+    {
+      "path": "src/outer.ts",
+      "module": "src",
+      "lines": 11,
+      "bytes": 159,
+      "hash": "7b43cab2f85a5f4615eb3a2fb997267ee63a6bffa491b681b67ced5efb74dd11",
+      "fanIn": 0,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "run"
+      ]
+    },
+    {
+      "path": "src/overloads.ts",
+      "module": "src",
+      "lines": 17,
+      "bytes": 244,
+      "hash": "56bf51dcb0a1daf772581eaa1e924b5772d99cea93984559548a0097ab7168dc",
+      "fanIn": 0,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "stores"
+      ]
+    },
+    {
+      "path": "src/payment-service.ts",
+      "module": "src",
+      "lines": 13,
+      "bytes": 217,
+      "hash": "615d88b8a6c1529d53614b9b0b2004367be8a664f794df5ea060871b694e27c6",
+      "fanIn": 0,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "createPayment"
+      ]
+    },
+    {
+      "path": "src/registry.ts",
+      "module": "src",
+      "lines": 11,
+      "bytes": 142,
+      "hash": "40e31bbb0e67ba31af2840de59b40171e2f5c29c651d635e079d54c4e0405d47",
+      "fanIn": 0,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "registry"
+      ]
+    },
+    {
+      "path": "src/twins.ts",
+      "module": "src",
+      "lines": 17,
+      "bytes": 221,
+      "hash": "004cc6554f141e68cfec5972a9857c447d4ee39688a48b3a59b8d8fbee4e996e",
+      "fanIn": 0,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "twins"
+      ]
+    },
+    {
+      "path": "src/user-repo.ts",
+      "module": "src",
+      "lines": 13,
+      "bytes": 146,
+      "hash": "83fcc6182f194114437433eb99d4823525cda10897ef8d49d67cb2300db04bd9",
+      "fanIn": 0,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "repoApi"
+      ]
+    },
+    {
+      "path": "src/user-service.ts",
+      "module": "src",
+      "lines": 21,
+      "bytes": 264,
+      "hash": "c70b95fc66fc321ac534710d61b1d6a7cb7e154812bb20c1960dd2351f20cff6",
+      "fanIn": 0,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "users"
+      ]
+    }
+  ],
+  "edges": [],
+  "routes": [],
+  "symbols": [
+    {
+      "name": "AuthService",
+      "kind": "class",
+      "line": 1,
+      "endLine": 9,
+      "exported": true,
+      "exportKind": "named",
+      "signature": "export class AuthService {",
+      "file": "src/auth-service.ts"
+    },
+    {
+      "name": "AuthService.verify",
+      "kind": "function",
+      "line": 2,
+      "endLine": 4,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [],
+      "returnType": "string",
+      "signature": "AuthService.verify(): string",
+      "file": "src/auth-service.ts"
+    },
+    {
+      "name": "AuthService.revoke",
+      "kind": "function",
+      "line": 6,
+      "endLine": 8,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [
+        {
+          "name": "token",
+          "type": "string"
+        }
+      ],
+      "returnType": "boolean",
+      "signature": "AuthService.revoke(token: string): boolean",
+      "file": "src/auth-service.ts"
+    },
+    {
+      "name": "outerFunction",
+      "kind": "function",
+      "line": 1,
+      "endLine": 7,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [],
+      "returnType": "boolean",
+      "signature": "outerFunction(): boolean",
+      "file": "src/outer.ts"
+    },
+    {
+      "name": "outerFunction.innerFunction",
+      "kind": "function",
+      "line": 2,
+      "endLine": 4,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [],
+      "returnType": "boolean",
+      "signature": "outerFunction.innerFunction(): boolean",
+      "file": "src/outer.ts"
+    },
+    {
+      "name": "run",
+      "kind": "function",
+      "line": 9,
+      "endLine": 11,
+      "exported": true,
+      "exportKind": "named",
+      "parameters": [],
+      "returnType": "boolean",
+      "signature": "run(): boolean",
+      "file": "src/outer.ts"
+    },
+    {
+      "name": "Store",
+      "kind": "class",
+      "line": 1,
+      "endLine": 7,
+      "exported": false,
+      "exportKind": "none",
+      "signature": "class Store {",
+      "file": "src/overloads.ts"
+    },
+    {
+      "name": "Store.save",
+      "kind": "function",
+      "line": 2,
+      "endLine": 2,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [
+        {
+          "name": "value",
+          "type": "string"
+        }
+      ],
+      "returnType": "string",
+      "signature": "Store.save(value: string): string",
+      "file": "src/overloads.ts"
+    },
+    {
+      "name": "Store.save",
+      "kind": "function",
+      "line": 3,
+      "endLine": 3,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [
+        {
+          "name": "value",
+          "type": "number"
+        }
+      ],
+      "returnType": "number",
+      "signature": "Store.save(value: number): number",
+      "file": "src/overloads.ts"
+    },
+    {
+      "name": "Store.save",
+      "kind": "function",
+      "line": 4,
+      "endLine": 6,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [
+        {
+          "name": "value",
+          "type": "unknown"
+        }
+      ],
+      "returnType": "unknown",
+      "signature": "Store.save(value: unknown): unknown",
+      "file": "src/overloads.ts"
+    },
+    {
+      "name": "Other",
+      "kind": "class",
+      "line": 9,
+      "endLine": 13,
+      "exported": false,
+      "exportKind": "none",
+      "signature": "class Other {",
+      "file": "src/overloads.ts"
+    },
+    {
+      "name": "Other.save",
+      "kind": "function",
+      "line": 10,
+      "endLine": 12,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [],
+      "returnType": "string",
+      "signature": "Other.save(): string",
+      "file": "src/overloads.ts"
+    },
+    {
+      "name": "stores",
+      "kind": "function",
+      "line": 15,
+      "endLine": 17,
+      "exported": true,
+      "exportKind": "named",
+      "parameters": [],
+      "returnType": "{}",
+      "signature": "stores(): {}",
+      "file": "src/overloads.ts"
+    },
+    {
+      "name": "PaymentService",
+      "kind": "class",
+      "line": 1,
+      "endLine": 9,
+      "exported": false,
+      "exportKind": "none",
+      "signature": "class PaymentService {",
+      "file": "src/payment-service.ts"
+    },
+    {
+      "name": "PaymentService.process",
+      "kind": "function",
+      "line": 2,
+      "endLine": 8,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [
+        {
+          "name": "amount",
+          "type": "number"
+        }
+      ],
+      "returnType": "boolean",
+      "signature": "PaymentService.process(amount: number): boolean",
+      "file": "src/payment-service.ts"
+    },
+    {
+      "name": "PaymentService.process.validate",
+      "kind": "function",
+      "line": 3,
+      "endLine": 5,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [],
+      "returnType": "boolean",
+      "signature": "PaymentService.process.validate(): boolean",
+      "file": "src/payment-service.ts"
+    },
+    {
+      "name": "createPayment",
+      "kind": "function",
+      "line": 11,
+      "endLine": 13,
+      "exported": true,
+      "exportKind": "named",
+      "parameters": [],
+      "returnType": "boolean",
+      "signature": "createPayment(): boolean",
+      "file": "src/payment-service.ts"
+    },
+    {
+      "name": "registry",
+      "kind": "const",
+      "line": 1,
+      "endLine": 11,
+      "exported": true,
+      "exportKind": "named",
+      "signature": "registry = {",
+      "file": "src/registry.ts"
+    },
+    {
+      "name": "registry.register",
+      "kind": "function",
+      "line": 2,
+      "endLine": 4,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [],
+      "returnType": "boolean",
+      "signature": "registry.register(): boolean",
+      "file": "src/registry.ts"
+    },
+    {
+      "name": "registry.lookup",
+      "kind": "function",
+      "line": 6,
+      "endLine": 8,
+      "exported": false,
+      "exportKind": "none",
+      "signature": "lookup: function (key: string) {",
+      "file": "src/registry.ts"
+    },
+    {
+      "name": "registry.count",
+      "kind": "function",
+      "line": 10,
+      "endLine": 10,
+      "exported": false,
+      "exportKind": "none",
+      "signature": "count: () => 0",
+      "file": "src/registry.ts"
+    },
+    {
+      "name": "first",
+      "kind": "function",
+      "line": 1,
+      "endLine": 6,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [],
+      "returnType": "number",
+      "signature": "first(): number",
+      "file": "src/twins.ts"
+    },
+    {
+      "name": "first.helper",
+      "kind": "function",
+      "line": 2,
+      "endLine": 4,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [],
+      "returnType": "number",
+      "signature": "first.helper(): number",
+      "file": "src/twins.ts"
+    },
+    {
+      "name": "second",
+      "kind": "function",
+      "line": 8,
+      "endLine": 13,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [],
+      "returnType": "number",
+      "signature": "second(): number",
+      "file": "src/twins.ts"
+    },
+    {
+      "name": "second.helper",
+      "kind": "function",
+      "line": 9,
+      "endLine": 11,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [],
+      "returnType": "number",
+      "signature": "second.helper(): number",
+      "file": "src/twins.ts"
+    },
+    {
+      "name": "twins",
+      "kind": "function",
+      "line": 15,
+      "endLine": 17,
+      "exported": true,
+      "exportKind": "named",
+      "parameters": [],
+      "returnType": "{}",
+      "signature": "twins(): {}",
+      "file": "src/twins.ts"
+    },
+    {
+      "name": "UserRepo",
+      "kind": "class",
+      "line": 1,
+      "endLine": 9,
+      "exported": false,
+      "exportKind": "none",
+      "signature": "class UserRepo {",
+      "file": "src/user-repo.ts"
+    },
+    {
+      "name": "UserRepo.save",
+      "kind": "function",
+      "line": 2,
+      "endLine": 4,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [],
+      "returnType": "boolean",
+      "signature": "UserRepo.save(): boolean",
+      "file": "src/user-repo.ts"
+    },
+    {
+      "name": "UserRepo.findById",
+      "kind": "function",
+      "line": 6,
+      "endLine": 8,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [
+        {
+          "name": "id",
+          "type": "number"
+        }
+      ],
+      "returnType": "number",
+      "signature": "UserRepo.findById(id: number): number",
+      "file": "src/user-repo.ts"
+    },
+    {
+      "name": "repoApi",
+      "kind": "function",
+      "line": 11,
+      "endLine": 13,
+      "exported": true,
+      "exportKind": "named",
+      "parameters": [],
+      "returnType": "typeof UserRepo",
+      "signature": "repoApi(): typeof UserRepo",
+      "file": "src/user-repo.ts"
+    },
+    {
+      "name": "UserService",
+      "kind": "class",
+      "line": 1,
+      "endLine": 17,
+      "exported": false,
+      "exportKind": "none",
+      "signature": "class UserService {",
+      "file": "src/user-service.ts"
+    },
+    {
+      "name": "UserService.validate",
+      "kind": "function",
+      "line": 2,
+      "endLine": 4,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [],
+      "returnType": "boolean",
+      "signature": "UserService.validate(): boolean",
+      "file": "src/user-service.ts"
+    },
+    {
+      "name": "UserService.normalize",
+      "kind": "function",
+      "line": 6,
+      "endLine": 8,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [],
+      "returnType": "number",
+      "signature": "UserService.normalize(): number",
+      "file": "src/user-service.ts"
+    },
+    {
+      "name": "UserService.check",
+      "kind": "function",
+      "line": 10,
+      "endLine": 12,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [],
+      "returnType": "number",
+      "signature": "UserService.check(): number",
+      "file": "src/user-service.ts"
+    },
+    {
+      "name": "UserService.create",
+      "kind": "function",
+      "line": 14,
+      "endLine": 16,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [],
+      "returnType": "UserService",
+      "signature": "UserService.create(): UserService",
+      "file": "src/user-service.ts"
+    },
+    {
+      "name": "users",
+      "kind": "function",
+      "line": 19,
+      "endLine": 21,
+      "exported": true,
+      "exportKind": "named",
+      "parameters": [],
+      "returnType": "UserService",
+      "signature": "users(): UserService",
+      "file": "src/user-service.ts"
+    }
+  ],
+  "manifests": [],
+  "dependencies": [],
+  "configReferences": [],
+  "envDeclarations": [],
+  "entryPoints": [],
+  "coverage": {
+    "files": {
+      "found": 8,
+      "parsed": 8,
+      "skipped": 0,
+      "skippedFiles": [],
+      "excludedDirectories": []
+    },
+    "imports": {
+      "total": {
+        "seen": 0,
+        "internal": 0,
+        "external": 0,
+        "excluded": 0,
+        "unresolved": 0
+      },
+      "byKind": {
+        "import": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "re-export": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "dynamic-import": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "require": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "call": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        }
+      },
+      "external": {
+        "package": 0,
+        "builtin": 0,
+        "outside-root": 0
+      },
+      "excluded": {},
+      "unresolvedByReason": {},
+      "unresolved": []
+    },
+    "routes": {
+      "omitted": [],
+      "withheld": []
+    },
+    "calls": {
+      "total": 13,
+      "resolved": 7,
+      "unresolved": 6,
+      "unresolvedCalls": [
+        {
+          "from": "src/outer.ts",
+          "callee": "innerFunction",
+          "line": 6,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "src/payment-service.ts",
+          "callee": "validate",
+          "line": 7,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "src/payment-service.ts",
+          "callee": "new PaymentService().process",
+          "line": 12,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "src/twins.ts",
+          "callee": "helper",
+          "line": 5,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "src/twins.ts",
+          "callee": "helper",
+          "line": 12,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "src/user-service.ts",
+          "callee": "UserService.create",
+          "line": 20,
+          "reason": "unresolved-call"
+        }
+      ]
+    }
+  },
+  "configs": [],
+  "nonCodeCandidates": []
+}

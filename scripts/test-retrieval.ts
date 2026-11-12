@@ -1712,6 +1712,68 @@ const qualifiedAsk = async (q: string) =>
   }
 }
 
+// --- Section 8: Parser-to-retrieval integration for qualified declarations ---
+// Uses the real parser through the fixture adapter: the symbols retrieved here
+// are actual parse output, not mocked rows.
+console.log("");
+console.log("=== 8. Parser-to-retrieval integration (real parser, qualified declarations) ===");
+{
+  const { createFixtureContext } = await import("./eval-fixture-adapter.ts");
+  const ctx = createFixtureContext("class-methods");
+  const ask = (q: string) => retrieveGroundedContext(ctx.db, ctx.analysisId, q);
+
+  // A qualified method query reaches the method's own file and window.
+  const save = await ask("UserRepo.save");
+  const saveWin = save.windows.find((w) => w.path === "src/user-repo.ts");
+  if (!save.insufficientEvidence && saveWin) {
+    pass(`"UserRepo.save" retrieves the real parsed method declaration (${saveWin.reason.slice(0, 60)}...)`);
+  } else {
+    fail(`qualified method retrieval failed: ${JSON.stringify(save.windows.map((w) => w.path))} insufficient=${save.insufficientEvidence}`);
+  }
+  if (saveWin && saveWin.startLine <= 2 && saveWin.endLine >= 4) {
+    pass(`the retrieved window covers the save declaration (${saveWin.startLine}..${saveWin.endLine})`);
+  } else if (saveWin) {
+    fail(`window misses the method span: ${saveWin.startLine}..${saveWin.endLine}`);
+  }
+
+  const verify = await ask("AuthService.verify");
+  const verifyWin = verify.windows.find((w) => w.path === "src/auth-service.ts");
+  if (!verify.insufficientEvidence && verifyWin) {
+    pass(`"AuthService.verify" retrieves the exported class's method`);
+  } else {
+    fail(`exported method retrieval failed: ${JSON.stringify(verify.windows.map((w) => w.path))}`);
+  }
+
+  const nested = await ask("outerFunction.innerFunction");
+  const nestedWin = nested.windows.find((w) => w.path === "src/outer.ts");
+  if (!nested.insufficientEvidence && nestedWin) {
+    pass(`"outerFunction.innerFunction" retrieves the nested declaration`);
+  } else {
+    fail(`nested retrieval failed: ${JSON.stringify(nested.windows.map((w) => w.path))} insufficient=${nested.insufficientEvidence}`);
+  }
+
+  // Unqualified queries keep working against the same parsed symbols.
+  const unqualified = await ask("verify");
+  if (unqualified.windows.some((w) => w.path === "src/auth-service.ts")) {
+    pass("unqualified \"verify\" still finds AuthService.verify");
+  } else {
+    fail(`unqualified query regressed: ${JSON.stringify(unqualified.windows.map((w) => w.path))}`);
+  }
+  const cls = await ask("UserRepo");
+  if (cls.windows.some((w) => w.path === "src/user-repo.ts")) {
+    pass("the class itself stays retrievable by its own name");
+  } else {
+    fail(`class query regressed: ${JSON.stringify(cls.windows.map((w) => w.path))}`);
+  }
+
+  // Specificity: the exact method query ranks its target first.
+  if (save.windows[0]?.path === "src/user-repo.ts") {
+    pass("the qualified method's own file is the top-ranked window");
+  } else {
+    fail(`ranking off: ${JSON.stringify(save.windows.map((w) => ({ p: w.path, s: w.score })))}`);
+  }
+}
+
 // Summary
 console.log("");
 for (const line of results) console.log(line);

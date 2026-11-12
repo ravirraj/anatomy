@@ -208,6 +208,13 @@ export function extractExports(sourceFile: SourceFile): string[] {
  * it is. Source order, each declaration once. CommonJS assignment isn't a
  * declaration, so it makes no symbol here; the names it exports are already
  * in extractExports.
+ *
+ * Class members and nested functions are extracted too, named by their parent
+ * chain ("UserRepo.save", "PaymentService.process.validate"): they are real
+ * declarations a question can name, and the database's `name` column carries
+ * the qualified identity. They are stored under the existing "function" kind
+ * (the schema's kind list is closed), are not module exports (members can't be
+ * individually exported in ESM), and are visited exactly once by construction.
  */
 function jsDocText(node: Node): string | undefined {
   // ts-morph exposes getJsDocs on declarations that can carry JSDoc.
@@ -269,8 +276,44 @@ function enrichDeclaration(
 
 export function extractSymbols(sourceFile: SourceFile): Omit<ParsedSymbol, "file">[] {
   const found: Omit<ParsedSymbol, "file">[] = [];
+  collectDeclarations(sourceFile.getStatements(), [], found);
+  return found;
+}
 
-  for (const statement of sourceFile.getStatements()) {
+/** Joins a parent chain into a deterministic qualified name: ["A","b"] -> "A.b". */
+function qualify(parents: string[], name: string): string {
+  return [...parents, name].join(".");
+}
+
+/** The body statements of a function-like node, when it has one. */
+function bodyStatements(node: Node): Node[] {
+  const fn = node as { getBody?: () => Node | undefined; getBodyText?: () => string };
+  if (typeof fn.getBody !== "function") return [];
+  const body = fn.getBody();
+  if (!body) return [];
+  const block = body as { getStatements?: () => Node[] };
+  return typeof block.getStatements === "function" ? block.getStatements() : [];
+}
+
+/**
+ * Walks declarations recursively. Top-level behavior is unchanged; nested
+ * scope only extracts function declarations (locals like `const` stay out of
+ * the symbol list, matching the top-level rule that a declaration is a
+ * definition a question can name, not every binding).
+ */
+function collectNestedFunctions(statements: Node[], parents: string[], found: Omit<ParsedSymbol, "file">[]): void {
+  for (const statement of statements) {
+    if (!Node.isFunctionDeclaration(statement)) continue;
+    const name = statement.getNameNode();
+    if (!name) continue;
+    // A nested function is a private local: it is never a module export.
+    found.push(enrichDeclaration(qualify(parents, name.getText()), "function", statement, false, false));
+    collectNestedFunctions(bodyStatements(statement), [...parents, name.getText()], found);
+  }
+}
+
+function collectDeclarations(statements: Node[], parents: string[], found: Omit<ParsedSymbol, "file">[]): void {
+  for (const statement of statements) {
     if (Node.isFunctionDeclaration(statement) || Node.isClassDeclaration(statement) || Node.isInterfaceDeclaration(statement) || Node.isTypeAliasDeclaration(statement) || Node.isEnumDeclaration(statement)) {
       const exported = statement.hasExportKeyword();
       const kind: SymbolKind = Node.isFunctionDeclaration(statement)
@@ -283,13 +326,23 @@ export function extractSymbols(sourceFile: SourceFile): Omit<ParsedSymbol, "file
               ? "type"
               : "enum";
       if (statement.hasDefaultKeyword()) {
-        found.push(enrichDeclaration("default", kind, statement, true, true));
+        found.push(enrichDeclaration(qualify(parents, "default"), kind, statement, true, true));
         continue;
       }
       const name = statement.getNameNode();
-      if (name) found.push(enrichDeclaration(name.getText(), kind, statement, exported, false));
+      if (name) {
+        const qualified = qualify(parents, name.getText());
+        found.push(enrichDeclaration(qualified, kind, statement, exported, false));
+        // Function declarations recurse into their bodies so nested functions
+        // join the parent chain. Classes carry their members below.
+        if (kind === "function") {
+          collectNestedFunctions(bodyStatements(statement), [...parents, name.getText()], found);
+        } else if (kind === "class") {
+          collectClassMembers(statement, parents, found);
+        }
+      }
     } else if (Node.isModuleDeclaration(statement) && Node.isIdentifier(statement.getNameNode())) {
-      found.push(enrichDeclaration(statement.getName(), "namespace", statement, statement.hasExportKeyword(), false));
+      found.push(enrichDeclaration(qualify(parents, statement.getName()), "namespace", statement, statement.hasExportKeyword(), false));
     } else if (Node.isVariableStatement(statement)) {
       const exported = statement.hasExportKeyword();
       const kind: SymbolKind = statement.getDeclarationList().getFlags() & ts.NodeFlags.Const
@@ -300,20 +353,76 @@ export function extractSymbols(sourceFile: SourceFile): Omit<ParsedSymbol, "file
       for (const declaration of statement.getDeclarations()) {
         const name = declaration.getNameNode();
         if (Node.isIdentifier(name)) {
-          found.push(enrichDeclaration(name.getText(), kind, declaration, exported, false));
+          found.push(enrichDeclaration(qualify(parents, name.getText()), kind, declaration, exported, false));
+          // An object-literal initializer makes the binding a namespace-like
+          // object: its methods are declarations a question can name
+          // ("registry.register"), extracted under the same member rules.
+          const initializer = declaration.getInitializer();
+          if (initializer && Node.isObjectLiteralExpression(initializer)) {
+            collectObjectMembers(initializer, [...parents, name.getText()], found);
+          }
         } else {
           for (const element of name.getDescendantsOfKind(SyntaxKind.BindingElement)) {
             const bound = element.getNameNode();
             if (Node.isIdentifier(bound)) {
-              found.push(enrichDeclaration(bound.getText(), kind, element, exported, false));
+              found.push(enrichDeclaration(qualify(parents, bound.getText()), kind, element, exported, false));
             }
           }
         }
       }
     }
   }
+}
 
-  return found;
+/**
+ * Class members: methods (including overloads and static methods, whatever
+ * their access modifiers) become "function" symbols named by the class, e.g.
+ * "UserRepo.save". Constructors and get/set accessors are not extracted: the
+ * constructor's name is not source vocabulary, and accessors are property
+ * views, not declarations a question names. Each member is visited once.
+ */
+function collectClassMembers(cls: Node, parents: string[], found: Omit<ParsedSymbol, "file">[]): void {
+  const members = (cls as { getMembers?: () => Node[] }).getMembers?.() ?? [];
+  const className = (cls as { getName?: () => string | undefined }).getName?.() ?? "";
+  for (const member of members) {
+    if (!Node.isMethodDeclaration(member)) continue;
+    const methodName = member.getNameNode();
+    if (!Node.isIdentifier(methodName)) continue;
+    const qualified = qualify([...parents, className], methodName.getText());
+    // ts-morph folds overload signatures into their implementation member;
+    // each signature is its own declaration at its own line, so they are
+    // extracted explicitly before it.
+    for (const overload of member.getOverloads?.() ?? []) {
+      found.push(enrichDeclaration(qualified, "function", overload, false, false));
+    }
+    found.push(enrichDeclaration(qualified, "function", member, false, false));
+    collectNestedFunctions(bodyStatements(member), [...parents, className, methodName.getText()], found);
+  }
+}
+
+/**
+ * Object-literal members on a top-level binding: shorthand methods
+ * ("register() {}"), function values ("lookup: function () {}") and arrow
+ * values ("count: () => 0") are all ways of writing a method on the object.
+ * Computed keys and get/set accessors are skipped.
+ */
+function collectObjectMembers(literal: Node, parents: string[], found: Omit<ParsedSymbol, "file">[]): void {
+  const properties = (literal as { getProperties?: () => Node[] }).getProperties?.() ?? [];
+  for (const property of properties) {
+    const nameNode = (property as { getNameNode?: () => Node | undefined }).getNameNode?.();
+    if (!nameNode || !Node.isIdentifier(nameNode)) continue;
+    const memberName = nameNode.getText();
+    if (Node.isMethodDeclaration(property)) {
+      found.push(enrichDeclaration(qualify(parents, memberName), "function", property, false, false));
+      collectNestedFunctions(bodyStatements(property), [...parents, memberName], found);
+    } else if (Node.isPropertyAssignment(property)) {
+      const initializer = property.getInitializer();
+      if (initializer && (Node.isFunctionExpression(initializer) || Node.isArrowFunction(initializer))) {
+        found.push(enrichDeclaration(qualify(parents, memberName), "function", property, false, false));
+        collectNestedFunctions(bodyStatements(initializer), [...parents, memberName], found);
+      }
+    }
+  }
 }
 
 // `module.exports = <value>` exports a and b. Anything else, including an

@@ -117,6 +117,35 @@
       "file": "packages/api/src/users/users.controller.ts"
     },
     {
+      "name": "UsersController.list",
+      "kind": "function",
+      "line": 8,
+      "endLine": 11,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [],
+      "returnType": "{}",
+      "signature": "UsersController.list(): {}",
+      "file": "packages/api/src/users/users.controller.ts"
+    },
+    {
+      "name": "UsersController.create",
+      "kind": "function",
+      "line": 13,
+      "endLine": 16,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [
+        {
+          "name": "_body",
+          "type": "unknown"
+        }
+      ],
+      "returnType": "{ created: boolean; }",
+      "signature": "UsersController.create(_body: unknown): { created: boolean; }",
+      "file": "packages/api/src/users/users.controller.ts"
+    },
+    {
       "name": "UsersService",
       "kind": "class",
       "line": 3,
@@ -124,6 +153,18 @@
       "exported": true,
       "exportKind": "named",
       "signature": "@Injectable()",
+      "file": "packages/api/src/users/users.service.ts"
+    },
+    {
+      "name": "UsersService.all",
+      "kind": "function",
+      "line": 5,
+      "endLine": 7,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [],
+      "returnType": "string[]",
+      "signature": "UsersService.all(): string[]",
       "file": "packages/api/src/users/users.service.ts"
     },
     {

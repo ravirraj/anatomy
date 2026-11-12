@@ -125,6 +125,18 @@
       "exportKind": "none",
       "signature": "class Connection {",
       "file": "lib/helper.ts"
+    },
+    {
+      "name": "Connection.open",
+      "kind": "function",
+      "line": 4,
+      "endLine": 6,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [],
+      "returnType": "boolean",
+      "signature": "Connection.open(): boolean",
+      "file": "lib/helper.ts"
     }
   ],
   "manifests": [
