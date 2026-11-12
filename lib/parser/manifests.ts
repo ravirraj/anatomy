@@ -772,27 +772,32 @@ export function resolveManifestPath(dir: string, declared: string): string {
 /**
  * Resolves a workspace glob to the directories it matches, given the set of
  * directories that actually hold a manifest. Only literal and single-star
- * globs are matched; anything more elaborate is left unmatched rather than
- * approximated.
+ * segments are matched; anything more elaborate is left unmatched rather than
+ * approximated. A glob prefixed with "!" negates: its matches are removed
+ * from the result instead of added, so a manifest's exclusion list excludes.
  */
 export function matchWorkspaceGlobs(globs: readonly string[], manifestDirs: readonly string[]): string[] {
   const out = new Set<string>();
+  const negated = new Set<string>();
   for (const glob of globs) {
     const normalized = glob.replace(/^\.\//, "").replace(/\/$/, "");
-    if (!normalized.includes("*")) {
-      if (manifestDirs.includes(normalized)) out.add(normalized);
+    const negate = normalized.startsWith("!");
+    const pattern = negate ? normalized.slice(1) : normalized;
+    if (!pattern.includes("*")) {
+      if (manifestDirs.includes(pattern)) (negate ? negated : out).add(pattern);
       continue;
     }
-    const pattern = new RegExp(
-      `^${normalized
+    const regex = new RegExp(
+      `^${pattern
         .split("/")
         .map((segment) => (segment === "**" ? ".*" : segment === "*" ? "[^/]+" : segment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
         .join("/")}$`,
     );
     for (const dir of manifestDirs) {
-      if (pattern.test(dir)) out.add(dir);
+      if (regex.test(dir)) (negate ? negated : out).add(dir);
     }
   }
+  for (const dir of negated) out.delete(dir);
   return [...out].sort();
 }
 

@@ -11,6 +11,7 @@ import path from "node:path";
 import { parseRepository } from "../lib/parser/index.ts";
 import { validateParseResult } from "../lib/parser/contract.ts";
 import { queryTouchesPackaging, formatPackagingEvidence, loadPackagingEvidence } from "../lib/ai/packaging.ts";
+import { matchWorkspaceGlobs } from "../lib/parser/manifests.ts";
 import type { ParseResult } from "../lib/parser/types.ts";
 
 let passed = 0;
@@ -511,6 +512,191 @@ console.log("\n=== 15. Rendered packaging integrity (Phase 2, B3) ===");
   check(
     "a unicode package name renders intact through the full block line",
     normalSerialized.includes('- package.json (npm, declares "café-зависимость")'),
+  );
+}
+
+console.log("\n=== 16. Workspace glob resolution ===");
+
+// matchWorkspaceGlobs resolves the globs a workspace manifest declares to the
+// directories that actually hold a manifest. It is only correct where its
+// semantics are: literal and single-star segments, nested `**`, negation
+// entries are not positive patterns, and unmatched globs resolve to nothing
+// rather than to a guess.
+{
+  check(
+    "a literal glob matches only the directory that holds a manifest",
+    JSON.stringify(matchWorkspaceGlobs(["packages/api"], ["packages/api", "packages/web"])) === JSON.stringify(["packages/api"]),
+  );
+  check(
+    "a single-star glob matches one directory level",
+    JSON.stringify(matchWorkspaceGlobs(["packages/*"], [".", "packages/api", "packages/api/src", "packages/web"])) === JSON.stringify(["packages/api", "packages/web"]),
+  );
+  check(
+    "a nested double-star glob matches deeper directories",
+    JSON.stringify(matchWorkspaceGlobs(["apps/**"], ["apps/web", "apps/web/lib"])) === JSON.stringify(["apps/web", "apps/web/lib"]),
+  );
+  check(
+    "a glob that matches nothing resolves to nothing",
+    matchWorkspaceGlobs(["apps/*"], ["packages/api"]).length === 0,
+  );
+  check(
+    "negation entries are not resolved as positive patterns",
+    matchWorkspaceGlobs(["packages/*", "!packages/legacy"], ["packages/api", "packages/legacy"]).join(",") === "packages/api",
+  );
+  check(
+    "resolutions come back sorted and deduplicated",
+    JSON.stringify(matchWorkspaceGlobs(["packages/*", "packages/api"], ["packages/web", "packages/api"])) === JSON.stringify(["packages/api", "packages/web"]),
+  );
+
+  // Rendered integration: a workspace manifest's glob line carries the
+  // directories it actually resolves to, so a monorepo question sees member
+  // packages as facts rather than patterns.
+  const wsRows = {
+    manifests: [
+      { path: "package.json", dir: ".", ecosystem: "npm", name: "monorepo", workspaces: ["packages/*", "!packages/legacy"], scripts: [], problems: [] },
+      { path: "packages/api/package.json", dir: "packages/api", ecosystem: "npm", name: "@m/api", workspaces: [], scripts: [], problems: [] },
+      { path: "packages/legacy/package.json", dir: "packages/legacy", ecosystem: "npm", name: "@m/legacy", workspaces: [], scripts: [], problems: [] },
+    ],
+    dependencies: [],
+    config_references: [],
+    entry_points: [],
+  };
+  const wsDb = {
+    from: (table: string) => {
+      if (table === "files") {
+        return {
+          select: () => ({
+            eq: () => ({
+              in: async () => ({ data: [], error: null }),
+            }),
+          }),
+        };
+      }
+      const rows = (wsRows as Record<string, unknown[]>)[table] ?? [];
+      return {
+        select: () => ({
+          eq: async () => ({ data: rows, error: null }),
+        }),
+      };
+    },
+  };
+  const wsEvidence = await loadPackagingEvidence(
+    wsDb as unknown as Parameters<typeof loadPackagingEvidence>[0],
+    "analysis-ws",
+    "Which packages belong to this monorepo workspace?",
+  );
+  const wsSerialized = formatPackagingEvidence(wsEvidence);
+  const wsLine = wsSerialized.split("\n").find((l) => l.startsWith("- package.json (npm"));
+  check(
+    "a workspace glob line resolves to the member packages it matches",
+    wsLine !== undefined && wsLine.includes("workspaces: packages/*, !packages/legacy (matches packages/api)"),
+    JSON.stringify(wsLine),
+  );
+  check(
+    "a negated workspace member is not rendered as a match",
+    wsLine !== undefined && !wsLine.includes("matches packages/legacy"),
+    JSON.stringify(wsLine),
+  );
+
+  const unlinkedRows = {
+    manifests: [
+      { path: "package.json", dir: ".", ecosystem: "npm", name: "app", workspaces: ["apps/*"], scripts: [], problems: [] },
+    ],
+    dependencies: [],
+    config_references: [],
+    entry_points: [],
+  };
+  const unlinkedDb = {
+    from: (table: string) => {
+      if (table === "files") {
+        return {
+          select: () => ({
+            eq: () => ({
+              in: async () => ({ data: [], error: null }),
+            }),
+          }),
+        };
+      }
+      const rows = (unlinkedRows as Record<string, unknown[]>)[table] ?? [];
+      return {
+        select: () => ({
+          eq: async () => ({ data: rows, error: null }),
+        }),
+      };
+    },
+  };
+  const unlinkedSerialized = formatPackagingEvidence(
+    await loadPackagingEvidence(
+      unlinkedDb as unknown as Parameters<typeof loadPackagingEvidence>[0],
+      "analysis-ws2",
+      "Which packages belong to this monorepo workspace?",
+    ),
+  );
+  check(
+    "a glob matching no manifest directory renders with no invented matches",
+    unlinkedSerialized.includes("workspaces: apps/*") && !unlinkedSerialized.includes("(matches"),
+    JSON.stringify(unlinkedSerialized.split("\n").find((l) => l.includes("workspaces:"))),
+  );
+}
+
+console.log("\n=== 17. Relevance from what the repository declares ===");
+
+// A query that names something the repository itself declares — a dependency,
+// a configuration variable — earns the packaging block even when no
+// packaging vocabulary word appears in it. A query naming nothing declared
+// still gets nothing.
+{
+  const namedRows = {
+    manifests: [{ path: "package.json", dir: ".", ecosystem: "npm", name: "svc", workspaces: [], scripts: [], problems: [] }],
+    dependencies: [{ name: "flask", version: "3.0.0", kind: "runtime", manifest_path: "requirements.txt", dir: ".", imported_by: 2 }, { name: "express", version: "^4.18.2", kind: "runtime", manifest_path: "package.json", dir: ".", imported_by: 0 }],
+    config_references: [{ file_path: "src/config.ts", variable: "PORT_FALLBACK", line: 4, kind: "config-object", detail: null }],
+    entry_points: [],
+  };
+  const namedDb = {
+    from: (table: string) => {
+      if (table === "files") {
+        return {
+          select: () => ({
+            eq: () => ({
+              in: async () => ({ data: [], error: null }),
+            }),
+          }),
+        };
+      }
+      const rows = (namedRows as Record<string, unknown[]>)[table] ?? [];
+      return {
+        select: () => ({
+          eq: async () => ({ data: rows, error: null }),
+        }),
+      };
+    },
+  };
+  const loadNamed = (q: string) =>
+    loadPackagingEvidence(namedDb as unknown as Parameters<typeof loadPackagingEvidence>[0], "analysis-named", q);
+
+  const flask = await loadNamed("Where is flask required?");
+  check(
+    "a query naming a declared dependency earns the packaging block without packaging vocabulary",
+    flask.relevant && flask.counts.dependencies > 0,
+    JSON.stringify({ relevant: flask.relevant, counts: flask.counts }),
+  );
+  const port = await loadNamed("What does the port fallback default to?");
+  check(
+    "a query naming a declared configuration variable earns the packaging block",
+    port.relevant && port.counts.config === 1,
+    JSON.stringify({ relevant: port.relevant, counts: port.counts }),
+  );
+  const nothing = await loadNamed("How does authentication work?");
+  check(
+    "a query naming nothing the repository declares still gets no packaging block",
+    !nothing.relevant,
+    JSON.stringify({ relevant: nothing.relevant }),
+  );
+  const vague = await loadNamed("What is expressed here?");
+  check(
+    "a loosely related query does not earn the block through substring noise",
+    !vague.relevant,
+    JSON.stringify({ relevant: vague.relevant }),
   );
 }
 

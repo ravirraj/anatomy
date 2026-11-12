@@ -10,13 +10,17 @@
 // and whether a dependency was merely listed or actually imported — so an
 // answer can never quietly upgrade a declaration into a usage claim.
 //
-// Nothing here is keyed to a question's wording. A query that mentions no
-// packaging vocabulary gets no packaging block; a query that does gets the
-// facts, ranked by how well they match, not by which question was asked.
+// Nothing here is keyed to a question's wording. A query earns the packaging
+// block two ways: it touches packaging vocabulary, or it names something the
+// repository itself declares — a dependency, a manifest's package name, a
+// configuration variable. A query that does neither gets no block; a query
+// that does gets the facts, ranked by how well they match, not by which
+// question was asked.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "../supabase/database.types.ts";
 import type { ManifestFile, ManifestStatus } from "./citations.ts";
+import { matchWorkspaceGlobs } from "../parser/manifests.ts";
 import { extractQueryTokens, identifierSubtokens, tokenVariants } from "./retrieval.ts";
 
 type Db = SupabaseClient<Database>;
@@ -166,7 +170,13 @@ function scriptList(value: unknown): { name: string; command: string }[] {
  * name matching, so a dependency called "react" scores highest for the token
  * "react" and a manifest named "package.json" scores for "package".
  */
-function scoreAgainst(tokens: readonly string[], fields: readonly string[]): number {
+/**
+ * Scores how strongly a query's concept variants hit a row's identifying
+ * fields: exact field equality 100, identifier-subtoken equality 90, loose
+ * substring 50, each discounted for derived variants (stem -6, glossary -14)
+ * so a verbatim naming always outranks an approximate one.
+ */
+export function scoreAgainst(tokens: readonly string[], fields: readonly string[]): number {
   let best = 0;
   const lowered = fields.map((f) => f.toLowerCase());
   for (const token of tokens) {
@@ -190,42 +200,96 @@ function scoreAgainst(tokens: readonly string[], fields: readonly string[]): num
  *
  * Every query filters by analysis_id, so nothing from another organization's
  * analysis can be reached even if an id were guessed.
+ *
+ * The reads happen for every query: relevance is decided from what comes
+ * back (the vocabulary gate, or a declared fact the query names by name),
+ * and neither signal can be known before reading. A read that fails — a
+ * mock or schema without the table — omits that block rather than throwing,
+ * the same treatment an error row gets.
  */
+type ManifestRow = {
+  path: string;
+  dir: string;
+  ecosystem: string;
+  name: string | null;
+  workspaces: unknown;
+  scripts: unknown;
+  problems: unknown;
+};
+type DependencyRow = {
+  name: string;
+  version: string | null;
+  kind: string;
+  manifest_path: string;
+  dir: string;
+  imported_by: number;
+};
+type ConfigRow = { file_path: string; variable: string; line: number; kind: string; detail: string | null };
+type EntryRow = {
+  path: string;
+  kind: string;
+  source: string;
+  manifest_path: string | null;
+  detail: string | null;
+  resolved: boolean;
+  unresolved_reason: string | null;
+  via: unknown;
+};
+
+/**
+ * Whether the query's own words name a declared fact verbatim: the word (as
+ * written in the query) equals the fact's name or one of its identifier
+ * subtokens ("stripe" ~ "STRIPE_API_KEY"). Stems and glossary synonyms do not
+ * count — a query that merely talks *about* a name's subject did not name it.
+ */
+function queryNamesDeclaredFact(tokens: readonly string[], field: string): boolean {
+  const lowered = field.toLowerCase();
+  if (lowered.length === 0) return false;
+  const subtokens = identifierSubtokens(lowered);
+  return tokens.some((token) => lowered === token || subtokens.includes(token));
+}
+
 export async function loadPackagingEvidence(
   db: Db,
   analysisId: string,
   rawQuery: string,
 ): Promise<PackagingEvidence> {
-  if (!queryTouchesPackaging(rawQuery)) return NOT_RELEVANT;
   const tokens = extractQueryTokens(rawQuery);
   if (tokens.length === 0) return NOT_RELEVANT;
-
-  const [manifestsResult, dependenciesResult, configResult, entriesResult] = await Promise.all([
-    db
-      .from("manifests")
-      .select("path, dir, ecosystem, name, workspaces, scripts, problems")
-      .eq("analysis_id", analysisId),
-    db
-      .from("dependencies")
-      .select("name, version, kind, manifest_path, dir, imported_by")
-      .eq("analysis_id", analysisId),
-    db
-      .from("config_references")
-      .select("file_path, variable, line, kind, detail")
-      .eq("analysis_id", analysisId),
-    db
-      .from("entry_points")
-      .select("path, kind, source, manifest_path, detail, resolved, unresolved_reason, via")
-      .eq("analysis_id", analysisId),
-  ]);
 
   // A failed read is not an empty repository. Each block is omitted rather
   // than rendered as "none", so an answer can never claim absence from a
   // query that did not run.
-  const manifests = manifestsResult.error ? null : (manifestsResult.data ?? []);
-  const dependencies = dependenciesResult.error ? null : (dependenciesResult.data ?? []);
-  const config = configResult.error ? null : (configResult.data ?? []);
-  const entries = entriesResult.error ? null : (entriesResult.data ?? []);
+  type PackagingTable = "manifests" | "dependencies" | "config_references" | "entry_points";
+  const read = async <T>(table: PackagingTable, columns: string): Promise<T[] | null> => {
+    try {
+      const { data, error } = await db.from(table).select(columns).eq("analysis_id", analysisId);
+      if (error) return null;
+      return (data ?? []) as T[];
+    } catch {
+      return null;
+    }
+  };
+  const [manifests, dependencies, config, entries] = await Promise.all([
+    read<ManifestRow>("manifests", "path, dir, ecosystem, name, workspaces, scripts, problems"),
+    read<DependencyRow>("dependencies", "name, version, kind, manifest_path, dir, imported_by"),
+    read<ConfigRow>("config_references", "file_path, variable, line, kind, detail"),
+    read<EntryRow>("entry_points", "path, kind, source, manifest_path, detail, resolved, unresolved_reason, via"),
+  ]);
+
+  // Relevance: packaging vocabulary in the query, or a declared fact the
+  // query names by name — the query's own word must equal the declared name
+  // or one of its identifier subtokens. Stem echoes ("expressed" ~ the
+  // "express" package) and loose substrings ("dot" ~ "dotenv") earn nothing:
+  // naming a fact is verbatim, not approximate.
+  if (!queryTouchesPackaging(rawQuery)) {
+    const namesDeclared = [
+      ...(dependencies ?? []).map((d) => d.name),
+      ...(manifests ?? []).map((m) => m.name ?? ""),
+      ...(config ?? []).map((c) => c.variable),
+    ];
+    if (!namesDeclared.some((field) => queryNamesDeclaredFact(tokens, field))) return NOT_RELEVANT;
+  }
 
   const blocks: string[] = [];
   const counts = { manifests: 0, dependencies: 0, config: 0, entries: 0 };
@@ -264,7 +328,18 @@ export async function loadPackagingEvidence(
       const workspaces = stringArray(m.workspaces).map(sanitizeEvidenceValue);
       const scripts = scriptList(m.scripts);
       const problems = stringArray(m.problems).map(sanitizeEvidenceValue);
-      if (workspaces.length > 0) parts.push(`workspaces: ${workspaces.join(", ")}`);
+      if (workspaces.length > 0) {
+        // The glob is the declaration; the directories it resolves to among
+        // this analysis's manifests are the fact. A glob matching nothing
+        // renders with no invented members.
+        const members = matchWorkspaceGlobs(
+          stringArray(m.workspaces),
+          manifests.map((row) => row.dir),
+        ).map(sanitizeEvidenceValue);
+        parts.push(
+          `workspaces: ${workspaces.join(", ")}${members.length > 0 ? ` (matches ${members.join(", ")})` : ""}`,
+        );
+      }
       if (scripts.length > 0) parts.push(`commands: ${scripts.map((s) => sanitizeEvidenceValue(s.name)).join(", ")}`);
       if (problems.length > 0) parts.push(`COULD NOT READ: ${problems.join("; ")}`);
       return parts.join("; ");

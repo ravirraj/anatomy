@@ -2,7 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getFileLines, type BackfillDeps } from "../content/read.ts";
 import type { Database } from "../supabase/database.types.ts";
 import { planQuestion, type QuestionPlan } from "./planner.ts";
-import { formatPackagingEvidence, loadPackagingEvidence, sanitizeEvidenceValue } from "./packaging.ts";
+import { formatPackagingEvidence, loadPackagingEvidence, sanitizeEvidenceValue, scoreAgainst } from "./packaging.ts";
 import type { ManifestFile } from "./citations.ts";
 import { PRIMARY_MANIFEST_NAMES } from "../parser/screening.ts";
 import { isCodeFile } from "../parser/walk.ts";
@@ -314,6 +314,47 @@ const EXPLICIT_HTTP_METHODS = /\b(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD|ALL)\b/
  * demote.
  */
 const ROUTE_METHOD_MISMATCH_PENALTY = 50;
+
+/**
+ * Query concepts that ask where execution begins. This is a closed concept
+ * list, not a growing synonym table: each word names the *structural* idea of
+ * a program's beginning (starting, booting, initialising, entry points), the
+ * same way PACKAGING_TERMS names declared facts. Deliberately absent:
+ * "run"/"runs"/"running" are generic action verbs (GENERIC_QUERY_WORDS demotes
+ * them), and "main"/"cli"/"bin" name files or symbols on their own — a query
+ * about either is served by the concept stages that match them, not by
+ * promoting every declared entry.
+ */
+const ENTRY_INTENT_WORDS = new Set([
+  "start", "starts", "started", "starting", "startup",
+  "boot", "boots", "booted", "booting", "bootstrap", "bootstraps", "bootstrapping",
+  "launch", "launches", "launched", "launching",
+  "init", "initialize", "initializes", "initialized", "initializing", "initialization",
+  "initialise", "initialises", "initialised", "initialising", "initialisation",
+  "entry", "entrypoint", "entrypoints",
+]);
+
+/**
+ * How many distinct entry files one startup query may seed. The repository's
+ * own declarations are the answer set; beyond a handful they stop being the
+ * answer and start being noise in the budget.
+ */
+const MAX_ENTRY_SEEDS = 4;
+
+/**
+ * Whether the query asks where execution begins. A token qualifies when the
+ * word itself, one of its identifier subtokens ("reInitialize" -> "initialize")
+ * or one of its concept variants ("initializing" -> "initialize") is on the
+ * concept list.
+ */
+function queryAsksForEntryPoints(tokens: readonly string[]): boolean {
+  for (const token of tokens) {
+    if (ENTRY_INTENT_WORDS.has(token)) return true;
+    if (identifierSubtokens(token).some((sub) => ENTRY_INTENT_WORDS.has(sub))) return true;
+    if (tokenVariants(token).some((v) => ENTRY_INTENT_WORDS.has(v.text))) return true;
+  }
+  return false;
+}
 
 /**
  * Serving-layer displacement margin. Within-margin score differences are
@@ -1355,6 +1396,98 @@ export async function retrieveGroundedContext(
             ? `file explicitly named in query ("${filename}")`
             : `file path matches token "${matchedToken}"${genericOnly ? " (generic verb only, demoted)" : ""}`,
         });
+      }
+    }
+  }
+
+  // C3. Entry points the repository itself declares or infers. When the query
+  // asks where execution begins ("Where does the application start?"), the
+  // facts in entry_points are the answer even when no path or symbol spells
+  // "start" — the parser recorded that a manifest names this file. Two gates
+  // keep this from promoting unrelated files: the query must ask the
+  // entry-point concept (ENTRY_INTENT_WORDS), and it must not already name a
+  // file, which the explicit-path stage answers without extra candidates.
+  // Unresolved declarations seed nothing — there is no file to open.
+  if (queryAsksForEntryPoints(tokens) && !hasExplicitFileMatch) {
+    let entryRows: {
+      path: string;
+      kind: string;
+      source: string;
+      manifest_path: string | null;
+      detail: string | null;
+      resolved: boolean;
+    }[] = [];
+    try {
+      const { data, error } = await db
+        .from("entry_points")
+        .select("path, kind, source, manifest_path, detail, resolved")
+        .eq("analysis_id", analysisId);
+      if (!error && Array.isArray(data)) {
+        entryRows = data as typeof entryRows;
+      }
+    } catch {
+      // Mock or legacy schemas may not serve entry_points; absence seeds
+      // nothing, the same compatibility the symbol stage keeps.
+    }
+    const fileByPath = new Map(
+      [...fileMap.values()].map((f) => [f.path.toLowerCase(), f] as const),
+    );
+    const candidates = entryRows
+      .filter((e) => e.resolved)
+      .map((e) => ({
+        row: e,
+        file: fileByPath.get(e.path.toLowerCase()),
+        // How strongly the query names this entry: its path, its declaring
+        // manifest or its bin name echoing a query word ranks the fact above
+        // the other declared entries, the way "main" finds the main entry.
+        relevance: scoreAgainst(tokens, [e.path, e.source, e.manifest_path ?? "", e.detail ?? ""]),
+      }))
+      .filter((c) => c.file !== undefined);
+
+    // Deterministic order: declared facts before inferred ones, then the
+    // entries the query names most directly, then a stable path/source order.
+    // Duplicate declarations of one file collapse to the most canonical
+    // source ("main" before "bin" before the rest).
+    const sourceRank = (source: string) => (source.endsWith("main") ? 0 : source.endsWith("bin") ? 1 : 2);
+    candidates.sort(
+      (a, b) =>
+        Number(b.row.kind === "declared") - Number(a.row.kind === "declared") ||
+        b.relevance - a.relevance ||
+        sourceRank(a.row.source) - sourceRank(b.row.source) ||
+        a.row.path.localeCompare(b.row.path) ||
+        a.row.source.localeCompare(b.row.source),
+    );
+    const byPath = new Map<string, (typeof candidates)[number]>();
+    for (const candidate of candidates) {
+      const key = candidate.row.path.toLowerCase();
+      if (!byPath.has(key)) byPath.set(key, candidate);
+    }
+
+    for (const { row, file, relevance } of [...byPath.values()].slice(0, MAX_ENTRY_SEEDS)) {
+      const bonus = relevance >= 90 ? 15 : relevance >= 50 ? 8 : 0;
+      seedWindows.push({
+        fileId: file!.id,
+        path: file!.path,
+        contentHash: file!.hash,
+        totalLines: file!.lines,
+        startLine: 1,
+        endLine: Math.min(file!.lines, 50),
+        score: (row.kind === "declared" ? 60 : 45) + bonus,
+        strategies: ["entry-point"],
+        reason: `${row.kind} entry point (${sanitizeEvidenceValue(row.source)}${
+          row.detail ? `, ${sanitizeEvidenceValue(row.detail)}` : ""
+        })`,
+      });
+    }
+
+    // The concepts the query used to ask for entries ground the topic only
+    // when the repository actually has entry evidence; without this the
+    // domain-token gate below would discard the seeds the stage just earned.
+    if (byPath.size > 0) {
+      for (const token of tokens) {
+        if (domainTokens.has(token) && queryAsksForEntryPoints([token])) {
+          matchedDomainTokens.add(token);
+        }
       }
     }
   }

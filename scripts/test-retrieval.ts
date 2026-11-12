@@ -1959,6 +1959,101 @@ const cited = (segments: string[], citation: string) =>
   }
 }
 
+// === 10. Parser-to-retrieval integration (real parser, entry points) ===
+//
+// The entry_points table is populated by the parser (declared by manifests,
+// inferred from conventions) but nothing seeded retrieval candidates from it:
+// "Where does the application start?" returned insufficient evidence on a
+// repository whose package.json names its main. These checks require the
+// declared/inferred facts to seed real windows, with the strategy carrying
+// the provenance, while unrelated queries and manifest-declarative queries
+// (which already have their file) promote nothing.
+{
+  console.log("\n=== 10. Parser-to-retrieval integration (real parser, entry points) ===");
+  const { createFixtureContext } = await import("./eval-fixture-adapter.ts");
+  const ctx = createFixtureContext("declared-entries");
+  const ask = (q: string) => retrieveGroundedContext(ctx.db, ctx.analysisId, q);
+  const entryWindows = (r: { windows: TargetWindow[] }) => r.windows.filter((w) => w.strategies?.includes("entry-point"));
+
+  const startup = await ask("Where does the application start?");
+  if (!startup.insufficientEvidence) {
+    pass("a startup query discovers evidence on a repository with declared entries");
+  } else {
+    fail("a startup query returns insufficient evidence despite populated entry_points");
+  }
+  const mainWindow = startup.windows.find((w) => w.path === "src/index.ts" && w.strategies?.includes("entry-point"));
+  if (mainWindow && mainWindow.reason.includes("declared entry point") && mainWindow.reason.includes("package.json main")) {
+    pass("the declared main entry seeds a window carrying its manifest provenance");
+  } else {
+    fail(`the declared main entry is not seeded with provenance: ${mainWindow?.reason ?? "(missing)"}`);
+  }
+  for (const expected of ["src/cli.ts", "src/theme.ts"]) {
+    if (startup.windows.some((w) => w.path === expected && w.strategies?.includes("entry-point"))) {
+      pass(`the declared entry ${expected} is seeded for a startup query`);
+    } else {
+      fail(`the declared entry ${expected} is not seeded for a startup query`);
+    }
+  }
+  if (!startup.windows.some((w) => w.path === "src/does-not-exist.ts")) {
+    pass("an unresolved entry declaration seeds nothing");
+  } else {
+    fail("an unresolved entry declaration produced a window");
+  }
+
+  const cli = await ask("Where does the CLI start?");
+  const cliEntry = cli.windows.find((w) => w.path === "src/cli.ts" && w.strategies?.includes("entry-point"));
+  if (cliEntry && cliEntry.reason.includes("package.json bin")) {
+    pass("a CLI startup query seeds the declared bin entry with its provenance");
+  } else {
+    fail(`the declared bin entry is not seeded for a CLI query: ${cliEntry?.reason ?? "(missing)"}`);
+  }
+
+  const cjs = createFixtureContext("commonjs");
+  const inferred = await retrieveGroundedContext(cjs.db, cjs.analysisId, "Where does the application start?");
+  const inferredWindow = inferred.windows.find((w) => w.path === "index.js" && w.strategies?.includes("entry-point"));
+  if (inferredWindow && inferredWindow.reason.includes("inferred entry point") && inferredWindow.reason.includes("package root module")) {
+    pass("an inferred entry seeds a startup window on a repository with no manifest declaration");
+  } else {
+    fail(`the inferred entry is not seeded: ${inferredWindow?.reason ?? "(missing)"}`);
+  }
+
+  // False-positive guards: an unrelated query, even about an entry file's
+  // content, promotes nothing through the entry-point strategy.
+  for (const q of ["How does authentication work?", "How is the theme applied?"]) {
+    if (entryWindows(await ask(q)).length === 0) {
+      pass(`an unrelated query ("${q}") promotes no entry-point windows`);
+    } else {
+      fail(`an unrelated query ("${q}") wrongly promoted entry-point windows`);
+    }
+  }
+
+  // A manifest-declarative query that names its file explicitly is answered
+  // by that file; entry-point seeding would only add non-relevant windows.
+  const declaredQ = entryWindows(await ask("What entry points and binaries are declared in package.json?"));
+  if (declaredQ.length === 0) {
+    pass("a manifest-declarative query naming package.json promotes no entry-point windows");
+  } else {
+    fail("a manifest-declarative query naming package.json wrongly promoted entry-point windows");
+  }
+
+  // Determinism: identical queries produce identical evidence.
+  const startupAgain = await ask("Where does the application start?");
+  if (JSON.stringify(startup.windows) === JSON.stringify(startupAgain.windows)) {
+    pass("entry-point seeding is deterministic across repeated queries");
+  } else {
+    fail("entry-point seeding is not deterministic across repeated queries");
+  }
+
+  // Existing behavior intact: explicitly naming a file still wins through the
+  // explicit-path strategy, which never competes with entry seeding.
+  const named = await ask("What does src/theme.ts define?");
+  if (named.windows.some((w) => w.strategies?.includes("explicit-path"))) {
+    pass("an explicitly named file is still retrieved through the explicit-path strategy");
+  } else {
+    fail(`an explicitly named file lost its explicit-path evidence: ${named.windows.map((w) => `${w.path}[${(w.strategies ?? []).join(",")}]`).join(", ")}`);
+  }
+}
+
 // Summary
 console.log("");
 for (const line of results) console.log(line);
