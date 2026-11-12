@@ -30,13 +30,13 @@ architecture research for Phase 5 — it has **not** been selected.
 
 ### The phases
 
-| # | Phase | Status (2026-11-04) | Depends on |
+| # | Phase | Status (2026-11-12) | Depends on |
 |---|---|---|---|
 | 1 | **Retrieval & answer reliability** (JavaScript/TypeScript) | **In progress** on branch `ravi` | — |
 | 2 | **Answer integrity & safety hardening** | Planned | Phase 1 |
 | 3 | **Retrieval quality & performance measurement** | Planned | Phase 1 |
-| 4 | **Source-content & search completion** (symbol and full-text search) | Planned | Phase 1 |
-| 5 | **Language-neutral intermediate representation** | Planned | Phase 1 |
+| 4 | **Source-content & search completion** (symbol and full-text search) | **Complete** (2026-11-12, branch `ravi`) | Phase 1 |
+| 5 | **Language-neutral intermediate representation** | **Next planned** | Phase 1 |
 | 6 | **Multi-language parser adapters** (Python, Go, Java, Rust) | Planned | Phase 5 |
 | 7 | **Framework adapters** (Django, FastAPI, Gin, Spring) | Planned | Phase 6, per language |
 | 8 | **Product completion & public release** (demo deployment, licence, repository evolution) | Planned | Phases 1–4 |
@@ -140,15 +140,33 @@ realistic sizes, and budget-constrained performance ceilings for large
 repositories ([TODO.md](../TODO.md) §2.4). Acceptance: benchmark numbers in
 the documentation are produced by the benchmark, not written by hand.
 
-### Phase 4 — Source-content & search completion (planned)
+### Phase 4 — Source-content & search completion (complete 2026-11-12)
 
 Source content is stored content-addressed ([ADR-0001](architecture/decisions/0001-source-content-storage.md));
-the retrieval engine remains lexical/symbol/path/role. Planned: symbol search
-and full-text search over the stored content, in the measured, budgeted
-retrieval path. Acceptance at the project's own bar: "no feature appears in
-the README that the fixtures do not demonstrate."
+the retrieval engine remains lexical/symbol/path/role. Delivered as five
+audited, test-first batches on branch `ravi`, each gated by the full
+verification battery and committed against the frozen golden-QA baseline
+(15 PASS / 1 WARN / 0 FAIL — byte-identical after every batch):
 
-### Phase 5 — Language-neutral intermediate representation (planned, do-first)
+| Batch | Commit | Content |
+|---|---|---|
+| 1 | `230c99a` | **Qualified-name search** — symbols matched by their qualified names and identifier subtokens in retrieval |
+| 2 | `c44cdf2` | **Method and nested-function indexing** — the parser indexes methods and nested functions as searchable symbols |
+| 3 | `a0c4466` | **Search-strategy evaluation hardening** — `scripts/eval-search-strategy.ts` attributes each served file to the strategies that found it (discovery vs ranking split) |
+| 4 | `0a61d77` | **Express route indexing** — Express routes recovered by static analysis, with conservative withholding when unparsed files exist |
+| 5 | `508dd03` | **Entry-point and packaging discovery** — declared/inferred entry points seed retrieval candidates for startup queries; workspace globs resolve to member packages (negation honoured); packaging relevance also fires on declared dependency/manifest/config names, not only on vocabulary |
+
+Documented limitations: uppercase-only explicit HTTP-method detection in
+queries; the golden dataset has zero unanchored discovery cases, so the
+strategy diagnostics measure only path-anchored discovery; `isPublicApi`
+remains deferred (no `symbols` column, no persistence — see
+[PROJECT_STATE.md](PROJECT_STATE.md)). Full-text search over the stored
+content was not part of the delivered batch scope.
+
+Acceptance at the project's own bar: "no feature appears in the README that
+the fixtures do not demonstrate."
+
+### Phase 5 — Language-neutral intermediate representation (next planned, do-first)
 
 The prerequisite for every language below ([TODO.md](../TODO.md) §4.1): one
 canonical repository model — files, modules, symbols, imports, exports,

@@ -9,7 +9,7 @@ after every approved subphase (see the maintenance rules in
 If this document and the repository disagree, the repository is right — fix
 this document and record what differed.
 
-**Last updated: 2026-11-10** (verification of every factual claim in this
+**Last updated: 2026-11-12** (verification of every factual claim in this
 file is listed alongside the claim).
 
 ---
@@ -17,37 +17,34 @@ file is listed alongside the claim).
 ## 1. Current stage
 
 The product's shipped capability set matches [features.md](features.md).
-Development is in **Phase 2 of the delivery programme** ([ROADMAP.md](ROADMAP.md),
-answer integrity & safety hardening). Phase 1 (JS/TS retrieval & answer
-reliability, subphases 1A–1D) is implemented, verified, committed and pushed
-(HEAD `e78ee56` at `origin/ravi`). **Phase 2 status: audit completed
-2026-11-06 ([phase-2-audit.md](phase-2-audit.md)); all four ordered batches —
-B1 (trust-boundary system rule + `PROMPT_VERSION` 3; 2026-11-06), B2
-(full-hash window headers, F6 closed; 2026-11-08), B3 (packaging line
-hardening, F2/F3 closed; 2026-11-08) and B4 (JSDoc appendix hardening, F4
-closed; 2026-11-08) — are implemented, gates-verified and **committed
-2026-11-08** in the Phase 2 consolidation commit
-(`feat(security): harden answer integrity and evidence boundaries`,
-`9f4f942`). F7's approved batches F7-1…F7-4 were implemented 2026-11-08–09
-(migration `20261109000000` applied to and catalog-verified against the local
-Supabase, full `test:db` chain green incl. the 17 answer-gc checks) and
-**committed 2026-11-09 as `3e6c7ff`**
-(`feat(cache): add bounded answer cache retention`). F5 (the `contextText`
-bare-path rescue) was audited, reproduced end to end and **resolved
-2026-11-09** with the narrow fix in `lib/ai/citations.ts` (rescue removed;
-decision D10) plus regression coverage in three test suites; F8 (the explain
-tasks' legacy whole-path Set verification tier) was audited and, on the same
-day, resolved by approved decision D11 — the explain tier verifies whole-file
-paths only and rejects every line-bound citation. Both were implemented,
-gates-verified (`pnpm test` / `test:budget` / `test:qa-eval` / `typecheck` /
-`lint` / `test:db` all green; frozen golden-QA baseline identical
-15 PASS / 1 WARN) and **committed together 2026-11-09 as `56898dc`**
-(`fix(security): enforce evidence-grounded citation verification`;
-`56898dc1013e55407442d70e7f783f063ce0d25c`, parent `3e6c7ff`), with the
-documentation correction recorded in the commit that contains this file.
-The approved 2026-11-09 push carries `9f4f942`, `3e6c7ff`, `56898dc` and the
-docs commit to `origin/ravi`; a deployment of migration `20261109000000` to
-the linked remote Supabase remains **not approved** (§4).
+Development is on the delivery programme ([ROADMAP.md](ROADMAP.md)).
+**Phase 4 — Source-content & search completion is complete** (2026-11-12;
+five audited, test-first batches committed on `ravi`, see §3 Phase 4).
+Phase 1 (JS/TS retrieval & answer reliability, 1A–1D), Phase 2 (answer
+integrity & safety hardening, B1–B4 + F5/F8 + the F7 cache-retention series)
+and the Phase 3 measurement work (3A machine-readable baseline + comparator,
+3B retrieval effectiveness measurements) are implemented, verified and
+committed; the approved 2026-11-09/10 work sits at `origin/ravi` =
+`d152ea5`, with six local commits ahead of it (Phase 4 batches 1–4, Batch 5
+and the Phase 4 closeout docs commit). **Phase 5 — Language-neutral
+intermediate representation is the next planned phase; it has not been
+started and awaits explicit scope approval.**
+
+**Phase 4 (2026-11-10…12) delivered search completion in five batches**:
+qualified-name search (`230c99a`), method and nested-function indexing
+(`c44cdf2`), search-strategy diagnostics (`a0c4466`), Express route
+indexing (`0a61d77`) and entry-point + packaging discovery (`508dd03`).
+The frozen golden-QA evaluation stayed byte-identical through every batch:
+**15 PASS / 1 WARN / 0 FAIL**, QA-05 precision 0.1875 (WARN, low precision),
+facts 37/37, abstention 2/2, and `test:qa-diff` reports NO REGRESSIONS.
+Batch 5 integrated the parser's entry-point and packaging facts into
+retrieval (entry-point candidate seeding for startup queries, workspace-glob
+resolution with negation, data-driven packaging relevance) and its known
+limitations are recorded in §3 Phase 4 — including `isPublicApi`, which
+stays **deferred** (no `symbols` column exists, persistence is not
+implemented, and reliable public-API derivation needs entry-point +
+re-export-chain analysis; it is not Phase 5 scope without an explicit
+decision).
 
 **Phase 3 (Measurement & Evaluation) opened 2026-11-09** with the approved
 read-only audit of the evaluation system (report delivered in-session; no
@@ -80,11 +77,11 @@ Verified 2026-11-09 during the F5 implementation, via `git log --oneline`,
 | Fact | Value |
 |---|---|
 | Branch | `ravi` |
-| HEAD | `56898dc` — *fix(security): enforce evidence-grounded citation verification* (2026-11-09; F5 + F8 change set in one approved commit, parent `3e6c7ff`; full hash `56898dc1013e55407442d70e7f783f063ce0d25c`), followed by the documentation correction commit that contains this file (*docs: record Phase 2 security hardening commit*) |
-| Commits | this docs commit (contains this file) · `56898dc` F5+F8 security hardening (9 files) · `3e6c7ff` F7 retention · `9f4f942` Phase 2 consolidation (B1–B4, 19 files) · `e78ee56` docs/eval follow-up · `c51f018` feat(qa): Phase 1D · `7262316` fix(retrieval): Phase 1C · `c1ac975` Phases 1A+1B (preserved, untouched) |
+| HEAD | the Phase 4 closeout docs commit (contains this file; *docs: close Phase 4 search completion*), preceded by `508dd03` — *feat(search): integrate entry-point and packaging discovery* (Phase 4 Batch 5, 2026-11-12; 5 files), `0a61d77` — *feat(parser): index Express routes* (Batch 4), `a0c4466` — *feat(eval): add search strategy diagnostics* (Batch 3), `c44cdf2` — *feat(parser): index methods and nested functions* (Batch 2), `230c99a` — *feat(search): support qualified-name retrieval* (Batch 1) |
+| Commits | this docs commit · `508dd03` Batch 5 (entry-point + packaging discovery) · `0a61d77` Batch 4 · `a0c4466` Batch 3 · `c44cdf2` Batch 2 · `230c99a` Batch 1 · `d152ea5` Phase 3B measurements · `b3e469f` Phase 3A baseline + comparator · `2c86868` docs (Phase 3A record) · `56898dc` F5+F8 security hardening · `3e6c7ff` F7 retention · `9f4f942` Phase 2 consolidation · `e78ee56` docs/eval follow-up · `c51f018` feat(qa): Phase 1D · `7262316` fix(retrieval): Phase 1C · `c1ac975` Phases 1A+1B (preserved, untouched) |
 | Remote | `https://github.com/ravirraj/anatomy.git` (`origin`) |
-| Pushed | Yes — approved and executed 2026-11-09; the push carries `9f4f942`, `3e6c7ff`, `56898dc` and this docs commit, so `origin/ravi` ends at this docs commit's tip; verified via `git ls-remote origin ravi` |
-| Working tree | **Clean.** The former F5+F8 uncommitted change set (listed in the F5/F8 chronicles below) was committed as `56898dc`; this table's "Dirty" entry therefore describes the batch window, not the current state. All gates were green at both commit times (2026-11-09); no commits were made beyond the two approved ones. **Update 2026-11-10:** the Phase 3 audit left the tree clean at `2c86868` (verified via `git rev-parse origin/ravi` matching); the Phase 3A implementation (§3 Phase 3A) is now **uncommitted in the working tree**. |
+| Pushed | Through `d152ea5` (Phase 3B) — verified via `git ls-remote origin ravi` = `d152ea5450a4bb3e1d75d961a327dc067157cfb5`. The six Phase 4 + closeout commits (Batch 1–5 and this docs commit) are **local only; not pushed** (no push approved in the Phase 4 closeout scope). |
+| Working tree | **Clean.** The Batch 5 change set (five files, 531 insertions / 37 deletions) was committed as `508dd03` after the full gate battery passed; no stray files, no probe scripts remain. |
 | Previous commits | `f05af36` (CLI flow/budget), `3fa177c` (cli-execution intent), `913e9d0`, `d1098bc`, `159dede`, `df85638` |
 
 Commit-integrity note: before partitioning, the full intended state
@@ -835,62 +832,114 @@ cannot rewrite `fixtures/golden-qa.baseline.json`; regeneration only via
 `--approve-update` with completed evaluation + dataset integrity; every
 `pnpm test` now asserts the working tree matches the baseline.
 
+### Phase 4 — Source-content & search completion (2026-11-10…12, complete)
+
+Executed as five audit-driven, test-first batches on branch `ravi`, each
+landing with regression tests demonstrated to fail against the pre-batch
+implementation and gated by the full verification battery. The frozen
+golden-QA evaluation stayed **byte-identical through every batch**
+(15 PASS / 1 WARN / 0 FAIL) and `pnpm test:qa-diff` reports NO REGRESSIONS
+after each one; the four earlier batches were reviewed and approved before
+Batch 5 started.
+
+| Batch | Commit | Content |
+|---|---|---|
+| 1 | `230c99a` | **Qualified-name search** — symbols are matched in retrieval by their qualified names and identifier subtokens, with regression tests in `scripts/test-retrieval.ts` |
+| 2 | `c44cdf2` | **Method and nested-function indexing** — the parser indexes methods and nested functions as searchable symbols (previously invisible to symbol search) |
+| 3 | `a0c4466` | **Search-strategy diagnostics** — `scripts/eval-search-strategy.ts` attributes each served file to the strategies that found it and splits relevant-file discovery failures from ranking failures; strategy names are handled generically, so later batches' new strategies flow through |
+| 4 | `0a61d77` | **Express route indexing** — Express routes recovered by static analysis into the routes table and retrieval, with a new fixture (`fixtures/express-routes/`) and accuracy cases |
+| 5 | `508dd03` | **Entry-point and packaging discovery** — `lib/ai/retrieval.ts`, `lib/ai/packaging.ts`, `lib/parser/manifests.ts` + tests in `scripts/test-retrieval.ts` §10 and `scripts/test-packaging.ts` §16–17 |
+
+**Batch 5 (2026-11-12) integration shape:** a new entry-point seeding stage
+(`C3`) between the file-path and role-hint stages seeds windows from
+`entry_points` only when the query asks the entry-point concept (a closed
+concept list — start/boot/launch/init/entry families; generic verbs like
+"run" and bare "main"/"cli"/"bin" deliberately excluded) and does not
+already name a file; declared entries score above inferred ones, capped at
+4 seeds, with manifest provenance in the window reason
+(`declared entry point (package.json main)`). `matchWorkspaceGlobs` gained
+negation semantics (`!`-prefixed globs excluded, their matches removed) and
+is wired into the packaging manifests block (`workspaces: packages/*,
+!packages/legacy (matches packages/api)`; a glob matching nothing invents no
+members). Packaging relevance is now data-driven: the four evidence reads
+run for every query and the block also fires when the query's own word
+names a declared dependency, manifest package name or config variable
+(exact or identifier-subtoken; stem echoes and loose substrings earn
+nothing).
+
+**Verification evidence (2026-11-12, after the last change):**
+`pnpm test` exit 0 (all suites incl. `test-retrieval.ts` §10, packaging
+231/0, manifest-retrieval 23/23); `pnpm typecheck` exit 0; `pnpm lint`
+0 errors / 56 warnings (exact baseline); `pnpm test:qa-eval` ×2
+byte-identical and line-identical to the pre-batch frozen record; `pnpm
+test:qa-diff` NO REGRESSIONS (16 unchanged / 0 improved / 0 regressed);
+`pnpm test:qa-retrieval` 64/64; `pnpm test:budget` 95/0; `pnpm accuracy`
+14 fixtures, every hand-verified relationship found, none invented;
+`git diff --check` clean; `eval-search-strategy.ts` ×2 byte-identical with
+zero `entry-point` attributions on the golden set (the gate excludes all 16
+golden queries by design).
+
+**Phase 4 limitations (deliberate, documented):**
+
+- **Golden-dataset diagnostic coverage:** the golden dataset has **zero
+  unanchored discovery cases**, so `eval-search-strategy.ts` measures only
+  path-anchored discovery on the frozen 16; no unanchored effectiveness
+  claims are made, and no unanchored golden cases were added (dataset
+  frozen).
+- **Express routes are static analysis:** route recovery depends on what
+  the parser could resolve; when files the router references could not be
+  parsed, routes are **withheld conservatively** (with a stated reason)
+  rather than guessed — `routes/orphan.js` in the fixture demonstrates the
+  withheld shape.
+- **Explicit HTTP-method detection is uppercase-only** (`EXPLICIT_HTTP_METHODS`
+  matches `GET|POST|…` in upper case only; lowercase method words in queries
+  are not method signals).
+- **`isPublicApi` deferred, not complete:** the parser type field
+  (`lib/parser/types.ts:121`) is dead at the database boundary — no
+  `symbols` column exists in any migration, persistence is not implemented,
+  and reliable public-API derivation would require entry-point +
+  re-export-chain analysis. Not pulled into Phase 5; any implementation
+  needs a migration decision first.
+
 ## 4. Exact next approved task
 
-**Phase 3A (baseline versioning & regression detection) is implemented,
-gate-verified 2026-11-10, and now sits UNCOMMITTED in the working tree**
-(see §3 Phase 3A). Phase 2 (`9f4f942`, `3e6c7ff`, `56898dc` + docs) remains
-pushed at `origin/ravi` = `2c86868`; migration `20261109000000` is applied
-to the **local** Supabase only and its remote deployment remains **not
-approved**.
+**Phase 4 is formally closed (2026-11-12).** The five batch commits
+(`230c99a`, `c44cdf2`, `a0c4466`, `0a61d77`, `508dd03`) and the Phase 4
+closeout docs commit sit locally on `ravi` — **six commits ahead of
+`origin/ravi` (= `d152ea5`) and not pushed**; the working tree is clean and
+the full gate battery passed after the last change (§3 Phase 4).
 
 Awaiting explicit user approval for, in order:
 
-1. **Review and commit of the Phase 3A change set** (four files:
-   `fixtures/golden-qa.baseline.json`, `scripts/eval-golden-diff.ts`,
-   `scripts/test-qa-diff.ts`, `package.json` + the two doc files). The
-   review should check the diff against the approved scope — ranking
-   metrics, budget metrics, pass attribution, dataset expansion,
-   answer-stage changes, provider throttling, CI, and evaluation framework
-   are all explicitly OUT of Phase 3A.
-2. **Phase 3B and later Phase 3 subphases** (from the approved Phase 3
-   plan: P2 budget-utilization/loop ledger metrics, P3 rank metric,
-   P4 provider-run protocol, P5 dataset governance, optional O1–O4) — each
-   needs its own scope approval before implementation.
-3. Separately, still pending from Phase 2: a deployment of migration
-   `20261109000000` to the linked remote Supabase project (`finalyear`,
-   `nfuwkbiriyxchueijnov`), and (optional) a quota-free full-16 run of
-   `scripts/eval-answer-quality.ts` after the Gemini daily quota resets —
-   with `test:qa-diff` now live, a fresh sanctioned answer-stage baseline
-   would be recorded per protocol, not by regenerating the retrieval-side
-   baseline.
+1. **Pushing the six Phase 4/closeout commits to `origin/ravi`** — not
+   executed in the closeout scope; no push or deployment occurred.
+2. **Phase 5 — Language-neutral intermediate representation** scoping (per
+   [ROADMAP.md](ROADMAP.md) it is the next planned phase; nothing of it has
+   been started, and `isPublicApi` does **not** migrate into it without an
+   explicit decision).
 
-Note on the frozen baseline at commit time: the golden-QA record of 15
-PASS / 1 WARN / facts 37/37 / micro 43.2% (89/206) / 94.7% (89/94) /
-abstention 2/2 is preserved verbatim in this document's historical
-sections AND now also machine-readably in `fixtures/golden-qa.baseline.json`
-(reference `phase-3a`); committing Phase 3A adds the machine-readable form
-without changing the historical form.
+Still pending from earlier phases, **not approved and not started** (each
+needs its own approval):
 
-Optional follow-ups, **not approved and not started** (each needs its own
-approval):
-
+- A deployment of migration `20261109000000` to the linked remote Supabase
+  project (`finalyear`, `nfuwkbiriyxchueijnov`) — local application and
+  catalog verification completed in Phase 2 (F7).
 - A quota-free full-16 run of `scripts/eval-answer-quality.ts` on the fixed
   scorer, after the Gemini free-tier **daily** quota resets (20 requests/day
   on the resolved `gemini-3.6-flash`; the 2026-11-06 attempt spent the
-  budget — see §3 Batch F). A QA-07 retry is part of that run; the
-  2026-11-06 first-run QA-07 FAIL was pure quota, so no separate retry was
-  attempted while the daily cap was already tripped.
+  budget — see §3 Batch F).
 - Retrieval-side precision work for QA-05 (18.8% WARN) and QA-08 (24.2%),
-  if the user wants the frozen-baseline WARN count reduced — this would be
-  a new mini-batch, not a reopening of 1D.
+  if the frozen-baseline WARN count should be reduced — a new mini-batch,
+  not a reopening of 1D or Phase 4.
 
 ## 5. Blockers and outstanding issues
 
 | Item | Type | Note |
 |---|---|---|
-| Phase 3A — baseline versioning & regression detection | Implemented 2026-11-10, **uncommitted** | Four code/config files + two doc files in the working tree (§3 Phase 3A). All gates green after the last change (incl. `pnpm test` with the new suite, lint at the exact 56-warning baseline). Commit awaits approval (§4 item 1). |
-| Phase 3 audit (2026-11-09) | Resolved | Read-only report delivered; top gap (machine-readable baseline + regression detection) closed by Phase 3A. Remaining plan items (P2 budget/loop metrics, P3 rank metric, P5 dataset governance, O1–O4) recorded in PROJECT_STATE §4, not started. |
+| Phase 4 — search completion | **Closed 2026-11-12** | Five batches committed (`230c99a`…`508dd03`) + closeout docs commit; frozen golden baseline byte-identical throughout; NO REGRESSIONS. Six local commits ahead of `origin/ravi`, not pushed (§4 item 1). Known limitations recorded in §3 Phase 4 (zero unanchored discovery cases in the golden dataset; Express conservative withholding; uppercase-only method detection; `isPublicApi` deferred). |
+| `isPublicApi` — public-API surface | **Deferred** (decision needed) | The parser type field (`lib/parser/types.ts:121`) has no database column in any migration, so it is dead at the persistence boundary; no public-API persistence exists; reliable derivation would need entry-point + re-export-chain analysis. Deliberately **not** pulled into Phase 5 scope; any implementation requires a `symbols` migration decision first. |
+| Phase 3A — baseline versioning & regression detection | Resolved — committed as `b3e469f` and pushed | The 2026-11-10 uncommitted change set was committed and, with the Phase 3B measurements (`d152ea5`), pushed to `origin/ravi`; `pnpm test:qa-diff` is live in the `pnpm test` chain. |
+| Phase 3 audit (2026-11-09) | Resolved | Read-only report delivered; top gap (machine-readable baseline + regression detection) closed by Phase 3A. Remaining plan items (P2 budget/loop metrics, P3 rank metric, P5 dataset governance, O1–O4) were recorded in the 2026-11-09 report and remain not started. |
 | Phase 2 batches B1–B4: implemented, verified, committed | Resolved 2026-11-08 | Committed as the consolidation commit `feat(security): harden answer integrity and evidence boundaries` (`9f4f942`; B1 trust rule, B2 full-hash headers, B3 packaging hardening, B4 JSDoc appendix hardening per [phase-2-audit.md](phase-2-audit.md) §5). F7 was implemented 2026-11-08–09 and committed as `3e6c7ff`. F5 and F8 were resolved 2026-11-09 (see next rows). Push: approved and executed 2026-11-09 (§2 Pushed row). |
 | F5 — `contextText` bare-path rescue | Resolved 2026-11-09 — committed as `56898dc` | The 2026-11-09 audit-only pass reproduced the finding end to end (bare citations accepted for real-unretrieved and even nonexistent paths mentioned verbatim in served text; line-bound and window containment intact; rescue-passing answers cached). The narrow fix removes the rescue: bare paths ground only in the served-evidence map or the manifest gate (decision D10); regression coverage in `test-citations.ts` / `test-citation-context-integration.ts` / `test-qa.ts`; old-implementation demonstration via stash (11 FAILs pre-fix, 0 post); all six gates green; frozen golden baseline identical. Committed with F8 in `56898dc`. |
 | F8 — explain legacy whole-path Set verification tier | Resolved 2026-11-09 — committed as `56898dc` | The audit-only pass established the split: bare-path naming is an intentional task contract (naming permission from parser-resolved input — not an F5-class mention shortcut) and is formally accepted; line-bound citations were accepted unchecked on that tier and are now rejected fail-closed with an explainable refusal detail (decision D11). Q&A Map tier byte-unchanged; explain refusal details surfaced; no prompt change (`PROMPT_VERSION` 3). Regression coverage in `test-citations.ts` F8 section (legacy + Map single-line) and the integration suite's F8 block (fresh refusal before caching, poisoned-hit refusal without healing, whole-path controls). Old-implementation demonstration without a stash (F8 hunks reverted and SHA-verified restored): 6 + 4 FAILs pre-fix. All gates green; frozen golden baseline identical. Committed with F5 in `56898dc`. |
