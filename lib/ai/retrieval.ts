@@ -303,6 +303,18 @@ export type TargetWindow = {
  */
 const GENERIC_PENALTY = 25;
 
+/** HTTP methods the query may spell out explicitly, in upper case only. */
+const EXPLICIT_HTTP_METHODS = /\b(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD|ALL)\b/g;
+
+/**
+ * What a route seed loses when the query names an explicit HTTP method the
+ * route wasn't registered with. Mirrors the 50 the method match is worth, so
+ * a wrong-method route never ranks as high as the right-method route for the
+ * same path. Route-stage only; queries without an explicit method never
+ * demote.
+ */
+const ROUTE_METHOD_MISMATCH_PENALTY = 50;
+
 /**
  * Serving-layer displacement margin. Within-margin score differences are
  * dominated by corroboration bonuses (+4/+8 per corroborating strategy,
@@ -1158,6 +1170,12 @@ export async function retrieveGroundedContext(
     .select("file_id, method, path, line")
     .eq("analysis_id", analysisId);
 
+  // HTTP methods the query spells out in upper case ("GET /users"); see the
+  // demotion in the loop below.
+  const explicitMethods = new Set(
+    (rawQuery.match(EXPLICIT_HTTP_METHODS) ?? []).map((m) => m.toLowerCase()),
+  );
+
   if (!routesError && routesData) {
     for (const route of routesData) {
       const file = fileMap.get(route.file_id);
@@ -1191,7 +1209,19 @@ export async function retrieveGroundedContext(
         }
       }
       const genericOnly = bestConcept === 0 && bestGeneric > 0;
-      const bestScore = genericOnly ? bestGeneric - GENERIC_PENALTY : bestConcept;
+      let bestScore = genericOnly ? bestGeneric - GENERIC_PENALTY : bestConcept;
+      // A method spelled in upper case in the query ("GET /users") is part of
+      // what is asked for: a route registered for another method keeps its
+      // path match but loses its standing as a full match. The tokenizer
+      // can't carry this signal — "get" is a stop-word it drops, and lowercase
+      // method words are ordinary English — so the explicitness is read from
+      // the raw query's casing. Path-only queries match no methods and are
+      // never demoted.
+      let mismatchNote = "";
+      if (bestScore > 0 && explicitMethods.size > 0 && !explicitMethods.has(methodLower)) {
+        bestScore -= ROUTE_METHOD_MISMATCH_PENALTY;
+        mismatchNote = " (explicit method mismatch, demoted)";
+      }
 
       if (bestScore > 0) {
         if (domainTokens.has(matchedToken)) {
@@ -1208,7 +1238,7 @@ export async function retrieveGroundedContext(
           endLine,
           score: bestScore,
           strategies: ["route"],
-          reason: `route "${route.method} ${route.path}" matches token "${matchedToken}"${genericOnly ? " (generic verb only, demoted)" : ""}`,
+          reason: `route "${route.method} ${route.path}" matches token "${matchedToken}"${genericOnly ? " (generic verb only, demoted)" : ""}${mismatchNote}`,
         });
       }
     }

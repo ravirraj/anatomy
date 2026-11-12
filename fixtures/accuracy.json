@@ -66,6 +66,26 @@
         ]
       ]
     },
+    "express-routes": {
+      "edges": [
+        [
+          "app.js",
+          "routes/index.js"
+        ],
+        [
+          "app.js",
+          "routes/posts.js"
+        ],
+        [
+          "app.js",
+          "routes/misc.js"
+        ],
+        [
+          "routes/index.js",
+          "routes/users.js"
+        ]
+      ]
+    },
     "nextjs-app-router": {
       "edges": [
         [

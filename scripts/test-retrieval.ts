@@ -1774,6 +1774,191 @@ console.log("=== 8. Parser-to-retrieval integration (real parser, qualified decl
   }
 }
 
+// --- Section 9: Parser-to-retrieval integration for Express routes ---
+// Uses the real parser through the fixture adapter: the routes retrieved here
+// are actual parse output stored in the routes table, not mocked rows.
+console.log("");
+console.log("=== 9. Parser-to-retrieval integration (real parser, Express routes) ===");
+{
+  const { createFixtureContext } = await import("./eval-fixture-adapter.ts");
+  const ctx = createFixtureContext("express-routes");
+  const ask = (q: string) => retrieveGroundedContext(ctx.db, ctx.analysisId, q);
+  const lineOf = (file: string, needle: string): number => {
+    const text = ctx.fileTexts.get(file)!;
+    return text.slice(0, text.indexOf(needle)).split("\n").length;
+  };
+
+  const routeWindows = (windows: TargetWindow[]) =>
+    windows.filter((w) => w.strategies?.includes("route"));
+
+  // "Where is the POST endpoint for creating users?" — the route strategy
+  // matches POST + the "users" segment and seeds the registration's window,
+  // which covers the createUser handler below it.
+  const create = await ask("Where is the POST endpoint for creating users?");
+  const createWin = routeWindows(create.windows).find((w) => w.path === "routes/users.js");
+  if (!create.insufficientEvidence && createWin) {
+    pass(`the POST-for-users query retrieves a route window in routes/users.js (${createWin.reason.slice(0, 60)}...)`);
+  } else {
+    fail(`create-users route retrieval failed: ${JSON.stringify(routeWindows(create.windows).map((w) => w.path))} insufficient=${create.insufficientEvidence}`);
+  }
+  const createUserLine = lineOf("routes/users.js", "async function createUser");
+  if (createWin && createWin.startLine <= createUserLine && createWin.endLine >= createUserLine) {
+    pass(`the create-users route window covers the createUser handler (${createWin.startLine}..${createWin.endLine})`);
+  } else if (createWin) {
+    fail(`create-users window misses createUser: ${createWin.startLine}..${createWin.endLine}`);
+  }
+
+  // "Which handler serves the GET users route?" — method + segment together.
+  const serve = await ask("Which handler serves the GET users route?");
+  const serveWin = routeWindows(serve.windows).find((w) => w.path === "routes/users.js");
+  if (!serve.insufficientEvidence && serveWin) {
+    pass(`the GET-users query retrieves a route window in routes/users.js (${serveWin.reason.slice(0, 60)}...)`);
+  } else {
+    fail(`get-users route retrieval failed: ${JSON.stringify(routeWindows(serve.windows).map((w) => w.path))} insufficient=${serve.insufficientEvidence}`);
+  }
+
+  // "Where is the user deletion endpoint defined?" — the DELETE route.
+  const del = await ask("Where is the user deletion endpoint defined?");
+  const delWin = routeWindows(del.windows).find((w) => w.path === "routes/users.js");
+  if (!del.insufficientEvidence && delWin) {
+    pass(`the deletion query retrieves a route window in routes/users.js (${delWin.reason.slice(0, 60)}...)`);
+  } else {
+    fail(`delete-users route retrieval failed: ${JSON.stringify(routeWindows(del.windows).map((w) => w.path))} insufficient=${del.insufficientEvidence}`);
+  }
+  const deleteUserLine = lineOf("routes/users.js", "async function deleteUser");
+  if (delWin && delWin.startLine <= deleteUserLine && delWin.endLine >= deleteUserLine) {
+    pass(`the deletion route window covers the deleteUser handler (${delWin.startLine}..${delWin.endLine})`);
+  } else if (delWin) {
+    fail(`deletion window misses deleteUser: ${delWin.startLine}..${delWin.endLine}`);
+  }
+
+  // Method matching: same path segment, different method, different handler.
+  const patch = await ask("the PATCH route for posts");
+  const patchWin = routeWindows(patch.windows).find((w) => w.path === "routes/posts.js");
+  const patchLine = lineOf("routes/posts.js", "function patchPost");
+  if (patchWin && patchWin.startLine <= patchLine && patchWin.endLine >= patchLine) {
+    pass("the PATCH-posts query seeds the window covering patchPost");
+  } else {
+    fail(`PATCH-posts retrieval failed: ${JSON.stringify(routeWindows(patch.windows).map((w) => w.path))} insufficient=${patch.insufficientEvidence}`);
+  }
+  const post = await ask("the POST route for posts");
+  const postWin = routeWindows(post.windows).find((w) => w.path === "routes/posts.js");
+  const createPostLine = lineOf("routes/posts.js", "function createPost");
+  if (postWin && postWin.startLine <= createPostLine && postWin.endLine >= createPostLine) {
+    pass("the POST-posts query seeds the window covering createPost");
+  } else {
+    fail(`POST-posts retrieval failed: ${JSON.stringify(routeWindows(post.windows).map((w) => w.path))} insufficient=${post.insufficientEvidence}`);
+  }
+
+  // Exact beats generic: the fully spelled route outranks a vague segment hit.
+  const exact = await ask("GET /api/users/:userId");
+  const exactWin = exact.windows.find((w) => w.path === "routes/users.js");
+  if (!exact.insufficientEvidence && exactWin) {
+    pass(`the fully spelled route retrieves its file (${exactWin.reason.slice(0, 60)}...)`);
+  } else {
+    fail(`exact route retrieval failed: ${JSON.stringify(exact.windows.map((w) => w.path))} insufficient=${exact.insufficientEvidence}`);
+  }
+
+  // Symbol strategies still work over the same fixture: the handler is
+  // reachable by name as well as by route.
+  const symbol = await ask("deleteUser");
+  if (symbol.windows.some((w) => w.path === "routes/users.js")) {
+    pass("the route handlers remain retrievable through the symbol strategy");
+  } else {
+    fail(`symbol coexistence regressed: ${JSON.stringify(symbol.windows.map((w) => w.path))}`);
+  }
+
+  // Unsupported routes degrade gracefully: the never-mounted orphan router is
+  // indexed as code but serves no route windows that outrank its file's own
+  // content; the important part is that retrieval never claims a route that
+  // was omitted. The omission lives in parse output (test-express-routes.ts).
+}
+
+// --- Explicit HTTP methods in the query ---
+// A method spelled in upper case ("GET /users") is part of what is asked for:
+// routes whose method differs must not receive the same path-match evidence
+// the right method gets. The tokenizer can't carry this signal — "get" is a
+// stop-word it drops, and lowercase "get"/"post" are ordinary words — so the
+// explicitness lives in the raw query's casing. Each seed's reason segment is
+// checked individually, because merged windows concatenate every seed.
+const METHOD_MISMATCH_MARKER = "(explicit method mismatch, demoted)";
+const reasonSegments = (result: { windows: TargetWindow[] }, filePath: string): string[] =>
+  result.windows.filter((w) => w.path === filePath).flatMap((w) => w.reason.split(";").map((s) => s.trim()));
+const cited = (segments: string[], citation: string) =>
+  segments.find((s) => s.startsWith(`route "${citation}" matches`));
+{
+  const { createFixtureContext } = await import("./eval-fixture-adapter.ts");
+  const ctx = createFixtureContext("express-routes");
+  const ask = (q: string) => retrieveGroundedContext(ctx.db, ctx.analysisId, q);
+
+  // Same path, both methods exist: the explicit method picks its own route.
+  const methodCases: { query: string; file: string; right: string; wrong: string[] }[] = [
+    { query: "GET /users", file: "routes/users.js", right: "GET /api/users", wrong: ["POST /api/users"] },
+    { query: "POST /users", file: "routes/users.js", right: "POST /api/users", wrong: ["GET /api/users"] },
+    {
+      query: "DELETE /users/:id",
+      file: "routes/users.js",
+      right: "DELETE /api/users/:userId",
+      wrong: ["GET /api/users/:userId", "PUT /api/users/:userId"],
+    },
+  ];
+  for (const { query, file, right, wrong } of methodCases) {
+    const segments = reasonSegments(await ask(query), file);
+    const rightSeed = cited(segments, right);
+    if (rightSeed !== undefined && !rightSeed.includes(METHOD_MISMATCH_MARKER)) {
+      pass(`"${query}" cites route "${right}" as a full match`);
+    } else {
+      fail(`"${query}" full-match citation for "${right}" wrong: ${rightSeed ?? "(missing)"}`);
+    }
+    for (const wrongRoute of wrong) {
+      const wrongSeed = cited(segments, wrongRoute);
+      if (wrongSeed !== undefined && wrongSeed.includes(METHOD_MISMATCH_MARKER)) {
+        pass(`"${query}" demotes the wrong-method route "${wrongRoute}"`);
+      } else {
+        fail(`"${query}" demotion of "${wrongRoute}" wrong: ${wrongSeed ?? "(missing)"}`);
+      }
+    }
+  }
+
+  // A path where only DELETE exists: a GET query must not treat it as a full
+  // match; the DELETE query does.
+  const rightSession = cited(reasonSegments(await ask("DELETE /sessions/:sessionId"), "app.js"), "DELETE /sessions/:sessionId");
+  if (rightSession !== undefined && !rightSession.includes(METHOD_MISMATCH_MARKER)) {
+    pass('"DELETE /sessions/:sessionId" cites its route as a full match');
+  } else {
+    fail(`"DELETE /sessions/:sessionId" full-match citation wrong: ${rightSession ?? "(missing)"}`);
+  }
+  const wrongSession = cited(reasonSegments(await ask("GET /sessions/:sessionId"), "app.js"), "DELETE /sessions/:sessionId");
+  if (wrongSession !== undefined && wrongSession.includes(METHOD_MISMATCH_MARKER)) {
+    pass('"GET /sessions/:sessionId" demotes the DELETE-only route it names');
+  } else {
+    fail(`"GET /sessions/:sessionId" demotion wrong: ${wrongSession ?? "(missing)"}`);
+  }
+
+  // A path where only GET exists (/api/archive): a POST query demotes it; a
+  // GET query does not.
+  const wrongArchive = cited(reasonSegments(await ask("POST /archive"), "routes/posts.js"), "GET /api/archive");
+  if (wrongArchive !== undefined && wrongArchive.includes(METHOD_MISMATCH_MARKER)) {
+    pass('"POST /archive" demotes the GET-only archive route');
+  } else {
+    fail(`"POST /archive" demotion wrong: ${wrongArchive ?? "(missing)"}`);
+  }
+  const rightArchive = cited(reasonSegments(await ask("GET /archive"), "routes/posts.js"), "GET /api/archive");
+  if (rightArchive !== undefined && !rightArchive.includes(METHOD_MISMATCH_MARKER)) {
+    pass('"GET /archive" cites the archive route as a full match');
+  } else {
+    fail(`"GET /archive" full-match citation wrong: ${rightArchive ?? "(missing)"}`);
+  }
+
+  // A path-only query carries no method signal: nothing is demoted.
+  const pathOnly = reasonSegments(await ask("Where is the user deletion endpoint defined?"), "routes/users.js");
+  if (pathOnly.every((s) => !s.includes(METHOD_MISMATCH_MARKER))) {
+    pass("a path-only query without an explicit method demotes nothing");
+  } else {
+    fail(`path-only query wrongly demoted: ${pathOnly.filter((s) => s.includes(METHOD_MISMATCH_MARKER)).join(" | ")}`);
+  }
+}
+
 // Summary
 console.log("");
 for (const line of results) console.log(line);

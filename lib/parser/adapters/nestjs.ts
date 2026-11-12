@@ -150,13 +150,14 @@ function pathArgument(argument: Node | undefined): string[] | null {
   return value === null ? null : [value];
 }
 
-function literalString(node: Node | Expression): string | null {
+export function literalString(node: Node | Expression): string | null {
   return Node.isStringLiteral(node) || Node.isNoSubstitutionTemplateLiteral(node) ? node.getLiteralValue() : null;
 }
 
 // What Nest does joining the pieces: each gets one leading slash and loses
 // its trailing ones, empty pieces drop out, and nothing at all is "/".
-function joinPath(pieces: string[]): string {
+// Shared with the Express adapter, which composes mounts the same way.
+export function joinPath(pieces: string[]): string {
   const joined = pieces
     .map((p) => p.replace(/\/+$/, ""))
     .filter((p) => p !== "")
