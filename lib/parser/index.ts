@@ -455,7 +455,13 @@ function applyAdapters(
       .filter((f) => f.reason !== "declaration-file" && walk.projectOf.get(f.path) === project)
       .map((f) => withinProject(project, f.path));
 
-    const report = adapter.routes({ files, unparsed });
+    // Adapters migrate to the view one at a time: when an adapter answers over
+    // the view it reads the same instance roleOf read, so one build per
+    // project serves both; the rest still read the source trees until their
+    // migration batches land (NestJS 3.3b, Next.js 3.3c).
+    const report = adapter.routesFromView
+      ? adapter.routesFromView(view, unparsed)
+      : adapter.routes({ files, unparsed });
     if (report.withheld !== null) {
       withheld.push({ project, reason: report.withheld });
       continue;

@@ -69,6 +69,14 @@ export interface FrameworkAdapter {
   roleOf(file: ViewFile): Role | null;
   /** Routes whose method and full pattern are both written in the syntax. */
   routes(project: ProjectFiles): RouteReport;
+  /**
+   * The same question answered over the project's FrameworkView (Batch 3.3a):
+   * adapters migrate from routes() one at a time, and the parser prefers this
+   * when present. `unparsed` carries the same project-relative skipped-code
+   * paths routes() receives today; the view is the same instance roleOf reads,
+   * so one build per project serves both.
+   */
+  routesFromView?(view: FrameworkView, unparsed: readonly string[]): RouteReport;
 }
 
 // ---- FrameworkView (Phase 5 Batch 3.1) ----
@@ -113,8 +121,24 @@ export type ViewProperty = { name: string; value: ViewValue; line: number };
 /** An argument in a call or a decorator. Same grammar as property values. */
 export type ViewArgument = ViewValue;
 
-/** Local binding name → name exported by the source module ("default" for a default or bare-require binding, "*" for a namespace). */
-export type ViewImportBinding = { local: string; imported: string };
+/**
+ * Local binding name → name exported by the source module ("default" for a
+ * default or bare-require binding, "*" for a namespace). Null when the
+ * exported name isn't statically written (a computed key in a destructured
+ * require): the local binding itself is still written, and it is the fact the
+ * Express adapter traces mounts through.
+ */
+export type ViewImportBinding = {
+  local: string;
+  imported: string | null;
+  /**
+   * True only for the import clause's default slot (`import x from "m"`): a
+   * named `default` binding (`import { default as x } from "m"`) carries the
+   * same imported name but is not the slot, and consumers that read the
+   * default slot must not read that spelling as one.
+   */
+  defaultSlot?: boolean;
+};
 
 /**
  * Where an import resolves, from the parser's own resolver. Excluded and
@@ -131,6 +155,12 @@ export type ViewImport = {
   /** Module specifier exactly as written; only literal specifiers appear here. */
   specifier: string;
   kind: "import" | "require" | "dynamic-import";
+  /**
+   * True only for TypeScript's `import x = require(...)` spelling: its "*"
+   * binding is not a namespace import, and consumers that read namespace
+   * imports must not read it as one.
+   */
+  importEquals?: boolean;
   line: number;
   resolution: ViewResolution;
   bindings: readonly ViewImportBinding[];
@@ -167,10 +197,37 @@ export type ViewDeclaration = {
   line: number;
   decorators: readonly ViewDecorator[];
   initializerCall: string | null;
+  /**
+   * The initializer's callee in the same structural shape ViewCall carries:
+   * `receiver` is the plain-identifier callee name (or the object of a
+   * `receiver.member` / `receiver?.member` access), `member` the accessed
+   * name — null for a bare-identifier callee. A callee of any other shape
+   * (chained, parenthesised, element access, a call result) is
+   * `{ receiver: null, member: null }`. Comment trivia between the parts
+   * never survives here: these are node names, not source text. Absent when
+   * the initializer is not a call.
+   */
+  initializerCallee?: { receiver: string | null; member: string | null };
 };
 
 /** A `receiver.method(...)` call site, with every argument as written. Occurrences are never deduplicated. */
-export type ViewCall = { callee: string; arguments: readonly ViewArgument[]; line: number };
+export type ViewCall = {
+  /** The callee as written (e.g. `app.use`, `a.b.use`); consumers that need the AST shape read `receiver`/`member`. */
+  callee: string;
+  /**
+   * The receiver as the AST writes it, normalized: the receiver identifier's
+   * name when the callee is `identifier.member` or `identifier?.member`,
+   * else null — a chained receiver (`a.b.use`), a parenthesised or
+   * element-access receiver, or anything the legacy identifier check
+   * rejected. Comment trivia between the parts never survives here: these
+   * are node names, not source text.
+   */
+  receiver: string | null;
+  /** The accessed member name (`use`, `get`, …). */
+  member: string;
+  arguments: readonly ViewArgument[];
+  line: number;
+};
 
 /** Everything the adapters need about one parsed file, scoped to the view's project. */
 export type ViewFile = {

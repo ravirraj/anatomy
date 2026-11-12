@@ -34,6 +34,7 @@ import { buildFrameworkView, type ViewSourceEntry } from "../lib/parser/adapters
 import {
   FRAMEWORK_VIEW_VERSION,
   type FrameworkView,
+  type RouteReport,
   type ViewArgument,
   type ViewFile,
   type ViewImport,
@@ -206,7 +207,7 @@ console.log("=== 1. Corpus: contract shape, determinism, cross-checks against Pa
 const fixtureNames = readdirSync(FIXTURES, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort();
 const corpus = new Map<
   string,
-  { result: ParseResult; views: Map<string, FrameworkView>; contents: Map<string, string> }
+  { result: ParseResult; views: Map<string, FrameworkView>; contents: Map<string, string>; replay: ParsedReplay; walk: WalkResult }
 >();
 let corpusElements = 0;
 const corpusStart = Date.now();
@@ -228,6 +229,8 @@ for (const name of fixtureNames) {
     result,
     views,
     contents: new Map(replay.parsed.map((entry) => [entry.path, entry.content])),
+    replay,
+    walk: selection.walk,
   });
 
   const fileExports = new Map(result.files.map((file) => [file.path, file.exports]));
@@ -338,8 +341,19 @@ console.log("=== 2. Express fixture: mounts, registrations, require bindings ===
       // Declarations: the app/router factories the adapter keys on.
       const declarations = new Map(appJs.declarations.map((declaration) => [declaration.name, declaration]));
       expect(
-        deepEqual(declarations.get("app"), { name: "app", kind: "const", line: 8, decorators: [], initializerCall: "express" }, "$"),
-        "app.js: `const app = express()` is a declaration with initializerCall express at line 8",
+        deepEqual(
+          declarations.get("app"),
+          {
+            name: "app",
+            kind: "const",
+            line: 8,
+            decorators: [],
+            initializerCall: "express",
+            initializerCallee: { receiver: "express", member: null },
+          },
+          "$",
+        ),
+        "app.js: `const app = express()` is a declaration with initializerCall express at line 8 (structural callee: identifier, no member)",
       );
       expect(
         deepEqual(declarations.get("apiRouter")?.initializerCall, "require", "$"),
@@ -739,7 +753,7 @@ const computed = require(prefix + "/x");
         line: 1,
         resolution: { status: "external", external: "package" },
         bindings: [
-          { local: "def", imported: "default" },
+          { local: "def", imported: "default", defaultSlot: true },
           { local: "alias", imported: "named" },
           { local: "plain", imported: "plain" },
         ],
@@ -756,11 +770,12 @@ const computed = require(prefix + "/x");
         kind: "import",
         line: 3,
         resolution: { status: "external", external: "package" },
-        bindings: [{ local: "Only", imported: "default" }],
+        bindings: [{ local: "Only", imported: "default", defaultSlot: true }],
       },
       {
         specifier: "pkg5",
         kind: "import",
+        importEquals: true,
         line: 4,
         resolution: { status: "external", external: "package" },
         bindings: [{ local: "eq", imported: "*" }],
@@ -1116,6 +1131,411 @@ roleCase(docusaurusAdapter, roleFile("src/components/Widget.tsx", { flags: { jsx
 roleCase(fallbackAdapter, roleFile("jest.config.js"), "config", "fallback: a tool config is a config");
 roleCase(fallbackAdapter, roleFile("src/app.test.ts"), "test", "fallback: a test pattern is a test");
 roleCase(fallbackAdapter, roleFile("src/app.ts"), null, "fallback: an ordinary file has no role");
+
+// ---- Section 8: Express routes over the view (Batch 3.3a) ----
+
+console.log("=== 8. Express route migration: view-fed routesFromView equals the legacy report ===");
+
+// The acceptance is strict: the complete RouteReport must be what it was when
+// expressRoutes read the source trees — every route, omission, withheld gate,
+// line number and record order included. The legacy reader (still in express.ts
+// until Batch 3.3d) and the view reader see the same parsed sources, so a
+// deep-equal of the two complete reports over the real fixture and over every
+// synthetic shape proves the migration changed nothing. The fixture's report is
+// additionally folded through the parser's own dedupe+sort and compared against
+// the frozen expected.json, and the express-routes regression suite (sections
+// A–G) now runs inside `pnpm test`.
+
+// One comparison point: the same entries feed both readers (sorted by path,
+// the order view.files carries), `unparsed` goes to both untouched, and the
+// complete reports must be deeply equal.
+const expressReportDiff = (
+  what: string,
+  entries: readonly ViewSourceEntry[],
+  unparsed: readonly string[] = [],
+): { legacy: RouteReport; view: RouteReport } => {
+  const ordered = [...entries].sort((a, b) => a.path.localeCompare(b.path));
+  const legacy = expressAdapter.routes({ files: ordered.map((entry) => ({ path: entry.path, source: entry.source })), unparsed });
+  const view = expressAdapter.routesFromView!(buildSynthetic(ordered, [], "."), unparsed);
+  expect(
+    deepEqual(legacy, view, "$"),
+    `${what}: the view-based RouteReport equals the legacy report (routes, omitted, withheld, order)`,
+  );
+  return { legacy, view };
+};
+
+const routeKeys = (report: RouteReport): string[] =>
+  report.routes.map((r) => `${r.method} ${r.pattern} ${r.path}@${r.line}`);
+const omittedKeys = (report: RouteReport): string[] =>
+  report.omitted.map((o) => `${o.path}@${o.line}: ${o.reason}`);
+
+// 1-based line of the first occurrence of a needle in a file's source, for
+// pinning exact line numbers in synthetic expectations.
+const lineIn = (content: string, needle: string): number =>
+  content.slice(0, content.indexOf(needle)).split("\n").length;
+
+// The real fixture: complete-report equivalence plus the frozen baseline.
+{
+  const entry = corpus.get("express-routes");
+  if (!entry) fail("express-routes: corpus entry missing");
+  else {
+    const view = entry.views.get(".");
+    const files = entry.replay.parsed
+      .filter((parsed) => parsed.project === ".")
+      .map((parsed) => ({ path: parsed.path, source: parsed.source }));
+    const unparsed = entry.replay.skipped
+      .filter((f) => entry.walk.projectOf.get(f.path) === "." && f.reason !== "declaration-file")
+      .map((f) => f.path);
+    if (!view) fail("express-routes: project view missing");
+    else {
+      const legacy = expressAdapter.routes({ files, unparsed });
+      const viewReport = expressAdapter.routesFromView!(view, unparsed);
+      expect(
+        deepEqual(legacy, viewReport, "$"),
+        "express-routes: the view-based RouteReport deep-equals the legacy report over the real fixture",
+      );
+
+      const frozen = JSON.parse(readBaseline(path.join(FIXTURES, "express-routes", "expected.json"))) as ParseResult;
+      expect(
+        deepEqual(viewReport.withheld, null, "$"),
+        "express-routes: the report is not withheld, as frozen",
+      );
+      expect(
+        deepEqual(frozen.coverage.routes.withheld, [], "$"),
+        "express-routes: no project is withheld in the frozen expected.json",
+      );
+      expect(
+        deepEqual(
+          [...viewReport.omitted]
+            .sort((a, b) => a.path.localeCompare(b.path) || a.line - b.line)
+            .map((o) => ({ file: o.path, line: o.line, reason: o.reason })),
+          frozen.coverage.routes.omitted,
+          "$",
+        ),
+        "express-routes: the omitted records (file, line, reason) equal the frozen expected.json",
+      );
+      // The parser folds the report through its own last-wins dedupe and
+      // (pattern, method, file) sort; replicating that here pins the frozen
+      // routes directly against this section's report.
+      const unique = new Map(
+        viewReport.routes.map((r) => [`${r.method} ${r.pattern} ${r.path}`, { file: r.path, method: r.method, pattern: r.pattern, line: r.line }]),
+      );
+      const folded = [...unique.values()].sort(
+        (a, b) => a.pattern.localeCompare(b.pattern) || a.method.localeCompare(b.method) || a.file.localeCompare(b.file),
+      );
+      expect(
+        deepEqual(folded, frozen.routes, "$"),
+        "express-routes: the report's routes, deduped last-wins and sorted, equal the frozen expected.json",
+      );
+    }
+  }
+}
+
+// Circular mounts: each file mounts the other; both registrations are omitted
+// with the circular-chain reason, never guessed.
+{
+  const aContent = `const express = require("express");
+const bRouter = require("./syn-circular-b");
+const app = express();
+app.use("/a", bRouter);
+app.get("/from-a", handlerA);
+function handlerA(_q, s) { s.json({}); }
+`;
+  const bContent = `const express = require("express");
+const aApp = require("./syn-circular-a");
+const router = express.Router();
+router.use("/b", aApp);
+router.get("/from-b", handlerB);
+function handlerB(_q, s) { s.json({}); }
+`;
+  const a = synthFile("syn-circular-a.js", aContent);
+  const b = synthFile("syn-circular-b.js", bContent);
+  const { view } = expressReportDiff("circular mounts", [a, b]);
+  expect(
+    deepEqual(
+      omittedKeys(view),
+      [
+        `syn-circular-a.js@${lineIn(aContent, `app.get("/from-a"`)}: the router it's registered on is mounted through a circular chain`,
+        `syn-circular-b.js@${lineIn(bContent, `router.get("/from-b"`)}: the router it's registered on is mounted through a circular chain`,
+      ],
+      "$",
+    ),
+    "circular mounts: both registrations are omitted with the exact circular reason",
+  );
+  expect(deepEqual(view.routes, [], "$"), "circular mounts: no route is invented");
+}
+
+// Ambiguous target: the mounted value comes from a file that declares two
+// routers; every router there is prefix-unknown with the exact reason.
+{
+  const helpersContent = `const express = require("express");
+const r1 = express.Router();
+const r2 = express.Router();
+r1.get("/one", handler1);
+r2.get("/two", handler2);
+function handler1(_q, s) { s.json({}); }
+function handler2(_q, s) { s.json({}); }
+`;
+  const appContent = `const express = require("express");
+const { r1 } = require("./syn-amb-helpers");
+const app = express();
+app.use("/h", r1);
+`;
+  const helpers = synthFile("syn-amb-helpers.js", helpersContent);
+  const app = synthFile("syn-amb-app.js", appContent);
+  const { view } = expressReportDiff("ambiguous target", [helpers, app]);
+  const reason = `the value mounted from syn-amb-app.js can't be traced to a single router`;
+  expect(
+    deepEqual(
+      omittedKeys(view),
+      [
+        `syn-amb-helpers.js@${lineIn(helpersContent, `r1.get("/one"`)}: ${reason}`,
+        `syn-amb-helpers.js@${lineIn(helpersContent, `r2.get("/two"`)}: ${reason}`,
+      ],
+      "$",
+    ),
+    "ambiguous target: both routers are omitted with the exact ambiguous reason",
+  );
+}
+
+// Unresolved imports and unsupported receiver shapes: an unresolvable mounted
+// value is middleware (no mount), a bare require argument is not an
+// identifier, a chained receiver is ignored — and optional chaining on an
+// identifier receiver IS a registration, exactly as the legacy scan saw it.
+{
+  const appContent = `const express = require("express");
+const ghost = require("./syn-does-not-exist");
+const app = express();
+app.use("/ghost", ghost);
+app.use("/ghost2", require("./syn-also-missing"));
+app?.get("/optional", handler);
+app.route("/chained").get(handler);
+app.get("/real", handler);
+function handler(_q, s) { s.json({}); }
+`;
+  const app = synthFile("syn-unr-app.js", appContent);
+  const { view } = expressReportDiff("unresolved imports and receiver shapes", [app]);
+  expect(
+    deepEqual(
+      routeKeys(view),
+      [
+        `GET /optional syn-unr-app.js@${lineIn(appContent, `app?.get("/optional"`)}`,
+        `GET /real syn-unr-app.js@${lineIn(appContent, `app.get("/real"`)}`,
+      ],
+      "$",
+    ),
+    "unresolved: only the optional-chained and the real registration survive, in document order",
+  );
+}
+
+// Empty arrays: an empty path array is unknown, never a zero-length prefix —
+// for a registration's own path (explicit omission) and for a mount (the
+// mounted router's registrations are prefix-unknown).
+{
+  const mountContent = `const express = require("express");
+const emptyPathRouter = require("./syn-empty-routes");
+const nonLiteralRouter = require("./syn-nl-routes");
+const app = express();
+app.use([], nonLiteralRouter);
+app.use("/e", emptyPathRouter);
+`;
+  const emptyContent = `const express = require("express");
+const emptyRouter = express.Router();
+emptyRouter.get([], handler3);
+function handler3(_q, s) { s.json({}); }
+`;
+  const nlContent = `const express = require("express");
+const nlRouter = express.Router();
+nlRouter.get("/nl", handler4);
+function handler4(_q, s) { s.json({}); }
+`;
+  const mount = synthFile("syn-empty-mount.js", mountContent);
+  const emptyRoutes = synthFile("syn-empty-routes.js", emptyContent);
+  const nlRoutes = synthFile("syn-nl-routes.js", nlContent);
+  const { view } = expressReportDiff("empty arrays", [mount, emptyRoutes, nlRoutes]);
+  expect(
+    deepEqual(
+      omittedKeys(view),
+      [
+        `syn-empty-routes.js@${lineIn(emptyContent, `emptyRouter.get([]`)}: emptyRouter.get() is given a path that isn't a string literal`,
+        `syn-nl-routes.js@${lineIn(nlContent, `nlRouter.get("/nl"`)}: the router it's registered on is mounted at a path that isn't a string literal`,
+      ],
+      "$",
+    ),
+    "empty arrays: an empty path array is unknown for both the registration and the mount",
+  );
+  expect(deepEqual(view.routes, [], "$"), "empty arrays: no route is invented");
+}
+
+// Import shapes the fixture doesn't have: TypeScript's import-equals binds no
+// app factory (its "*" binding is not a namespace import), a namespace import
+// does, a type-only import's local still traces a mount, and a computed-key
+// destructured require keeps its local binding (imported: null).
+{
+  const eqContent = `import server = require("express");
+import * as express from "express";
+import type { router } from "./syn-eq-typed";
+
+const { [which]: computed } = require("./syn-eq-computed");
+const { typed } = require("./syn-eq-typed");
+
+const app = express();
+app.get("/namespace", handler);
+app.use("/computed", computed);
+app.use("/typed", typed);
+app.use("/t", router);
+server.get("/ignored", handler);
+
+function handler(_q: unknown, s: { json(x: unknown): void }): void { s.json({}); }
+const which = "r";
+`;
+  const computedContent = `const express = require("express");
+const r = express.Router();
+r.get("/computed", handlerC);
+function handlerC(_q, s) { s.json({}); }
+`;
+  const typedContent = `const express = require("express");
+const router = express.Router();
+router.get("/typed", handlerT);
+function handlerT(_q, s) { s.json({}); }
+`;
+  const eq = synthFile("syn-eq.ts", eqContent);
+  const computedFile = synthFile("syn-eq-computed.js", computedContent);
+  const typedFile = synthFile("syn-eq-typed.js", typedContent);
+  const { view } = expressReportDiff("import-equals, namespace, type-only, computed require", [eq, computedFile, typedFile]);
+  expect(
+    deepEqual(
+      routeKeys(view),
+      [
+        `GET /computed/computed syn-eq-computed.js@${lineIn(computedContent, `r.get("/computed"`)}`,
+        `GET /typed/typed syn-eq-typed.js@${lineIn(typedContent, `router.get("/typed"`)}`,
+        `GET /t/typed syn-eq-typed.js@${lineIn(typedContent, `router.get("/typed"`)}`,
+        `GET /namespace syn-eq.ts@${lineIn(eqContent, `app.get("/namespace"`)}`,
+      ],
+      "$",
+    ),
+    "import shapes: namespace app is registered; the computed-key local mounts; the type-only import's local mounts through the same router (second prefix); import-equals binds nothing",
+  );
+}
+
+// D1 closure: a named `default` binding (`import { default as e }`) is not the
+// import clause's default slot. The legacy scan reads only that slot, so this
+// spelling binds no app factory and the file is silent — the view now says the
+// same through defaultSlot. Ordinary default imports keep declaring the app.
+{
+  const namedDefaultContent = `import { default as e } from "express";
+
+const app = e();
+app.get("/users", handler);
+
+function handler(_q: unknown, s: { json(x: unknown): void }): void { s.json({}); }
+`;
+  const ordinaryContent = `import express from "express";
+
+const app = express();
+app.get("/ok", handler);
+function handler(_q, s) { s.json({}); }
+`;
+  const namedDefault = synthFile("syn-named-default.ts", namedDefaultContent);
+  const ordinary = synthFile("syn-def-ok.js", ordinaryContent);
+
+  // The legacy behavior, pinned directly on the legacy reader.
+  const namedOnly = expressAdapter.routes({ files: [{ path: namedDefault.path, source: namedDefault.source }], unparsed: [] });
+  expect(
+    deepEqual(namedOnly, { routes: [], omitted: [], withheld: null }, "$"),
+    "D1 legacy pin: import { default as e } from \"express\" declares no app — an entirely empty report",
+  );
+  const ordinaryOnly = expressAdapter.routes({ files: [{ path: ordinary.path, source: ordinary.source }], unparsed: [] });
+  expect(
+    deepEqual(routeKeys(ordinaryOnly), [`GET /ok syn-def-ok.js@${lineIn(ordinaryContent, `app.get("/ok"`)}`], "$"),
+    "D1 legacy pin: an ordinary default import still declares the app",
+  );
+
+  const { view } = expressReportDiff("D1 named default", [namedDefault, ordinary]);
+  expect(
+    deepEqual(routeKeys(view), [`GET /ok syn-def-ok.js@${lineIn(ordinaryContent, `app.get("/ok"`)}`], "$"),
+    "D1 view: identical — only the ordinary default import produced a route",
+  );
+}
+
+// D3 closure: the view carries the call's receiver/member as node names, so
+// comment trivia inside a receiver chain can no longer lose a call. Every
+// shape the legacy receiver-identifier check decided — comment in the chain,
+// comment and whitespace around the dot, optional chaining, the plain form,
+// a chained receiver even when its first segment is declared — resolves the
+// same way over the view.
+{
+  const routesContent = `const express = require("express");
+const router = express.Router();
+router.get("/deep", handlerR);
+function handlerR(_q, s) { s.json({}); }
+`;
+  const appContent = `const express = require("express");
+const router = require("./syn-comment-routes");
+const a = express();
+const app = express();
+app/* mid */.use("/api", router);
+app /* c */ .get("/users", handler);
+app?.get("/opt", handler);
+app.get /* c2 */ ("/plain", handler);
+a.b.use("/api", router);
+function handler(_q, s) { s.json({}); }
+`;
+  const routesFile = synthFile("syn-comment-routes.js", routesContent);
+  const appFile = synthFile("syn-comment.js", appContent);
+  const { view } = expressReportDiff("comment-trivia receiver chains", [routesFile, appFile]);
+  expect(
+    deepEqual(
+      routeKeys(view),
+      [
+        `GET /api/deep syn-comment-routes.js@${lineIn(routesContent, `router.get("/deep"`)}`,
+        `GET /users syn-comment.js@${lineIn(appContent, `app /* c */ .get("/users"`)}`,
+        `GET /opt syn-comment.js@${lineIn(appContent, `app?.get("/opt"`)}`,
+        `GET /plain syn-comment.js@${lineIn(appContent, `app.get /* c2 */ ("/plain"`)}`,
+      ],
+      "$",
+    ),
+    "comment trivia: the commented mount mounts, commented and optional registrations survive, the chained a.b.use is rejected (with `a` declared, so a naive split would match)",
+  );
+}
+
+// Withholding: any qualifying unparsed code file gates the whole report, with
+// the exact singular reason string.
+{
+  const appContent = `const express = require("express");
+const app = express();
+app.get("/w", handler5);
+function handler5(_q, s) { s.json({}); }
+`;
+  const app = synthFile("syn-withhold-app.js", appContent);
+  const { view } = expressReportDiff("withholding", [app], ["syn-broken.js"]);
+  expect(
+    deepEqual(
+      view.withheld,
+      "1 file wasn't parsed, and one could mount a router under another prefix",
+      "$",
+    ),
+    "withholding: the exact singular withheld reason survives",
+  );
+  expect(deepEqual(view.routes, [], "$"), "withholding: no route is emitted under the gate");
+  expect(deepEqual(view.omitted, [], "$"), "withholding: no omission is emitted under the gate");
+}
+
+// Same FrameworkView instance for roles and routes: not externally observable
+// (applyAdapters passes the one `view` it built to roleOf and routesFromView
+// alike, and a second build would be content-equal anyway), so the pin is
+// structural — the orchestration must call routesFromView with that same view
+// variable and keep the legacy fallback for the unmigrated adapters.
+{
+  const orchestration = readFileSync(path.resolve("lib/parser/index.ts"), "utf8").replace(/\r\n/g, "\n");
+  const prefersView = orchestration.includes("adapter.routesFromView\n      ? adapter.routesFromView(view, unparsed)");
+  const keepsLegacy = orchestration.includes("adapter.routes({ files, unparsed })");
+  if (prefersView && keepsLegacy) {
+    pass("orchestration: routesFromView is called with the same view variable roleOf read; the legacy fallback stays");
+  } else {
+    fail(`orchestration: routesFromView/legacy fallback pin broken (prefersView=${prefersView}, keepsLegacy=${keepsLegacy})`);
+  }
+}
 
 // ---- Summary ----
 

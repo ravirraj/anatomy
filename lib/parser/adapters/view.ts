@@ -96,13 +96,20 @@ function viewFile(project: string, entry: ViewSourceEntry, resolve: FrameworkVie
 
 function collectImports(entry: ViewSourceEntry, resolve: FrameworkViewInput["resolveSpecifier"]): ViewImport[] {
   const found: ViewImport[] = [];
-  const push = (specifier: string, kind: ViewImport["kind"], line: number, bindings: readonly ViewImportBinding[]) => {
+  const push = (
+    specifier: string,
+    kind: ViewImport["kind"],
+    line: number,
+    bindings: readonly ViewImportBinding[],
+    extra?: { importEquals?: boolean },
+  ) => {
     found.push({
       specifier,
       kind,
       line,
       resolution: viewResolution(resolve(entry.absolutePath, specifier, kind)),
       bindings: [...bindings],
+      ...extra,
     });
   };
 
@@ -112,7 +119,7 @@ function collectImports(entry: ViewSourceEntry, resolve: FrameworkViewInput["res
       const clause = statement.getImportClause();
       if (clause) {
         const def = clause.getDefaultImport();
-        if (def) bindings.push({ local: def.getText(), imported: "default" });
+        if (def) bindings.push({ local: def.getText(), imported: "default", defaultSlot: true });
         const namespace = clause.getNamespaceImport();
         if (namespace) bindings.push({ local: namespace.getText(), imported: "*" });
         for (const named of clause.getNamedImports()) {
@@ -129,7 +136,9 @@ function collectImports(entry: ViewSourceEntry, resolve: FrameworkViewInput["res
       if (!Node.isExternalModuleReference(reference)) continue; // `import x = Ns.Deep` is internal syntax, not a module import
       const specifier = literalText(reference.getExpression());
       if (specifier === null) continue;
-      push(specifier, "import", statement.getStartLineNumber(), [{ local: statement.getName(), imported: "*" }]);
+      push(specifier, "import", statement.getStartLineNumber(), [{ local: statement.getName(), imported: "*" }], {
+        importEquals: true,
+      });
     }
   }
 
@@ -166,7 +175,10 @@ function requireBindings(call: CallExpression): ViewImportBinding[] {
       : Node.isIdentifier(exported)
         ? exported.getText()
         : null;
-    if (imported === null) continue;
+    // A computed key names nothing statically, but the local binding is
+    // written: the Express adapter traces mounts through that local name, so
+    // the element is recorded with an unknown imported name rather than
+    // dropped.
     bindings.push({ local: element.getNameNode().getText(), imported });
   }
   return bindings;
@@ -271,6 +283,7 @@ function collectDeclarations(source: SourceFile): ViewDeclaration[] {
     const list = declaration.getParentOrThrow();
     if (!Node.isVariableDeclarationList(list)) continue;
     const initializer = declaration.getInitializer();
+    const initializerCallNode = initializer && Node.isCallExpression(initializer) ? initializer.getExpression() : null;
     found.push({
       name: nameNode.getText(),
       kind:
@@ -281,11 +294,28 @@ function collectDeclarations(source: SourceFile): ViewDeclaration[] {
             : "var",
       line: declaration.getStartLineNumber(),
       decorators: [],
-      initializerCall: initializer && Node.isCallExpression(initializer) ? initializer.getExpression().getText() : null,
+      initializerCall: initializerCallNode ? initializerCallNode.getText() : null,
+      ...(initializerCallNode && { initializerCallee: calleeParts(initializerCallNode) }),
     });
   }
 
   return found;
+}
+
+/**
+ * The structural callee pair the adapters read: a plain-identifier callee is
+ * `{ receiver, member: null }`; a `receiver.member` / `receiver?.member`
+ * access over a plain identifier is `{ receiver, member }`; anything else
+ * (chained, parenthesised, element access, a call result) is
+ * `{ receiver: null, member: null }`. Node names, never source text, so
+ * comment trivia between the parts cannot leak in.
+ */
+function calleeParts(callee: TsNode): { receiver: string | null; member: string | null } {
+  if (Node.isIdentifier(callee)) return { receiver: callee.getText(), member: null };
+  if (Node.isPropertyAccessExpression(callee) && Node.isIdentifier(callee.getExpression())) {
+    return { receiver: callee.getExpression().getText(), member: callee.getName() };
+  }
+  return { receiver: null, member: null };
 }
 
 function collectDecorators(decorators: readonly Decorator[]): ViewDecorator[] {
@@ -312,8 +342,11 @@ function collectCalls(source: SourceFile): ViewCall[] {
     // read off its variable's initializer), and require()/import() are
     // collected as imports.
     if (!Node.isPropertyAccessExpression(callee)) continue;
+    const receiverNode = callee.getExpression();
     found.push({
       callee: callee.getText(),
+      receiver: Node.isIdentifier(receiverNode) ? receiverNode.getText() : null,
+      member: callee.getName(),
       arguments: call.getArguments().map((argument) => viewValue(argument, 0)),
       line: call.getStartLineNumber(),
     });
