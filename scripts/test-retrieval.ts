@@ -1469,6 +1469,249 @@ const cliAsk = await roleAsk(cliDb, "How does the CLI dispatch subcommands?");
 // window above the last must be a concept file, while the entry fallback
 // stays below all real matches if it ever fires.
 
+// --- Section 7: Qualified-name (dotted/slash identifier) matching ---
+console.log("");
+console.log("=== 7. Qualified-name (dotted/slash identifier) matching ===");
+
+// Tokenizer: qualified identifiers decompose into separator-delimited parts as
+// *component* variants; real file-path tokens (extension last segment) stay
+// whole because explicit path matching already handles them.
+{
+  const dotted = tokenVariants("auth.service.verify");
+  const dottedParts = dotted.filter((v) => v.kind === "qualified-part").map((v) => v.text);
+  if (
+    dotted[0]!.text === "auth.service.verify" && dotted[0]!.kind === "original"
+    && dottedParts.join("/") === "auth/service/verify"
+    && new Set(dotted.map((v) => v.text)).size === dotted.length
+  ) {
+    pass(`"auth.service.verify" keeps the exact token first and adds component variants (${dottedParts.join("/")})`);
+  } else {
+    fail(`bad qualified variants: ${JSON.stringify(dotted)}`);
+  }
+
+  const camelQualified = tokenVariants("AuthService.verify")
+    .filter((v) => v.kind === "qualified-part").map((v) => v.text);
+  if (camelQualified.join("/") === "auth/service/verify") {
+    pass(`"AuthService.verify" decomposes through camel and dot boundaries (${camelQualified.join("/")})`);
+  } else {
+    fail(`bad camel qualified variants: ${JSON.stringify(camelQualified)}`);
+  }
+
+  const userRepo = tokenVariants("UserRepo.save")
+    .filter((v) => v.kind === "qualified-part").map((v) => v.text);
+  if (userRepo.join("/") === "user/repo/save") {
+    pass(`"UserRepo.save" decomposes to ${userRepo.join("/")}`);
+  } else {
+    fail(`bad UserRepo.save variants: ${JSON.stringify(userRepo)}`);
+  }
+
+  const nsMod = tokenVariants("namespace.module.function")
+    .filter((v) => v.kind === "qualified-part").map((v) => v.text);
+  if (nsMod.join("/") === "namespace/module/function") {
+    pass(`"namespace.module.function" decomposes to ${nsMod.join("/")}`);
+  } else {
+    fail(`bad namespace variants: ${JSON.stringify(nsMod)}`);
+  }
+
+  const slashQualified = tokenVariants("auth/service");
+  if (
+    slashQualified[0]!.text === "auth/service" && slashQualified[0]!.kind === "original"
+    && slashQualified.every((v) => v.kind !== "qualified-part")
+  ) {
+    pass("slash tokens stay whole: slash-qualified lookups ride the path machinery, not component variants");
+  } else {
+    fail(`slash token wrongly decomposed: ${JSON.stringify(slashQualified)}`);
+  }
+
+  const filePath = tokenVariants("route.ts");
+  if (
+    filePath[0]!.text === "route.ts" && filePath[0]!.kind === "original"
+    && filePath.every((v) => v.kind !== "qualified-part")
+  ) {
+    pass("file-path tokens with a known extension stay whole (no generic \"route\"/\"ts\" parts)");
+  } else {
+    fail(`file-path token wrongly decomposed: ${JSON.stringify(filePath)}`);
+  }
+  const manifestPath = tokenVariants("package.json");
+  if (manifestPath[0]!.text === "package.json" && manifestPath.every((v) => v.kind !== "qualified-part")) {
+    pass("manifest tokens with a known extension stay whole");
+  } else {
+    fail(`manifest token wrongly decomposed: ${JSON.stringify(manifestPath)}`);
+  }
+  const cargoPath = tokenVariants("core/Cargo.toml");
+  if (cargoPath[0]!.text === "core/Cargo.toml" && cargoPath.every((v) => v.kind !== "qualified-part")) {
+    pass("slash path tokens with a known extension stay whole");
+  } else {
+    fail(`cargo path token wrongly decomposed: ${JSON.stringify(cargoPath)}`);
+  }
+
+  if (extractQueryTokens("auth.service.verify").includes("auth.service.verify")) {
+    pass("extractQueryTokens still returns the whole qualified token (exact matching preserved)");
+  } else {
+    fail("whole qualified token lost from extractQueryTokens");
+  }
+
+  const plain = tokenVariants("verify");
+  if (plain.every((v) => v.kind !== "qualified-part")) {
+    pass("unqualified tokens gain no component variants (existing behavior unchanged)");
+  } else {
+    fail(`unqualified token gained parts: ${JSON.stringify(plain)}`);
+  }
+}
+
+// Seeding: qualified queries must reach the real seeding path. The target
+// symbol lives in a file whose path contains none of the query's component
+// words and has no role, so symbol matching is the only route in — the pass-0
+// domain gate must be satisfied by the component match itself.
+const textQualified = Array.from({ length: 60 }, (_, i) => `// line ${i + 1} of operations.ts\n`).join("");
+const hashQualified = createHash("sha256").update(textQualified).digest("hex");
+const textQualifiedMethod = Array.from({ length: 40 }, (_, i) => `// line ${i + 1} of users.ts\n`).join("");
+const hashQualifiedMethod = createHash("sha256").update(textQualifiedMethod).digest("hex");
+const textNoiseA = Array.from({ length: 30 }, (_, i) => `// line ${i + 1} of misc.ts\n`).join("");
+const hashNoiseA = createHash("sha256").update(textNoiseA).digest("hex");
+const textNoiseB = Array.from({ length: 30 }, (_, i) => `// line ${i + 1} of other.ts\n`).join("");
+const hashNoiseB = createHash("sha256").update(textNoiseB).digest("hex");
+const textSave = Array.from({ length: 30 }, (_, i) => `// line ${i + 1} of persist.ts\n`).join("");
+const hashSave = createHash("sha256").update(textSave).digest("hex");
+
+class QualifiedDb extends MockDb {
+  files = [
+    {
+      id: "f_target",
+      path: "src/core/operations.ts",
+      hash: hashQualified,
+      lines: 60,
+      content_status: "stored",
+      file_roles: [],
+    },
+    {
+      id: "f_qualified_method",
+      path: "src/repo/users.ts",
+      hash: hashQualifiedMethod,
+      lines: 40,
+      content_status: "stored",
+      file_roles: [],
+    },
+    {
+      id: "f_noise_a",
+      path: "src/lib/misc.ts",
+      hash: hashNoiseA,
+      lines: 30,
+      content_status: "stored",
+      file_roles: [],
+    },
+    {
+      id: "f_noise_b",
+      path: "src/lib/other.ts",
+      hash: hashNoiseB,
+      lines: 30,
+      content_status: "stored",
+      file_roles: [],
+    },
+    {
+      id: "f_save",
+      path: "src/core/persist.ts",
+      hash: hashSave,
+      lines: 30,
+      content_status: "stored",
+      file_roles: [],
+    },
+  ];
+  symbols = [
+    { file_id: "f_target", name: "verify", kind: "function", line: 20, exported: true },
+    { file_id: "f_qualified_method", name: "UserRepo.save", kind: "method", line: 12, exported: true },
+    { file_id: "f_noise_a", name: "serviceRegistry", kind: "function", line: 8, exported: true },
+    { file_id: "f_noise_b", name: "userService", kind: "function", line: 14, exported: true },
+    { file_id: "f_save", name: "save", kind: "function", line: 5, exported: true },
+  ];
+  fileTexts = new Map<string, string>([
+    ["f_target", textQualified],
+    ["f_qualified_method", textQualifiedMethod],
+    ["f_noise_a", textNoiseA],
+    ["f_noise_b", textNoiseB],
+    ["f_save", textSave],
+  ]);
+}
+const qualifiedDb = new QualifiedDb();
+const qualifiedAsk = async (q: string) =>
+  retrieveGroundedContext(qualifiedDb as unknown as Db, "qual_analysis", q);
+
+// A dotted query finds the target symbol through a component match, satisfies
+// the domain gate without any path or role seed, and ranks the specific target
+// above symbols that merely contain a generic component ("service").
+{
+  const result = await qualifiedAsk("auth.service.verify");
+  const targetWins = result.windows.filter((w) => w.path === "src/core/operations.ts");
+  const target = targetWins[0];
+  const noiseWins = result.windows.filter(
+    (w) => w.path === "src/lib/misc.ts" || w.path === "src/lib/other.ts",
+  );
+  if (!result.insufficientEvidence && target) {
+    pass(`"auth.service.verify" seeds the verify symbol via component matching (${target.reason.slice(0, 70)}...)`);
+  } else {
+    fail(`qualified query failed to seed: ${JSON.stringify(result.windows.map((w) => w.path))} insufficient=${result.insufficientEvidence}`);
+  }
+  if (target && targetWins.length === 1) {
+    pass("qualified matching produces exactly one window for the target file (no duplicate candidates)");
+  } else if (target) {
+    fail(`duplicate target windows: ${JSON.stringify(targetWins.map((w) => [w.startLine, w.endLine]))}`);
+  }
+  if (
+    target && result.windows[0]!.path === "src/core/operations.ts"
+    && noiseWins.every((w) => (w.score ?? 0) < (target.score ?? 0))
+  ) {
+    pass(`specific target outranks generic "service" symbols (target ${target.score} vs noise ${noiseWins.map((w) => w.score).join(",")})`);
+  } else if (target) {
+    fail(`generic component matches not outranked: ${JSON.stringify(result.windows.map((w) => ({ p: w.path, s: w.score })))}`);
+  }
+}
+
+// The same file queried by its exact name scores strictly higher than the
+// qualified spelling of the same lookup — exact matching keeps priority.
+{
+  const exact = await qualifiedAsk("verify");
+  const qualified = await qualifiedAsk("auth.service.verify");
+  const exactWin = exact.windows.find((w) => w.path === "src/core/operations.ts");
+  const qualifiedWin = qualified.windows.find((w) => w.path === "src/core/operations.ts");
+  if (
+    exactWin && qualifiedWin
+    && (exactWin.score ?? 0) > (qualifiedWin.score ?? 0)
+  ) {
+    pass(`exact query keeps priority over qualified decomposition (${exactWin.score} > ${qualifiedWin.score})`);
+  } else {
+    fail(`exact vs qualified priority failed: exact=${exactWin?.score} qualified=${qualifiedWin?.score}`);
+  }
+}
+
+// A class/method query matches a fully-qualified symbol row at exact strength
+// and outranks a standalone helper that shares only the final component.
+{
+  const result = await qualifiedAsk("UserRepo.save");
+  const methodWin = result.windows.find((w) => w.path === "src/repo/users.ts");
+  const helperWin = result.windows.find((w) => w.path === "src/core/persist.ts");
+  if (
+    !result.insufficientEvidence && methodWin
+    && result.windows[0]!.path === "src/repo/users.ts"
+    && helperWin && (methodWin.score ?? 0) > (helperWin.score ?? 0)
+  ) {
+    pass(`"UserRepo.save" exact-matches the qualified symbol above the bare "save" helper (${methodWin.score} > ${helperWin.score})`);
+  } else {
+    fail(`qualified method lookup failed: ${JSON.stringify(result.windows.map((w) => ({ p: w.path, s: w.score })))}`);
+  }
+}
+
+// Camel-qualified spelling of the same lookup reaches the same symbol through
+// decomposition (tokens "authservice.verify", "service.verify").
+{
+  const result = await qualifiedAsk("AuthService.verify");
+  const target = result.windows.find((w) => w.path === "src/core/operations.ts");
+  if (!result.insufficientEvidence && target) {
+    pass(`"AuthService.verify" reaches the verify symbol through decomposition`);
+  } else {
+    fail(`camel qualified lookup failed: ${JSON.stringify(result.windows.map((w) => w.path))} insufficient=${result.insufficientEvidence}`);
+  }
+}
+
 // Summary
 console.log("");
 for (const line of results) console.log(line);

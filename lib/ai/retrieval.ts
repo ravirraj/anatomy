@@ -621,13 +621,54 @@ const stemOf = (word: string): string | undefined => {
   return undefined;
 };
 
-export type TokenVariant = { text: string; kind: "original" | "stem" | "glossary" };
+export type TokenVariant = { text: string; kind: "original" | "stem" | "glossary" | "qualified-part" };
+
+/**
+ * File extensions that mark a dot/slash token as a *file path* rather than a
+ * qualified identifier ("route.ts", "package.json", "core/Cargo.toml"). Such
+ * tokens stay whole: explicit path matching already handles real file lookups,
+ * and decomposing them would turn an extension into a generic segment
+ * ("ts", "json") that matches unrelated files.
+ */
+const FILE_EXTENSIONS = new Set([
+  "ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs", "json", "yaml", "yml",
+  "toml", "mod", "txt", "md", "css", "html", "env", "lock", "py", "go", "rs",
+  "sh", "h", "c", "cpp", "java", "rb", "php", "vue", "svelte", "sum",
+]);
+
+/**
+ * Components of a qualified identifier: "auth.service.verify" -> ["auth",
+ * "service", "verify"], "AuthService.verify" -> the same three (camel and
+ * separator boundaries unify through identifierSubtokens). Returns nothing
+ * for plain tokens, for file-path tokens (extension last segment), and drops
+ * extension-shaped or stop-word segments so no generic fragment leaks in.
+ *
+ * Slash tokens deliberately do not decompose: in JavaScript/TS repositories a
+ * slash token ("monorepo/web", "auth/session") names a *path*, and the path
+ * seeding stage already matches those through filename and directory
+ * segments. Decomposing them turned directory words into concept matches and
+ * flooded QA-07-style path queries with unrelated windows (regression caught
+ * by the frozen golden baseline), so component variants are scoped to the
+ * dotted qualified-identifier form.
+ */
+export function qualifiedTokenParts(token: string): string[] {
+  if (!token.includes(".")) return [];
+  const lastSegment = token.split(/[./]/).pop() ?? "";
+  if (FILE_EXTENSIONS.has(lastSegment)) return [];
+  return identifierSubtokens(token).filter(
+    (part) => part.length >= 3 && !STOP_WORDS.has(part) && !FILE_EXTENSIONS.has(part),
+  );
+}
 
 /**
  * Expands one query token into its concept variants: the token itself first
- * (exact matches score highest), then its stem, then glossary synonyms.
+ * (exact matches score highest), then its stem, then glossary synonyms, then
+ * — for qualified identifiers only — the separator-delimited components.
  * Each variant carries its kind so matches can be penalised by how far the
- * variant had to travel from the user's own wording.
+ * variant had to travel from the user's own wording. Component variants are
+ * penalised at the glossary tier (KIND_PENALTY): a component is literally the
+ * user's vocabulary, but it is only a *part* of what they named, so it must
+ * never outrank a match made through the exact token.
  */
 export function tokenVariants(token: string): TokenVariant[] {
   const out: TokenVariant[] = [{ text: token, kind: "original" }];
@@ -643,6 +684,12 @@ export function tokenVariants(token: string): TokenVariant[] {
       seen.add(syn);
     }
   }
+  for (const part of qualifiedTokenParts(token)) {
+    if (!seen.has(part)) {
+      out.push({ text: part, kind: "qualified-part" });
+      seen.add(part);
+    }
+  }
   return out;
 }
 
@@ -650,6 +697,7 @@ export const KIND_PENALTY: Record<TokenVariant["kind"], number> = {
   original: 0,
   stem: 6,
   glossary: 14,
+  "qualified-part": 14,
 };
 
 /**
