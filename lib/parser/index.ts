@@ -21,6 +21,7 @@ import {
 } from "./types.ts";
 import type { Role } from "../roles.ts";
 import type { AdapterFile } from "./adapters/types.ts";
+import { buildFrameworkView, type ViewSourceEntry } from "./adapters/view.ts";
 import { walkRepository, withinProject, type WalkResult } from "./walk.ts";
 
 export type Selection = { root: string; walk: WalkResult };
@@ -264,7 +265,7 @@ export function parseSelection({ root, walk }: Selection): ParseResult {
   // ---- Phase 4: packaging, configuration and entry points ----
   // Everything below is read from what the walk already collected plus the
   // parsed text. No second filesystem pass, no question text, no model.
-  const conventions = applyAdapters(walk, parsed, skipped);
+  const conventions = applyAdapters(walk, parsed, skipped, resolver);
 
   const manifests = walk.manifests.map((m) => m.manifest);
   const dependencies = countDependencyImports(
@@ -415,11 +416,15 @@ function countDependencyImports(
 }
 
 // Each project's adapter is asked about its own files, by project-relative
-// path, and what it answers is mapped back to repository paths.
+// path, and what it answers is mapped back to repository paths. Roles are read
+// off the project's FrameworkView, built once per project and handed to
+// roleOf; routes still receive the AdapterFile syntax trees, which route
+// detection reads until it migrates to the view.
 function applyAdapters(
   walk: WalkResult,
-  parsed: readonly { candidate: { path: string; project: string }; sourceFile: AdapterFile["source"] }[],
+  parsed: readonly { candidate: { path: string; project: string; absolutePath: string }; sourceFile: AdapterFile["source"] }[],
   skipped: readonly SkippedFile[],
+  resolver: ReturnType<typeof createResolver>,
 ) {
   const roles = new Map<string, Role>();
   const routes: Route[] = [];
@@ -429,12 +434,21 @@ function applyAdapters(
   for (const [project, adapter] of walk.adapters) {
     const toRepo = (p: string) => (project === "." ? p : `${project}/${p}`);
     const files: AdapterFile[] = [];
+    const entries: ViewSourceEntry[] = [];
     for (const { candidate, sourceFile } of parsed) {
       if (candidate.project !== project) continue;
-      const file = { path: withinProject(project, candidate.path), source: sourceFile };
-      files.push(file);
+      files.push({ path: withinProject(project, candidate.path), source: sourceFile });
+      entries.push({ path: candidate.path, absolutePath: candidate.absolutePath, source: sourceFile });
+    }
+    const view = buildFrameworkView({
+      project,
+      files: entries,
+      skipped: skipped.filter((f) => walk.projectOf.get(f.path) === project),
+      resolveSpecifier: resolver.resolve,
+    });
+    for (const file of view.files) {
       const role = adapter.roleOf(file);
-      if (role) roles.set(candidate.path, role);
+      if (role) roles.set(toRepo(file.path), role);
     }
     // A declaration file has no runtime code, so it can't hold anything an adapter reads.
     const unparsed = skipped

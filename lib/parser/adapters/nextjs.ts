@@ -57,8 +57,17 @@ export const nextjsAdapter: FrameworkAdapter = {
   // Build output is dot-prefixed, so the generic rule already skips it.
   excludeDirectory: () => null,
   reachedBy: (path) => nextConvention(path)?.reachedBy ?? toolConventions(path),
+  // A module whose directive prologue says "use server": every export is a
+  // server action. An inline directive inside one function doesn't make the
+  // file one. The view's directives are exactly that leading run of
+  // string-literal statements, so reading them is the same scan the source
+  // scan was.
   roleOf(file) {
-    return nextConvention(file.path)?.role ?? toolRole(file.path) ?? (usesServer(file.source) ? "server-action" : reactRole(file));
+    return (
+      nextConvention(file.path)?.role ??
+      toolRole(file.path) ??
+      (file.directives.includes("use server") ? "server-action" : reactRole(file))
+    );
   },
   routes: nextRoutes,
 };
@@ -89,19 +98,6 @@ function nextConvention(path: string): Convention | null {
 /** The folders between app/ and the file. */
 function appSegments(p: string): string[] {
   return p.split("/").slice(1, -1);
-}
-
-// A module whose directive prologue says "use server": every export is a
-// server action. An inline directive inside one function doesn't make the
-// file one.
-function usesServer(source: SourceFile): boolean {
-  for (const statement of source.getStatements()) {
-    if (!Node.isExpressionStatement(statement)) return false;
-    const expression = statement.getExpression();
-    if (!Node.isStringLiteral(expression)) return false;
-    if (expression.getLiteralValue() === "use server") return true;
-  }
-  return false;
 }
 
 // Route handlers only. The pattern is the folder path, which Next.js defines

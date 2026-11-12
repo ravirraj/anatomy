@@ -1,4 +1,6 @@
-// Phase 5 Batch 3.1: FrameworkView contract tests.
+// Phase 5 Batch 3.1: FrameworkView contract tests. Batch 3.2 adds the role
+// migration section: roleOf now answers over the view, and the section proves
+// its outputs equal the frozen pre-migration role sets.
 //
 // Proves, over the whole 14-fixture corpus, that the JS/TS builder produces a
 // deterministic, source-text-free view carrying exactly the facts the framework
@@ -19,6 +21,13 @@ import path from "node:path";
 import { Project, ts, type SourceFile } from "ts-morph";
 import { parseRepository, selectFiles, type Selection } from "../lib/parser/index.ts";
 import type { ImportStatus, ParseResult, SkippedFile } from "../lib/parser/types.ts";
+import type { Role } from "../lib/roles.ts";
+import { docusaurusAdapter } from "../lib/parser/adapters/docusaurus.ts";
+import { expressAdapter } from "../lib/parser/adapters/express.ts";
+import { fallbackAdapter } from "../lib/parser/adapters/fallback.ts";
+import { nestjsAdapter } from "../lib/parser/adapters/nestjs.ts";
+import { nextjsAdapter } from "../lib/parser/adapters/nextjs.ts";
+import { reactAdapter } from "../lib/parser/adapters/react.ts";
 import type { Resolver } from "../lib/parser/resolve.ts";
 import { createResolver } from "../lib/parser/resolve.ts";
 import { buildFrameworkView, type ViewSourceEntry } from "../lib/parser/adapters/view.ts";
@@ -32,7 +41,7 @@ import {
 } from "../lib/parser/adapters/types.ts";
 import { detectLanguage } from "../lib/ir/languages.ts";
 import type { WalkResult } from "../lib/parser/walk.ts";
-import { FIXTURES } from "./test-fixtures-shared.ts";
+import { FIXTURES, readBaseline } from "./test-fixtures-shared.ts";
 
 const results: string[] = [];
 const pass = (m: string) => results.push(`ok    ${m}`);
@@ -996,6 +1005,117 @@ if (elapsed <= CORPUS_WALL_CLOCK_BUDGET_MS) {
 } else {
   fail(`corpus view building took ${elapsed}ms, over the smoke bound ${CORPUS_WALL_CLOCK_BUDGET_MS}ms`);
 }
+
+// ---- Section 7: role migration equivalence (Batch 3.2) ----
+
+console.log("=== 7. Role migration: view-fed roleOf equals the frozen role sets ===");
+
+// roleOf answers over ViewFile now (types.ts), and lib/parser/index.ts feeds it
+// the per-project FrameworkView. The acceptance is strict: every role must be
+// what it was when roleOf read AdapterFile. The frozen expected.json files are
+// that "before" — their files[].role fields were written by the pre-migration
+// parser — so per fixture the complete path → role assignment set (nulls
+// included: absence is part of the set) must equal the frozen one. The
+// synthetic pins then hold the adapters' documented role semantics against
+// hand-built ViewFiles, covering the shapes no fixture has ("use server", the
+// directive ordering, hook-over-JSX precedence).
+
+for (const name of fixtureNames) {
+  const entry = corpus.get(name);
+  if (!entry) {
+    fail(`${name}: corpus entry missing`);
+    continue;
+  }
+  const before = JSON.parse(readBaseline(path.join(FIXTURES, name, "expected.json"))) as ParseResult;
+  const beforeRoles = Object.fromEntries(before.files.map((file) => [file.path, file.role ?? null]));
+  const afterRoles = Object.fromEntries(entry.result.files.map((file) => [file.path, file.role ?? null]));
+  expect(
+    deepEqual(beforeRoles, afterRoles, "$"),
+    `${name}: all ${Object.keys(afterRoles).length} role assignments (complete path → role set) equal the frozen expected.json`,
+  );
+}
+
+// Multi-framework monorepo: each project's own adapter assigns its roles, so
+// the NestJS package and the Next.js package disagree on what a role means and
+// neither borrows the other's.
+{
+  const entry = corpus.get("two-framework-monorepo");
+  if (!entry) fail("two-framework-monorepo: corpus entry missing");
+  else {
+    const roles = new Map(entry.result.files.map((file) => [file.path, file.role ?? null]));
+    expect(deepEqual(roles.get("packages/api/src/users/users.controller.ts"), "controller", "$"), "monorepo: the NestJS package's controller is a controller");
+    expect(deepEqual(roles.get("packages/api/src/users/users.service.ts"), "service", "$"), "monorepo: the NestJS package's service is a service");
+    expect(deepEqual(roles.get("packages/web/app/page.tsx"), "page-route", "$"), "monorepo: the Next.js package's page is a page-route");
+    expect(deepEqual(roles.get("packages/web/lib/branding.ts"), null, "$"), "monorepo: an unrouted file stays unclassified");
+  }
+}
+
+// A ViewFile carrying only the facts a role reads; everything else is empty.
+const roleFile = (path: string, overrides: Partial<ViewFile> = {}): ViewFile => ({
+  path,
+  language: "typescript",
+  directives: [],
+  flags: { jsx: false },
+  imports: [],
+  exports: [],
+  declarations: [],
+  calls: [],
+  objectProperties: [],
+  ...overrides,
+});
+
+const roleCase = (adapter: { name: string; roleOf: (file: ViewFile) => Role | null }, file: ViewFile, expected: Role | null, what: string): void =>
+  expect(deepEqual(adapter.roleOf(file), expected, "$"), what);
+
+// Next.js: path conventions first, then tools, then directive/React shape.
+roleCase(nextjsAdapter, roleFile("app/page.tsx"), "page-route", "next: app/page.tsx is a page-route");
+roleCase(nextjsAdapter, roleFile("pages/index.tsx"), "page-route", "next: a pages/ file is a page-route");
+roleCase(nextjsAdapter, roleFile("pages/api/users.ts"), "api-endpoint", "next: a pages/api file is an api-endpoint");
+roleCase(nextjsAdapter, roleFile("pages/_app.tsx"), "layout", "next: pages/_app.tsx is a layout");
+roleCase(nextjsAdapter, roleFile("middleware.ts"), "middleware", "next: middleware.ts is middleware");
+roleCase(nextjsAdapter, roleFile("next.config.ts"), "config", "next: next.config.ts is a tool config");
+roleCase(nextjsAdapter, roleFile("app/actions.ts", { directives: ["use server"] }), "server-action", "next: a leading \"use server\" prologue makes a server-action");
+roleCase(nextjsAdapter, roleFile("app/actions.ts", { directives: ["use strict", "use server"] }), "server-action", "next: \"use server\" anywhere in the leading string run still counts");
+roleCase(nextjsAdapter, roleFile("app/actions.ts", { directives: ["use client"] }), null, "next: a leading \"use client\" is not a server-action");
+roleCase(nextjsAdapter, roleFile("app/actions.ts", { directives: [] }), null, "next: no prologue, no role (a string statement after code is not a directive)");
+roleCase(nextjsAdapter, roleFile("app/actions.ts", { flags: { jsx: true } }), "component", "next: without directives the React fallback reads the jsx flag");
+roleCase(nextjsAdapter, roleFile("lib/useStore.ts"), "hook", "next: the hook naming rule survives the migration");
+
+// React: hook naming first, then the view's jsx flag.
+roleCase(reactAdapter, roleFile("components/Button.tsx", { flags: { jsx: true } }), "component", "react: jsx true is a component");
+roleCase(reactAdapter, roleFile("components/Button.tsx", { flags: { jsx: false } }), null, "react: jsx false stays unclassified");
+roleCase(reactAdapter, roleFile("src/useCounter.ts"), "hook", "react: a useCamel name is a hook without any JSX");
+roleCase(reactAdapter, roleFile("lib/utils.ts"), null, "react: an ordinary module has no role");
+roleCase(reactAdapter, roleFile("useThing.tsx", { flags: { jsx: true } }), "hook", "react: the hook name wins over a component's jsx");
+
+// Express: tool conventions first, then the nearest folder decides.
+roleCase(expressAdapter, roleFile("routes/users.js"), "router", "express: routes/ is a router");
+roleCase(expressAdapter, roleFile("routes/v1/middleware/auth.js"), "middleware", "express: the nearest folder decides (middleware over routes)");
+roleCase(expressAdapter, roleFile("controllers/users.js"), "controller", "express: controllers/ is a controller");
+roleCase(expressAdapter, roleFile("services/user.js"), "service", "express: services/ is a service");
+roleCase(expressAdapter, roleFile("models/user.js"), "model", "express: models/ is a model");
+roleCase(expressAdapter, roleFile("app.js"), null, "express: a file outside the folder habit has no role");
+roleCase(expressAdapter, roleFile("routes/__tests__/users.test.js"), "test", "express: a test file under routes/ is still a test");
+
+// NestJS: the CLI's suffix names the role; a test suffix falls back to the runner.
+roleCase(nestjsAdapter, roleFile("src/users/users.controller.ts"), "controller", "nestjs: the controller suffix is a controller");
+roleCase(nestjsAdapter, roleFile("src/users/users.service.ts"), "service", "nestjs: the service suffix is a service");
+roleCase(nestjsAdapter, roleFile("src/users/users.dto.ts"), "dto", "nestjs: the dto suffix is a dto");
+roleCase(nestjsAdapter, roleFile("src/app.module.ts"), "module", "nestjs: the module suffix is a module");
+roleCase(nestjsAdapter, roleFile("src/main.ts"), null, "nestjs: a file without a known suffix has no role");
+roleCase(nestjsAdapter, roleFile("src/users/users.controller.spec.ts"), "test", "nestjs: a spec file is collected by the test runner first");
+
+// Docusaurus: its own paths, its config files, then the React reading.
+roleCase(docusaurusAdapter, roleFile("src/pages/index.tsx"), "page-route", "docusaurus: src/pages is a page-route");
+roleCase(docusaurusAdapter, roleFile("src/theme/Footer.tsx"), "theme-override", "docusaurus: src/theme is a theme-override");
+roleCase(docusaurusAdapter, roleFile("docusaurus.config.ts"), "config", "docusaurus: docusaurus.config.ts is a config");
+roleCase(docusaurusAdapter, roleFile("sidebars.js"), "config", "docusaurus: sidebars.js is a config");
+roleCase(docusaurusAdapter, roleFile("src/components/Widget.tsx", { flags: { jsx: true } }), "component", "docusaurus: everything else is read the React way");
+
+// Fallback: only the tool conventions ever assign a role.
+roleCase(fallbackAdapter, roleFile("jest.config.js"), "config", "fallback: a tool config is a config");
+roleCase(fallbackAdapter, roleFile("src/app.test.ts"), "test", "fallback: a test pattern is a test");
+roleCase(fallbackAdapter, roleFile("src/app.ts"), null, "fallback: an ordinary file has no role");
 
 // ---- Summary ----
 

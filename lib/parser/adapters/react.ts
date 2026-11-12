@@ -1,26 +1,19 @@
-import { Node, type SourceFile } from "ts-morph";
 import type { Role } from "../../roles.ts";
 import { toolConventions, toolRole } from "./conventions.ts";
-import { NO_ROUTES, type AdapterFile, type FrameworkAdapter } from "./types.ts";
+import { NO_ROUTES, type FrameworkAdapter, type ViewFile } from "./types.ts";
 
 // React has two conventions a file can be read by. A hook's name starts with
 // "use" — React's own rule, which its lint enforces. A component renders JSX,
-// which is in the syntax tree rather than in a naming habit, so a .tsx file of
-// helpers isn't claimed as one.
+// which is syntax rather than a naming habit, so a .tsx file of helpers isn't
+// claimed as one. Both facts reach the adapter on the view: the path and the
+// builder's jsx flag, which is the same scan of the syntax tree.
 const HOOK_NAME = /^use([A-Z0-9]|-[a-z0-9])/;
 
-export function reactRole({ path, source }: AdapterFile): Role | null {
-  const name = path.slice(path.lastIndexOf("/") + 1);
+export function reactRole(file: ViewFile): Role | null {
+  const name = file.path.slice(file.path.lastIndexOf("/") + 1);
   if (HOOK_NAME.test(name)) return "hook";
-  if (containsJsx(source)) return "component";
+  if (file.flags.jsx) return "component";
   return null;
-}
-
-function containsJsx(source: SourceFile): boolean {
-  return (
-    source.getFirstDescendant((n) => Node.isJsxElement(n) || Node.isJsxSelfClosingElement(n) || Node.isJsxFragment(n)) !==
-    undefined
-  );
 }
 
 export const reactAdapter: FrameworkAdapter = {

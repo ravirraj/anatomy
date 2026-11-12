@@ -61,10 +61,12 @@ export interface FrameworkAdapter {
   reachedBy(projectRelativePath: string): string | null;
   /**
    * The file's role from a convention: where it sits, what it's named, or a
-   * directive or syntax it contains. Null when none applies; the file stays
-   * unclassified rather than getting the nearest fit.
+   * directive or syntax it contains. Answered over the project's FrameworkView
+   * (Batch 3.2): the path, the directive prologue and the syntax flags a role
+   * reads are the view's, never the language parser's types. Null when none
+   * applies; the file stays unclassified rather than getting the nearest fit.
    */
-  roleOf(file: AdapterFile): Role | null;
+  roleOf(file: ViewFile): Role | null;
   /** Routes whose method and full pattern are both written in the syntax. */
   routes(project: ProjectFiles): RouteReport;
 }
@@ -73,8 +75,10 @@ export interface FrameworkAdapter {
 //
 // A language-neutral, framework-oriented view of one project's parsed files:
 // the syntactic facts the framework adapters read, handed over without the
-// language parser's own types. The JS/TS builder lives in view.ts; adapters
-// keep their current interfaces this batch, so nothing consumes the view yet.
+// language parser's own types. The JS/TS builder lives in view.ts. Role
+// detection consumes the view (Batch 3.2): roleOf answers over ViewFile.
+// Route detection does not yet: routes still reads AdapterFile, whose
+// SourceFile keeps ts-morph in the route consumers until it migrates.
 //
 // What the view deliberately does NOT carry: source text, expression values
 // (nothing is ever evaluated), raw AST nodes, CommonJS `module.exports`
