@@ -37,7 +37,8 @@
 // parent candidates disagree, the container resolves to null, and the child
 // conservatively stays a function.
 
-import { IR_VERSION, type DeclarationKind, type Ir, type IrSymbol, type ScopeSegment, type SymbolCompatKind } from "./types.ts";
+import { IR_VERSION, type DeclarationKind, type Ir, type IrFileCoverage, type IrSymbol, type ScopeSegment, type SymbolCompatKind } from "./types.ts";
+import { detectLanguage, languageAdapter } from "./languages.ts";
 import { SCHEMA_VERSION } from "../parser/types.ts";
 import type { ParseResult, ParsedSymbol } from "../parser/types.ts";
 
@@ -49,6 +50,14 @@ export const IR_PRODUCER = "anatomy js/ts parser (ts-morph), via lib/ir";
  * ParseResult (the parser's own output always is; test inputs come through
  * the parser contract validator). The result is not validated here — pass it
  * through lib/ir/contract.ts when it crosses a boundary.
+ *
+ * File coverage (lib/ir/types.ts): one row per parsed file (complete) and per
+ * skipped file (unavailable), with the language and adapter the registry
+ * resolves for each path. Parser output is always validator-clean here —
+ * every extension the walker accepts is registered, so every parsed row
+ * resolves to a language with the JS/TS adapter. A hand-built ParseResult
+ * whose parsed files carry unregistered extensions would produce a row the
+ * validator rejects, loudly.
  */
 export function toIr(result: ParseResult): Ir {
   return {
@@ -57,6 +66,7 @@ export function toIr(result: ParseResult): Ir {
     root: result.root,
     projects: result.projects,
     files: result.files,
+    fileCoverage: deriveFileCoverage(result),
     symbols: resolveSymbols(result.symbols),
     relationships: result.edges.map((edge) => ({
       source: edge.source,
@@ -81,7 +91,8 @@ export function toIr(result: ParseResult): Ir {
 /**
  * Reconstructs the ParseResult shape from an IR. For every field the parser
  * persists this is the exact inverse of `toIr`; IR-only structure (scopes,
- * declaration kinds, provenance) is dropped. The input must be a valid IR.
+ * declaration kinds, provenance, per-file coverage) is dropped. The input
+ * must be a valid IR.
  */
 export function project(ir: Ir): ParseResult {
   return {
@@ -128,6 +139,28 @@ function projectSymbol(symbol: IrSymbol): ParsedSymbol {
   if (symbol.documentation !== undefined) out.documentation = symbol.documentation;
   if (symbol.isPublicApi !== undefined) out.isPublicApi = symbol.isPublicApi;
   return out;
+}
+
+// ---- Per-file coverage ----
+
+/**
+ * One coverage row per file the pipeline recorded: parsed files report
+ * `complete`, skipped files `unavailable` (the reason itself stays in
+ * `coverage.files.skippedFiles`). Language and adapter come from the
+ * registry's pure path classification — no content is read, so derivation is
+ * deterministic and O(1) per file.
+ */
+function deriveFileCoverage(result: ParseResult): IrFileCoverage[] {
+  const rows: IrFileCoverage[] = [];
+  for (const file of result.files) {
+    const language = detectLanguage(file.path);
+    rows.push({ path: file.path, language, adapter: languageAdapter(language), extraction: "complete" });
+  }
+  for (const skipped of result.coverage.files.skippedFiles) {
+    const language = detectLanguage(skipped.path);
+    rows.push({ path: skipped.path, language, adapter: languageAdapter(language), extraction: "unavailable" });
+  }
+  return rows;
 }
 
 // ---- Scope resolution ----

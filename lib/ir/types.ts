@@ -18,6 +18,10 @@
 //     kind says "const".
 //  3. `scope`       — the structured parent chain (qualified names as data),
 //     instead of dots inside a name string.
+//  4. `fileCoverage` — per-file language and extraction facts, keeping the
+//     states "recognized", "supported", "parsed" and "understood" separate
+//     (lib/ir/languages.ts). IR-only: it is never projected back into a
+//     ParseResult.
 //
 // The registries below are open across releases but closed within one: a new
 // language adapter lands by *registering* its kinds here, not by writing
@@ -25,6 +29,7 @@
 // changes.
 
 import type { NonCodeCandidate } from "../parser/screening.ts";
+import { type LanguageId } from "./languages.ts";
 import type {
   ConfigReference,
   ConfigReport,
@@ -70,6 +75,80 @@ export type DeclarationKind = (typeof DECLARATION_KINDS)[number];
 export const RELATIONSHIP_KINDS: readonly RelationshipKind[] = ["import", "re-export", "dynamic-import", "require", "call"];
 
 export type RelationshipKind = EdgeKind;
+
+// ---- Per-file extraction coverage -------------------------------------------
+
+/**
+ * Per-file extraction outcomes. The current parser skips files whole rather
+ * than partially extracting them ("absent beats approximate"), so:
+ *
+ *  - `complete`    — parsed by an available adapter; extraction ran to
+ *                    completion. The only state the current parser produces
+ *                    for files it indexes.
+ *  - `partial`     — extraction ran but produced an incomplete fact set.
+ *                    Reserved vocabulary for future adapters; no current
+ *                    producer, asserted corpus-wide by scripts/test-ir.ts.
+ *  - `unavailable` — nothing was extracted for a recognized file: it was
+ *                    skipped (the reason lives in
+ *                    coverage.files.skippedFiles) or its language has no
+ *                    adapter. This state alone claims nothing about whether
+ *                    parsing was attempted — attempt is carried by the skip
+ *                    reason (`syntax-error`/`unreadable` attempted;
+ *                    `too-large`/`binary`/`declaration-file`/`symlink` not).
+ *
+ * Combined with `language` and `adapter` (see IrFileCoverage), one row answers
+ * each question separately, without conflating them:
+ *
+ *   - language detected            → `language` non-null
+ *   - adapter available            → `adapter` non-null
+ *   - file parsed                  → `extraction` complete | partial
+ *   - file partially understood    → `extraction` partial
+ *   - recognized but unsupported   → `language` non-null, `adapter` null,
+ *                                    `extraction` unavailable
+ *   - language undetermined        → `language` null (only on recorded rows)
+ *
+ * There are no confidence scores. A state is asserted or it is not present.
+ * `partial` may only be produced by an adapter with actual partial-extraction
+ * evidence — never by default, and never for an attempted-but-empty parse.
+ */
+export const EXTRACTION_STATES = ["complete", "partial", "unavailable"] as const;
+
+export type ExtractionState = (typeof EXTRACTION_STATES)[number];
+
+/**
+ * Language and extraction facts for one file. A row exists in exactly one of
+ * two shapes, each with its own evidence:
+ *
+ *  - a file the pipeline recorded (parsed or skipped — the recorded universe
+ *    is exactly `files` ∪ `coverage.files.skippedFiles`). Its language may be
+ *    null when the path's extension resolves to no registered language; the
+ *    row still says what was (not) extracted.
+ *  - a file the pipeline never recorded but the language registry recognizes
+ *    as source of a known language. Allowed only as recognized-but-unsupported
+ *    (`language` non-null, `adapter` null, `extraction` "unavailable"):
+ *    registry recognition is the only evidence such a row can have, so a row
+ *    recorded nowhere with an undetermined language is invalid.
+ *
+ * `fileCoverage` is therefore not "every file in the repository". A file with
+ * an unknown extension that the pipeline never recorded has no row and no
+ * classification — absence is the honest answer for an arbitrary file, and no
+ * language is ever inferred for `.txt`, `.md`, `.json` or any unregistered
+ * extension. A null `language` means "recorded, language undetermined", not
+ * "non-code": the IR does not classify non-code-ness either, it declines to
+ * name a language. The row also does not duplicate skip reasons —
+ * `coverage.files.skippedFiles` remains the source of skip explanations; this
+ * row says what was (and was not) understood.
+ */
+export type IrFileCoverage = {
+  /** Repository-relative path, exactly as the pipeline recorded it. */
+  path: string;
+  /** The language owning this path's extension, or null when undetermined. */
+  language: LanguageId | null;
+  /** The adapter that parses `language`, or null when unsupported. */
+  adapter: string | null;
+  /** What extraction produced for the file. */
+  extraction: ExtractionState;
+};
 
 // ---- Provenance ------------------------------------------------------------
 
@@ -227,6 +306,8 @@ export type Ir = {
   projects: Project[];
   /** Files, verbatim from the parser (already language-neutral). */
   files: ParsedFile[];
+  /** Per-file language and extraction facts (see IrFileCoverage): every recorded file, plus registry-recognized unsupported files. IR-only: `project` drops it, so the parser round-trip stays exact. */
+  fileCoverage: IrFileCoverage[];
   /** Declarations, restructured (see IrSymbol). Sorted by file, then line. */
   symbols: IrSymbol[];
   /** File-level dependency facts. */

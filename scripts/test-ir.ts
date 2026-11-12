@@ -1,10 +1,17 @@
 // Phase 5 Batch 1: canonical IR contract tests.
+// Phase 5 Batch 2: language registry, per-file coverage facts, honest
+// unsupported-language classification, mixed-language fixture validation.
 //
 // Proves, over the whole fixture corpus, that the existing JS/TS parser
 // produces the canonical IR losslessly: convert → validate → project back →
 // strict deep-equality against the parser's own output, field by field, with
 // no ignore lists. Plus structural scope tests on real parses, negative
 // validator tests, and a deterministic conversion budget.
+// Batch 2 adds: registry recognition pins (JS/TS supported, six languages
+// recognized-but-unsupported, unknown extensions unclassified), corpus-wide
+// coverage-fact agreement with the parser outcome, mixed-language fixtures
+// where manifests and source languages stay separate concepts, synthetic
+// recognized-but-unsupported rows, and negative coverage-row tests.
 
 import { readdirSync } from "node:fs";
 import path from "node:path";
@@ -12,7 +19,8 @@ import { parseRepository } from "../lib/parser/index.ts";
 import type { ParseResult, ParsedSymbol } from "../lib/parser/types.ts";
 import { IR_PRODUCER, project, toIr } from "../lib/ir/convert.ts";
 import { IrContractError, validateIr } from "../lib/ir/contract.ts";
-import { DECLARATION_KINDS, IR_VERSION, RELATIONSHIP_KINDS, type Ir, type IrSymbol } from "../lib/ir/types.ts";
+import { DECLARATION_KINDS, EXTRACTION_STATES, IR_VERSION, RELATIONSHIP_KINDS, type Ir, type IrSymbol } from "../lib/ir/types.ts";
+import { JS_TS_ADAPTER, LANGUAGE_REGISTRY, LANGUAGE_REGISTRY_VERSION, detectLanguage, isLanguageSupported, languageAdapter, validateLanguageRegistry, type LanguageId } from "../lib/ir/languages.ts";
 import { FIXTURES } from "./test-fixtures-shared.ts";
 
 const results: string[] = [];
@@ -20,11 +28,12 @@ const pass = (m: string) => results.push(`ok    ${m}`);
 const fail = (m: string) => results.push(`FAIL  ${m}`);
 
 // Deterministic conversion budget: total parsed elements the corpus converts.
-// Measured 2026-11-12 over all 14 fixtures: 376 elements, 361 ms. The element
+// Measured 2026-11-12 over all 14 fixtures: 441 elements (376 parser elements
+// plus 65 per-file coverage rows; no fixture has skipped files). The element
 // budget keeps ~2x headroom and catches accidental blow-up (duplicated
 // content, quadratic copying) without any wall-clock assertion; the wall-clock
 // bound below is a generous smoke bound only.
-const CORPUS_ELEMENT_BUDGET = 800;
+const CORPUS_ELEMENT_BUDGET = 900;
 const CORPUS_WALL_CLOCK_BUDGET_MS = 60_000;
 
 // ---- Strict deep equality: undefined-valued keys count as absent ----
@@ -94,6 +103,7 @@ for (const name of fixtureNames) {
   // is O(n) with no duplication, so the element counts are the budget.
   const counts: [string, number, number][] = [
     ["files", result.files.length, ir.files.length],
+    ["fileCoverage", result.files.length + result.coverage.files.skippedFiles.length, ir.fileCoverage.length],
     ["edges", result.edges.length, ir.relationships.length],
     ["symbols", result.symbols.length, ir.symbols.length],
     ["routes", result.routes.length, ir.routes.length],
@@ -230,9 +240,237 @@ else {
   else fail(`polyglot-manifests: expected several ecosystems, got ${ecosystems.size}`);
 }
 
-// ---- Section 5: validator negative tests ----
+// ---- Shared synthetic ParseResult helpers (used by sections 5 and 9) ----
+// Minimal contract-valid ParseResults so rules are tested directly, not only
+// through the fixtures.
 
-console.log("=== 5. Validator negative tests ===");
+const zeroCounts = { seen: 0, internal: 0, external: 0, excluded: 0, unresolved: 0 };
+
+const syntheticResult = (symbols: ParsedSymbol[]): ParseResult => ({
+  schemaVersion: 7,
+  root: ".",
+  projects: [{ path: ".", adapter: "none" }],
+  files: [{ path: "src/a.ts", module: "src", lines: 40, bytes: 800, hash: "hash", fanIn: 0, fanOut: 0, reachedBy: null, role: null, exports: [] }],
+  edges: [],
+  routes: [],
+  symbols,
+  manifests: [],
+  dependencies: [],
+  configReferences: [],
+  envDeclarations: [],
+  entryPoints: [],
+  coverage: {
+    files: { found: 1, parsed: 1, skipped: 0, skippedFiles: [], excludedDirectories: [] },
+    imports: {
+      total: zeroCounts,
+      byKind: { import: zeroCounts, "re-export": zeroCounts, "dynamic-import": zeroCounts, require: zeroCounts, call: zeroCounts },
+      external: { package: 0, builtin: 0, "outside-root": 0 },
+      excluded: {},
+      unresolvedByReason: {},
+      unresolved: [],
+    },
+    routes: { omitted: [], withheld: [] },
+    calls: { total: 0, resolved: 0, unresolved: 0, unresolvedCalls: [] },
+  },
+  configs: [],
+  nonCodeCandidates: [],
+});
+
+const sym = (over: Partial<ParsedSymbol> & Pick<ParsedSymbol, "name" | "kind" | "line">): ParsedSymbol => ({
+  file: "src/a.ts",
+  exported: false,
+  exportKind: "none",
+  endLine: over.line,
+  ...over,
+});
+
+// ---- Section 5: language registry, coverage facts, mixed-language fixtures ----
+
+console.log("=== 5. Language registry and per-file coverage ===");
+
+// The registry's own invariants: unique ids/names/extensions, lowercase
+// dot-forms, modeled ecosystems only, and the JS/TS parser as the one adapter.
+try {
+  validateLanguageRegistry();
+  pass(`language registry v${LANGUAGE_REGISTRY_VERSION} is internally consistent (${LANGUAGE_REGISTRY.length} languages)`);
+} catch (error) {
+  fail(`language registry invalid: ${String(error)}`);
+}
+
+// Recognition pins: JS/TS across all their owned extensions, plus every
+// additionally recognized language. Recognition is not support — the last
+// assertion block checks that separately.
+const recognitionPins: [string, LanguageId][] = [
+  ["lib/util.js", "javascript"],
+  ["components/app.tsx", "typescript"],
+  ["scripts/run.mjs", "javascript"],
+  ["legacy/bootstrap.cjs", "javascript"],
+  ["types.d.mts", "typescript"],
+  ["service/main.py", "python"],
+  ["cmd/server.go", "go"],
+  ["crates/core/lib.rs", "rust"],
+  ["src/Main.java", "java"],
+  ["src/main.c", "c"],
+  ["src/main.cpp", "cpp"],
+  ["include/widget.hpp", "cpp"],
+];
+const recognitionBad = recognitionPins.filter(([p, id]) => detectLanguage(p) !== id);
+if (recognitionBad.length === 0) pass(`all ${recognitionPins.length} recognition pins hold (JS/TS owned extensions + six recognized languages)`);
+else fail(`recognition pins failed: ${JSON.stringify(recognitionBad)}`);
+
+// Support is exactly the adapter set: JavaScript and TypeScript only.
+const supported = LANGUAGE_REGISTRY.filter((entry) => entry.adapter !== null).map((entry) => entry.id);
+const unsupportedPins = ["python", "go", "rust", "java", "c", "cpp"] as LanguageId[];
+if (
+  supported.length === 2 &&
+  supported.includes("javascript") &&
+  supported.includes("typescript") &&
+  unsupportedPins.every((id) => !isLanguageSupported(id) && languageAdapter(id) === null)
+) {
+  pass("only JavaScript and TypeScript are supported; python/go/rust/java/c/cpp are recognized but unsupported (adapter null)");
+} else {
+  fail(`adapter availability wrong: supported = ${supported.join(", ")}`);
+}
+
+// The ambiguous `.h` is deliberately owned by C; C++ keeps its unambiguous
+// family. Ownership is unique, so this is a resolution, not a guess.
+if (detectLanguage("src/header.h") === "c" && detectLanguage("src/header.hpp") === "cpp" && detectLanguage("src/header.hh") === "cpp") {
+  pass("ambiguous .h deliberately resolves to C; C++ owns the unambiguous .cpp/.hpp/.hh family");
+} else {
+  fail("the .h ambiguity is not resolved as documented");
+}
+
+// Unregistered extensions stay unclassified — a requirements.txt does not
+// make .txt files Python source, and a path with no extension is not a language.
+const unknownPins = ["requirements.txt", "README.md", "package.json", "Makefile", "data", "styles/main.css", "config/settings.yaml"];
+if (unknownPins.every((p) => detectLanguage(p) === null)) {
+  pass("unregistered extensions remain unclassified (.txt/.md/.json, no extension)");
+} else {
+  fail(`unknown extensions misclassified: ${JSON.stringify(unknownPins.filter((p) => detectLanguage(p) !== null))}`);
+}
+
+// Extension case is normalized consistently.
+if (detectLanguage("A.PY") === "python" && detectLanguage("MAIN.GO") === "go" && detectLanguage("App.TS") === "typescript") {
+  pass("extension case is normalized (A.PY → python, MAIN.GO → go, App.TS → typescript)");
+} else {
+  fail("case normalization broken");
+}
+
+// Corpus-wide: detection is deterministic, and every coverage row agrees with
+// the parser outcome. "partial" is reserved vocabulary with no producer yet —
+// asserted here, so the claim stays honest.
+let coverageBad = 0;
+let parsedRows = 0;
+for (const { result, ir } of corpus.values()) {
+  const byPath = new Map(ir.fileCoverage.map((row) => [row.path, row]));
+  for (const file of result.files) {
+    parsedRows += 1;
+    const row = byPath.get(file.path);
+    const language = detectLanguage(file.path);
+    if (!row || row.extraction !== "complete" || row.language !== language || row.adapter !== JS_TS_ADAPTER) coverageBad += 1;
+    if (row && row.language !== null && row.language !== "javascript" && row.language !== "typescript") coverageBad += 1;
+  }
+  for (const skipped of result.coverage.files.skippedFiles) {
+    const row = byPath.get(skipped.path);
+    if (!row || row.extraction !== "unavailable" || row.language !== detectLanguage(skipped.path)) coverageBad += 1;
+  }
+  if (ir.fileCoverage.some((row) => row.extraction === "partial")) coverageBad += 1;
+}
+if (coverageBad === 0) {
+  pass(`coverage agrees with the parser outcome across the corpus: ${parsedRows} parsed rows all JavaScript/TypeScript and complete, ${corpus.size} fixtures with zero partial rows, detection deterministic`);
+} else {
+  fail(`${coverageBad} coverage facts disagree with the parser outcome`);
+}
+if ((EXTRACTION_STATES as readonly string[]).includes("partial")) pass("partial extraction is reserved vocabulary, validated but currently unproduced");
+
+// Recorded-but-undetermined rows: a file the pipeline recorded whose extension
+// no language owns still gets a coverage row — with language null, adapter
+// null, extraction unavailable. This is the reviewed boundary: recorded files
+// may have an undetermined language; files recorded nowhere may not. The row
+// claims nothing about parsing attempt — that stays with the skip reason.
+{
+  const result = syntheticResult([]);
+  result.files = [];
+  result.coverage.files = {
+    found: 2,
+    parsed: 0,
+    skipped: 2,
+    skippedFiles: [
+      { path: "assets/blob.bin", reason: "binary", detail: "contains NUL bytes" },
+      { path: "docs/guide.md", reason: "too-large", detail: `2048 bytes, limit ${1024 * 1024}` },
+    ],
+    excludedDirectories: [],
+  };
+  const ir = validateIr(toIr(result));
+  const rows = ir.fileCoverage;
+  const undetermined =
+    rows.length === 2 &&
+    rows.every((row) => row.language === null && row.adapter === null && row.extraction === "unavailable") &&
+    detectLanguage("assets/blob.bin") === null &&
+    detectLanguage("docs/guide.md") === null;
+  if (undetermined) {
+    pass("recorded files with unownable extensions (.bin, .md) carry language-null unavailable rows and gain no language claim");
+  } else {
+    fail(`recorded-but-undetermined rows wrong: ${JSON.stringify(rows)}`);
+  }
+  if (rows.every((row) => row.extraction !== "partial")) pass("toIr never produces partial extraction — not even for skipped recorded files");
+  else fail("toIr produced a partial row without evidence");
+  expect(deepEqual(result, project(ir), "$"), "recorded-but-undetermined coverage round-trips exactly");
+}
+
+// Mixed-language fixtures: manifest ecosystems and source-language
+// classification are separate concepts. A Cargo manifest does not parse Rust;
+// a Python requirements file does not make every .txt file Python source.
+if (!polyglot) fail("polyglot-manifests fixture missing");
+else {
+  const ecosystems = new Set(polyglot.ir.manifests.map((m) => m.ecosystem));
+  const languages = new Set(polyglot.ir.fileCoverage.map((row) => row.language).filter((l) => l !== null));
+  const polyglotManifests = ecosystems.has("cargo") && ecosystems.has("go") && [...ecosystems].some((e) => e.startsWith("python"));
+  const noUnsupportedSource = ![...languages].some((l) => l === "python" || l === "go" || l === "rust");
+  if (polyglotManifests && noUnsupportedSource) {
+    pass(`polyglot-manifests: Cargo/Go/Python manifests coexist with source coverage claiming no python/go/rust (${languages.size === 0 ? "no parsed source" : [...languages].sort().join(", ")})`);
+  } else {
+    fail(`polyglot-manifests separation broken: ecosystems ${[...ecosystems].join(",")}, languages ${[...languages].join(",")}`);
+  }
+
+  // The registry can classify files the parser never recorded — recognized but
+  // unsupported, standalone, inventing no symbols, edges or routes.
+  const clone = JSON.parse(JSON.stringify(polyglot.ir)) as Ir;
+  clone.fileCoverage.push({ path: "native/lib.rs", language: "rust", adapter: null, extraction: "unavailable" });
+  clone.fileCoverage.push({ path: "tools/build.py", language: "python", adapter: null, extraction: "unavailable" });
+  try {
+    const classified = validateIr(clone);
+    const referenced = new Set<string>([
+      ...classified.symbols.map((s) => s.file),
+      ...classified.relationships.flatMap((r) => [r.source, r.target]),
+      ...classified.routes.map((r) => r.file),
+    ]);
+    if (!referenced.has("native/lib.rs") && !referenced.has("tools/build.py")) {
+      pass("synthetic recognized-but-unsupported rows (Rust beside a Cargo manifest, Python beside requirements) validate and gain no symbols, edges or routes");
+    } else {
+      fail("synthetic unsupported rows acquired invented references");
+    }
+  } catch (error) {
+    fail(`synthetic recognized-but-unsupported rows rejected: ${String(error)}`);
+  }
+}
+for (const name of ["two-framework-monorepo", "unlinked-workspaces"]) {
+  const entry = corpus.get(name);
+  if (!entry) {
+    fail(`${name} fixture missing`);
+    continue;
+  }
+  const languages = new Set(entry.ir.fileCoverage.map((row) => row.language).filter((l) => l !== null));
+  if ([...languages].every((l) => l === "javascript" || l === "typescript")) {
+    pass(`${name}: framework adapters and workspace manifests detected while source coverage stays JavaScript/TypeScript`);
+  } else {
+    fail(`${name}: unexpected source languages ${[...languages].join(",")}`);
+  }
+}
+
+// ---- Section 6: validator negative tests ----
+
+console.log("=== 6. Validator negative tests ===");
 
 const baseResult = parseRepository(path.join(FIXTURES, "class-methods", "repo"));
 const baseIr = validateIr(toIr(baseResult));
@@ -279,6 +517,25 @@ throws(() => validateIr((() => {
 })()), "entry-point resolved contradiction is rejected", "entry point");
 throws(() => validateIr(mutate((ir) => { ir.projects[0].path = "/elsewhere"; })), "root-not-first project is rejected", "root must be the first project");
 
+// Coverage rows: the model has the path and the registry, so contradictions
+// between recognition, support and parse outcome are rejectable, not guessed.
+throws(() => validateIr(mutate((ir) => { ir.fileCoverage[0].language = "python3" as never; })), "unknown language identifier is rejected", "language");
+throws(() => validateIr(mutate((ir) => { ir.fileCoverage[0].language = "python" as LanguageId; ir.fileCoverage[0].adapter = null; })), "language that does not own the path's extension is rejected", "not owned by");
+throws(() => validateIr(mutate((ir) => { ir.fileCoverage[0].adapter = "py-parser"; })), "an adapter the language does not register is rejected (unsupported claim)", "does not register");
+throws(() => validateIr(mutate((ir) => { ir.fileCoverage[0].extraction = "attempted" as never; })), "invalid extraction state is rejected", "extraction");
+throws(() => validateIr(mutate((ir) => { ir.fileCoverage[0].language = null; ir.fileCoverage[0].adapter = null; })), "complete extraction with an undetermined language is rejected", "no adapter");
+throws(() => validateIr(mutate((ir) => { ir.fileCoverage[0].adapter = null; })), "complete extraction with a registered language's adapter removed is rejected (the registry rule governs)", "does not register adapter null");
+throws(() => validateIr(mutate((ir) => { ir.fileCoverage.push({ path: "ghost.ts", language: "typescript", adapter: JS_TS_ADAPTER, extraction: "complete" }); })), "complete row for an unlisted file is rejected", "not a file in the IR");
+throws(() => validateIr(mutate((ir) => { ir.fileCoverage.push({ path: "extra/deferred.ts", language: "typescript", adapter: JS_TS_ADAPTER, extraction: "unavailable" }); })), "available adapter with nothing extracted and no skip record is rejected", "no skip record");
+throws(() => validateIr(mutate((ir) => { ir.fileCoverage.push({ path: "unknown.bin", language: null, adapter: null, extraction: "unavailable" }); })), "standalone row with an undetermined language is rejected", "recorded nowhere");
+throws(() => validateIr(mutate((ir) => { ir.fileCoverage.push({ path: "notes.txt", language: null, adapter: null, extraction: "unavailable" }); })), "an arbitrary unrecorded file (notes.txt) gains no coverage row", "recorded nowhere");
+throws(() => validateIr(mutate((ir) => {
+  ir.fileCoverage.push({ path: "native/lib.rs", language: "rust", adapter: null, extraction: "unavailable" });
+  ir.fileCoverage.push({ path: "native/lib.rs", language: "rust", adapter: null, extraction: "unavailable" });
+})), "duplicate coverage rows are rejected", "duplicate coverage entry");
+throws(() => validateIr(mutate((ir) => { ir.fileCoverage.pop(); })), "missing coverage row is rejected", "has no coverage entry");
+throws(() => validateIr(mutate((ir) => { ir.coverage.files.skippedFiles.push({ path: ir.files[0].path, reason: "binary", detail: "x" }); })), "a file recorded both parsed and skipped is rejected", "recorded both parsed and skipped");
+
 // A controlled extension is accepted when it follows the rules.
 {
   const clone = JSON.parse(JSON.stringify(baseIr)) as Ir;
@@ -291,9 +548,9 @@ throws(() => validateIr(mutate((ir) => { ir.projects[0].path = "/elsewhere"; }))
   }
 }
 
-// ---- Section 6: serialization round-trip ----
+// ---- Section 7: serialization round-trip ----
 
-console.log("=== 6. JSON serialization round-trip ===");
+console.log("=== 7. JSON serialization round-trip ===");
 
 for (const name of ["class-methods", "polyglot-manifests", "express-routes"]) {
   const entry = corpus.get(name);
@@ -306,9 +563,9 @@ for (const name of ["class-methods", "polyglot-manifests", "express-routes"]) {
   expect(deepEqual(entry.result, project(revived), "$"), `${name}: JSON round-trip preserves every persisted field`);
 }
 
-// ---- Section 7: conversion budget ----
+// ---- Section 8: conversion budget ----
 
-console.log("=== 7. Conversion budget ===");
+console.log("=== 8. Conversion budget ===");
 
 const elapsed = Date.now() - corpusStart;
 if (corpusElements <= CORPUS_ELEMENT_BUDGET) pass(`corpus converts ${corpusElements} elements, within the deterministic budget ${CORPUS_ELEMENT_BUDGET}`);
@@ -316,53 +573,13 @@ else fail(`corpus elements ${corpusElements} exceed the budget ${CORPUS_ELEMENT_
 if (elapsed <= CORPUS_WALL_CLOCK_BUDGET_MS) pass(`corpus conversion took ${elapsed}ms (generous smoke bound ${CORPUS_WALL_CLOCK_BUDGET_MS}ms, not a precision assertion)`);
 else fail(`corpus conversion took ${elapsed}ms, over the smoke bound ${CORPUS_WALL_CLOCK_BUDGET_MS}ms`);
 
-// ---- Section 8: declaration-kind classification (synthetic ParseResults) ----
+// ---- Section 9: declaration-kind classification (synthetic ParseResults) ----
 //
 // Unit-level pins for every inference rule, built on minimal contract-valid
 // ParseResults so the rules are tested directly, not only through the
 // fixtures. Grounded in the audited extraction paths of lib/parser/extract.ts.
 
-console.log("=== 8. Declaration-kind classification (synthetic ParseResults) ===");
-
-const zeroCounts = { seen: 0, internal: 0, external: 0, excluded: 0, unresolved: 0 };
-
-const syntheticResult = (symbols: ParsedSymbol[]): ParseResult => ({
-  schemaVersion: 7,
-  root: ".",
-  projects: [{ path: ".", adapter: "none" }],
-  files: [{ path: "src/a.ts", module: "src", lines: 40, bytes: 800, hash: "hash", fanIn: 0, fanOut: 0, reachedBy: null, role: null, exports: [] }],
-  edges: [],
-  routes: [],
-  symbols,
-  manifests: [],
-  dependencies: [],
-  configReferences: [],
-  envDeclarations: [],
-  entryPoints: [],
-  coverage: {
-    files: { found: 1, parsed: 1, skipped: 0, skippedFiles: [], excludedDirectories: [] },
-    imports: {
-      total: zeroCounts,
-      byKind: { import: zeroCounts, "re-export": zeroCounts, "dynamic-import": zeroCounts, require: zeroCounts, call: zeroCounts },
-      external: { package: 0, builtin: 0, "outside-root": 0 },
-      excluded: {},
-      unresolvedByReason: {},
-      unresolved: [],
-    },
-    routes: { omitted: [], withheld: [] },
-    calls: { total: 0, resolved: 0, unresolved: 0, unresolvedCalls: [] },
-  },
-  configs: [],
-  nonCodeCandidates: [],
-});
-
-const sym = (over: Partial<ParsedSymbol> & Pick<ParsedSymbol, "name" | "kind" | "line">): ParsedSymbol => ({
-  file: "src/a.ts",
-  exported: false,
-  exportKind: "none",
-  endLine: over.line,
-  ...over,
-});
+console.log("=== 9. Declaration-kind classification (synthetic ParseResults) ===");
 
 const classify = (symbols: ParsedSymbol[]) => validateIr(toIr(syntheticResult(symbols)));
 

@@ -9,6 +9,13 @@
 // validates the symbol fields the parser contract's read-back does not
 // (signature, parameters, documentation, export kind), so an IR crossing a
 // boundary cannot lose them silently.
+//
+// Per-file coverage (lib/ir/types.ts) is validated against the registry and
+// against the files themselves, so the states "recognized", "supported",
+// "parsed" and "understood" cannot be conflated by a malformed IR: an adapter
+// must be the one its language registers, a language must own the file's
+// extension, a parsed file must be listed and must have had an adapter, and
+// every parsed or skipped file must have exactly one coverage row.
 
 import { ROLE_IDS } from "../roles.ts";
 import type { NonCodeCandidate } from "../parser/screening.ts";
@@ -40,7 +47,8 @@ import {
   type UnresolvedReason,
   type WithheldRoutes,
 } from "../parser/types.ts";
-import { DECLARATION_KINDS, IR_VERSION, RELATIONSHIP_KINDS, type Ir, type IrExtensionValue, type IrExtensions, type IrSymbol } from "./types.ts";
+import { DECLARATION_KINDS, EXTRACTION_STATES, IR_VERSION, RELATIONSHIP_KINDS, type Ir, type IrExtensionValue, type IrExtensions, type IrFileCoverage, type IrSymbol } from "./types.ts";
+import { LANGUAGE_REGISTRY, detectLanguage } from "./languages.ts";
 
 const SKIP_REASONS: readonly SkipReason[] = ["declaration-file", "too-large", "binary", "symlink", "syntax-error", "unreadable"];
 const EXCLUDED_REASONS: readonly ExcludedReason[] = ["non-code-file", "declaration-file", "target-skipped", "in-excluded-directory"];
@@ -82,8 +90,20 @@ export function validateIr(value: unknown): Ir {
     paths.add(file.path);
   }
 
+  // Coverage before coverage rows: the skipped set is what the row validator
+  // cross-checks against.
+  const coverageValue = coverage(o.coverage, "$.coverage");
+  const skippedPaths = new Set<string>();
+  for (const [i, skipped] of coverageValue.files.skippedFiles.entries()) {
+    if (paths.has(skipped.path)) {
+      throw new IrContractError(`$.coverage.files.skippedFiles[${i}].path`, `${skipped.path} is recorded both parsed and skipped`);
+    }
+    skippedPaths.add(skipped.path);
+  }
+
   const symbols = array(o.symbols, "$.symbols", (v, at) => symbol(v, at, paths));
   const relationships = array(o.relationships, "$.relationships", relationship);
+  const fileCoverage = fileCoverageRows(o.fileCoverage, "$.fileCoverage", paths, skippedPaths);
 
   const ir: Ir = {
     irVersion,
@@ -91,6 +111,7 @@ export function validateIr(value: unknown): Ir {
     root: string(o.root, "$.root"),
     projects: array(o.projects, "$.projects", project),
     files,
+    fileCoverage,
     symbols,
     relationships,
     routes: array(o.routes, "$.routes", route),
@@ -99,7 +120,7 @@ export function validateIr(value: unknown): Ir {
     configReferences: array(o.configReferences, "$.configReferences", configReference),
     envDeclarations: array(o.envDeclarations, "$.envDeclarations", envDeclaration),
     entryPoints: array(o.entryPoints, "$.entryPoints", entryPoint),
-    coverage: coverage(o.coverage, "$.coverage"),
+    coverage: coverageValue,
     configs: array(o.configs, "$.configs", configReport),
     ...(o.nonCodeCandidates === undefined ? {} : { nonCodeCandidates: array(o.nonCodeCandidates, "$.nonCodeCandidates", nonCodeCandidate) }),
   };
@@ -401,6 +422,94 @@ function countsKeyedBy<K extends string>(value: unknown, at: string, keys: reado
     out[oneOf(key, `${at} key`, keys)] = count(n, `${at}.${key}`);
   }
   return out;
+}
+
+// ---- Per-file coverage (IR-specific structure) ----
+
+/**
+ * Validates coverage rows against the registry and the recorded files:
+ *
+ *  - each path carries at most one row, and every parsed or skipped file
+ *    carries exactly one;
+ *  - `language` null ⟺ `adapter` null — an undetermined language has no
+ *    adapter, so an adapter claim identifies the language;
+ *  - a non-null adapter must be exactly what the language's registry entry
+ *    registers — an unrecognized adapter is an unsupported claim;
+ *  - a non-null language must own the path's extension (case-insensitive) —
+ *    the model has the path, so a mismatch is rejectable, not speculative;
+ *  - `complete`/`partial` require an available adapter and a listed file —
+ *    nothing is parsed without an adapter and without being recorded;
+ *  - `unavailable` with an available adapter requires a skip record (an
+ *    adapter that produced nothing is a skipped file, never a mystery);
+ *  - a row for a path recorded nowhere must be recognized-but-unsupported —
+ *    the only standalone shape the model can evidence. This is what keeps
+ *    `fileCoverage` from becoming a classification of arbitrary files: a row
+ *    with no file record and no language would classify an unknown file as
+ *    relevant on no evidence, so it is rejected rather than guessed.
+ */
+function fileCoverageRows(
+  value: unknown,
+  at: string,
+  paths: ReadonlySet<string>,
+  skippedPaths: ReadonlySet<string>,
+): IrFileCoverage[] {
+  const rows = array(value, at, fileCoverageRow);
+  const seen = new Set<string>();
+  for (const [i, row] of rows.entries()) {
+    const here = `${at}[${i}]`;
+    if (seen.has(row.path)) throw new IrContractError(`${here}.path`, `duplicate coverage entry for ${row.path}`);
+    seen.add(row.path);
+    if (row.adapter !== null && row.language === null) {
+      throw new IrContractError(`${here}.adapter`, `${row.path} has an adapter but no language`);
+    }
+    if (row.language !== null) {
+      const entry = LANGUAGE_REGISTRY.find((candidate) => candidate.id === row.language);
+      if (entry === undefined) {
+        throw new IrContractError(`${here}.language`, `unregistered language ${JSON.stringify(row.language)}`);
+      }
+      if (entry.adapter !== row.adapter) {
+        throw new IrContractError(`${here}.adapter`, `${row.language} does not register adapter ${JSON.stringify(row.adapter)} — an unsupported claim`);
+      }
+      if (detectLanguage(row.path) !== row.language) {
+        throw new IrContractError(`${here}.language`, `${row.path}'s extension is not owned by ${row.language}`);
+      }
+    }
+    if (row.extraction === "complete" || row.extraction === "partial") {
+      if (row.adapter === null) {
+        throw new IrContractError(`${here}.extraction`, `${row.path} is ${row.extraction} but has no adapter`);
+      }
+      if (!paths.has(row.path)) {
+        throw new IrContractError(`${here}.extraction`, `${row.path} is ${row.extraction} but is not a file in the IR`);
+      }
+    } else if (row.adapter !== null) {
+      if (!skippedPaths.has(row.path)) {
+        throw new IrContractError(`${here}.extraction`, `${row.path} has an available adapter, nothing extracted, and no skip record`);
+      }
+    } else if (row.language === null && !skippedPaths.has(row.path)) {
+      throw new IrContractError(
+        `${here}.language`,
+        `${row.path} is recorded nowhere and its language is undetermined — only recognized-but-unsupported files may appear without a file record`,
+      );
+    }
+  }
+  for (const path of paths) {
+    if (!seen.has(path)) throw new IrContractError(at, `parsed file ${path} has no coverage entry`);
+  }
+  for (const path of skippedPaths) {
+    if (!seen.has(path)) throw new IrContractError(at, `skipped file ${path} has no coverage entry`);
+  }
+  return rows;
+}
+
+function fileCoverageRow(value: unknown, at: string): IrFileCoverage {
+  const o = object(value, at);
+  const language = o.language === null ? null : oneOf(o.language, `${at}.language`, LANGUAGE_REGISTRY.map((entry) => entry.id));
+  return {
+    path: string(o.path, `${at}.path`),
+    language,
+    adapter: o.adapter === null ? null : string(o.adapter, `${at}.adapter`),
+    extraction: oneOf(o.extraction, `${at}.extraction`, EXTRACTION_STATES),
+  };
 }
 
 // ---- Symbols (IR-specific structure) ----
