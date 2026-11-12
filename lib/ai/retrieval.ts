@@ -397,6 +397,14 @@ export type RetrievedWindow = {
   score: number;
   text: string;
   reason: string;
+  /**
+   * Which retrieval strategies produced this window ("symbol", "route",
+   * "path", "explicit-path", "role", "entry", "expansion", "derive"),
+   * carried through from the candidate that was served (unioned when
+   * candidates merged). Diagnostic only: selection and scoring never read
+   * it here, and hand-constructed results may omit it.
+   */
+  strategies?: string[];
   /** Relationship provenance of the window ("indexed" | "derived"). */
   provenance?: "indexed" | "derived";
 };
@@ -1852,6 +1860,10 @@ export async function retrieveGroundedContext(
       score: candidate.score,
       text,
       reason: candidate.reason,
+      // Pure data passthrough for diagnostics: the served window carries the
+      // strategies its candidate was seeded by. Nothing downstream reads this
+      // for selection or scoring; hand-constructed candidates may omit it.
+      ...(candidate.strategies ? { strategies: candidate.strategies } : {}),
       provenance: candidate.provenance,
     });
   };

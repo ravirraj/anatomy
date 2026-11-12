@@ -301,12 +301,16 @@ export type RetrievalAggregate = {
   };
 };
 
-/** Minimal window identity shared by the 3B.2 trace structures. */
+/** Minimal window identity shared by the 3B.2 trace structures. Batch 3:
+ * snapshots may carry the window's strategy list and reason (optional,
+ * evaluation-only passthrough; the measurement ignores them). */
 export type PassWindowSnapshot = {
   fileId: string;
   path: string;
   startLine: number;
   endLine: number;
+  strategies?: string[];
+  reason?: string;
 };
 
 /** Loop metadata the measurement consumes, stripped of timing. `null` means

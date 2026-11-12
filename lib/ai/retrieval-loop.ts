@@ -132,8 +132,18 @@ export type IterationPass = {
    * as budget exhaustion. */
   rejectedBudget?: number;
   /** Actual post-pass window state (the merge's adopted result). Historical
-   * snapshots; windows later replaced or removed do not appear here. */
-  windowsAfterPass?: { fileId: string; path: string; startLine: number; endLine: number }[];
+   * snapshots; windows later replaced or removed do not appear here.
+   * Batch 3: snapshots carry the window's strategy list and reason when the
+   * window has them, so a diagnostic can attribute strategies to files that
+   * were later displaced. Evaluation-only; additive and optional. */
+  windowsAfterPass?: {
+    fileId: string;
+    path: string;
+    startLine: number;
+    endLine: number;
+    strategies?: string[];
+    reason?: string;
+  }[];
   /** Enforced-ledger figures immediately before the merge. */
   charactersBefore?: number;
   renderedCharactersBefore?: number;
@@ -157,6 +167,15 @@ export type IterationPass = {
   affiliationRejected?: number;
   intraPassDuplicates?: number;
   candidatesCollected?: number;
+  // ── Phase 4 Batch 3 trace (additive, optional; evaluation-only) ─────────────
+  /** Distinct file paths seen across this pass's focused retrievals, before
+   * the affiliation gate (the `affiliationRejected` windows' files included).
+   * Sorted alphabetically; evaluation-only — selection never reads it. */
+  candidateFilesSeen?: string[];
+  /** Distinct file paths among candidates the affiliation gate collected,
+   * before the merge (the merge's candidate set). Sorted alphabetically;
+   * evaluation-only. */
+  collectedCandidateFiles?: string[];
 };
 
 /** Per-window pass attribution from actual loop merge events (Phase 3B.2).
@@ -191,8 +210,17 @@ export type IterativeRetrievalResult = {
   totalMs: number;
   // ── Phase 3B.2 trace (additive, optional; evaluation-only consumers) ────────
   /** The pass-0 window state the loop started from (base retrieval output,
-   * minimal descriptors). Absent only for hand-constructed results. */
-  initialWindows?: { fileId: string; path: string; startLine: number; endLine: number }[];
+   * minimal descriptors plus — Batch 3 — each window's strategy list and
+   * reason when present, so anchor classification reads base windows only).
+   * Absent only for hand-constructed results. */
+  initialWindows?: {
+    fileId: string;
+    path: string;
+    startLine: number;
+    endLine: number;
+    strategies?: string[];
+    reason?: string;
+  }[];
   /** Final retained-window pass attribution; always mirrors
    * `result.windows` (same set, keyed by fileId + line range). */
   windowProvenance?: WindowProvenanceEntry[];
@@ -658,7 +686,16 @@ export async function retrieveWithCoverageLoop(
     ]),
   );
   const minimalWindows = (list: RetrievedWindow[]) =>
-    list.map((w) => ({ fileId: w.fileId, path: w.path, startLine: w.startLine, endLine: w.endLine }));
+    list.map((w) => ({
+      fileId: w.fileId,
+      path: w.path,
+      startLine: w.startLine,
+      endLine: w.endLine,
+      // Batch 3 diagnostic passthrough: strategy list and reason when the
+      // window carries them (served windows do; hand-built ones may not).
+      ...(w.strategies ? { strategies: w.strategies } : {}),
+      ...(w.reason ? { reason: w.reason } : {}),
+    }));
 
   // Symbol knowledge for appendix accounting: every retrieval pass (base and
   // focused alike) loads the symbol rows of the files it served, and
@@ -846,6 +883,8 @@ export async function retrieveWithCoverageLoop(
     // Phase 3B.2 funnel trace: where every focused window went — accepted as
     // a candidate, rejected by the affiliation gate, skipped as an
     // intra-pass duplicate, or (via the merge counters) rejected later.
+    // Batch 3 additionally records the file identities at both stages.
+    const focusedSeenPaths: string[] = [];
     let focusedWindowsSeen = 0;
     let affiliationRejected = 0;
     let intraPassDuplicates = 0;
@@ -873,6 +912,7 @@ export async function retrieveWithCoverageLoop(
       }
       for (const win of focused.windows) {
         focusedWindowsSeen += 1;
+        focusedSeenPaths.push(win.path);
         // Per-pair acceptance (Phase 1D: V1/V7b self-named drills). A window
         // is a candidate when it affiliates with one of the missing pairs'
         // categories. A self-named pair (category === token — the concept's
@@ -968,6 +1008,11 @@ export async function retrieveWithCoverageLoop(
       affiliationRejected,
       intraPassDuplicates,
       candidatesCollected: candidates.length,
+      // Phase 4 Batch 3 trace (additive): candidate file identities at both
+      // funnel stages, so a diagnostic can distinguish a file the focused
+      // queries saw from one the affiliation gate let through to the merge.
+      candidateFilesSeen: [...new Set(focusedSeenPaths)].sort(),
+      collectedCandidateFiles: [...new Set(candidates.map((c) => c.path))].sort(),
     });
 
     if (merged.added === 0) {
