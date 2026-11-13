@@ -438,7 +438,15 @@ function applyAdapters(
     for (const { candidate, sourceFile } of parsed) {
       if (candidate.project !== project) continue;
       files.push({ path: withinProject(project, candidate.path), source: sourceFile });
-      entries.push({ path: candidate.path, absolutePath: candidate.absolutePath, source: sourceFile });
+      // `parsed` is in the walker's own order (walk.candidates), so the rank
+      // this project's files reach here IS the original walk order — recorded
+      // on the view entry, whose files array is sorted by path.
+      entries.push({
+        path: candidate.path,
+        absolutePath: candidate.absolutePath,
+        source: sourceFile,
+        walkOrder: entries.length,
+      });
     }
     const view = buildFrameworkView({
       project,

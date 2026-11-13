@@ -179,8 +179,15 @@ export type ViewExport =
   | { form: "alias"; name: string; line: number }
   | { form: "star"; line: number };
 
-/** A decorator: the callee as written, its arguments, and its own line (route decorators report this line, not the member's). */
-export type ViewDecorator = { name: string; arguments: readonly ViewArgument[]; line: number };
+/**
+ * A decorator: the callee as written, its arguments, and its own line (route
+ * decorators report this line, not the member's). `bare` marks the spelling
+ * without a call: `@Controller` is bare, `@Controller()` is not — even at
+ * zero arguments the call form carries no flag, so the two stay structurally
+ * distinct and a consumer that requires the call form never reads the bare
+ * spelling as one.
+ */
+export type ViewDecorator = { name: string; arguments: readonly ViewArgument[]; line: number; bare?: boolean };
 
 /**
  * A declaration the framework adapters read: classes with their decorators,
@@ -189,7 +196,10 @@ export type ViewDecorator = { name: string; arguments: readonly ViewArgument[]; 
  * app/router recognition. The line is the declaration's start, which for a
  * decorated member is the decorator's line — the same line the parser reports
  * for a route. Methods carry the parser's lexicon kind ("function", as symbols
- * do); the qualified name carries the scope.
+ * do); the qualified name carries the scope. A class with no written name (an
+ * anonymous class, which the legacy route readers still process) is recorded
+ * with `name: ""` — nothing is written there, and no written name is ever "",
+ * so the empty string is the fact, not a synthetic name.
  */
 export type ViewDeclaration = {
   name: string;
@@ -197,6 +207,27 @@ export type ViewDeclaration = {
   line: number;
   decorators: readonly ViewDecorator[];
   initializerCall: string | null;
+  /**
+   * The owning class of a method declaration: the 1-based ordinal of that
+   * class among the file's class declarations in document order — the same
+   * order the declarations array carries them in, so counting the
+   * `kind: "class"` entries recovers the class. Present only when the
+   * declaration's name cannot identify its owner within the file: a method
+   * of an anonymous class (no class name to qualify with), a computed-name
+   * method (no written method name), or a method of a class whose written
+   * name another class in the same file also writes (the name would group
+   * both). A named class whose name is unique keeps the `Cls.method`
+   * qualified name and no field; distinct ordinals keep same-named classes'
+   * method groups apart.
+   */
+  ownerClass?: number;
+  /**
+   * True only for a method whose name is a computed property name: nothing
+   * static is written, the expression is never evaluated, and `name` is "".
+   * The flag — not the empty string — is the fact, so the named/computed
+   * distinction survives even though both spell the name as "".
+   */
+  nameComputed?: boolean;
   /**
    * The initializer's callee in the same structural shape ViewCall carries:
    * `receiver` is the plain-identifier callee name (or the object of a
@@ -232,6 +263,16 @@ export type ViewCall = {
 /** Everything the adapters need about one parsed file, scoped to the view's project. */
 export type ViewFile = {
   path: string;
+  /**
+   * The file's rank in the original repository walk order (0-based, counted
+   * over the project's parsed files in the order the walker produced them),
+   * when the caller tracked it. `files` itself stays sorted by path; a
+   * consumer that must iterate in the walker's own order — e.g. to name the
+   * first offending file in a withhold reason exactly as the legacy route
+   * readers did — sorts a copy by this field. Absent when the caller didn't
+   * carry the walk order, in which case the path-sorted order is all there is.
+   */
+  walkOrder?: number;
   /** From the Phase 5 language registry. Null when no language owns the extension. */
   language: LanguageId | null;
   /** Values of the leading directive prologue ("use server", "use strict"): the run of string-literal statements at the top. */

@@ -16,7 +16,8 @@
 // against parseRepository's own output keep the replay honest: if the mirror
 // drifts from the real parse, the agreement checks fail.
 
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { Project, ts, type SourceFile } from "ts-morph";
 import { parseRepository, selectFiles, type Selection } from "../lib/parser/index.ts";
@@ -42,6 +43,7 @@ import {
 } from "../lib/parser/adapters/types.ts";
 import { detectLanguage } from "../lib/ir/languages.ts";
 import type { WalkResult } from "../lib/parser/walk.ts";
+import { withinProject } from "../lib/parser/walk.ts";
 import { FIXTURES, readBaseline } from "./test-fixtures-shared.ts";
 
 const results: string[] = [];
@@ -1534,6 +1536,925 @@ function handler5(_q, s) { s.json({}); }
     pass("orchestration: routesFromView is called with the same view variable roleOf read; the legacy fallback stays");
   } else {
     fail(`orchestration: routesFromView/legacy fallback pin broken (prefersView=${prefersView}, keepsLegacy=${keepsLegacy})`);
+  }
+}
+
+// ---- Section 9: FrameworkView compatibility extensions (Batch 3.3b.1) ----
+
+console.log("=== 9. Compatibility extensions: bare decorators, anonymous/computed declarations, walk order ===");
+
+// 1-based line of a needle's occurrence in a file's source (0 = first), for
+// pinning exact line numbers in synthetic expectations.
+const lineOf = (content: string, needle: string, occurrence = 0): number => {
+  let at = -1;
+  for (let i = 0; i <= occurrence; i += 1) {
+    at = content.indexOf(needle, at + 1);
+    if (at < 0) throw new Error(`needle not found (occurrence ${i}): ${JSON.stringify(needle)}`);
+  }
+  return content.slice(0, at).split("\n").length;
+};
+
+// N1: a bare decorator (`@Controller`) is marked as such; the call form
+// (`@Controller()`) carries no flag even at zero arguments, so an empty
+// argument list alone never reads as the bare spelling. Name, arguments and
+// line survive on both forms.
+{
+  const content = `const Controller: unknown = undefined;
+const Get: unknown = undefined;
+
+@Controller
+class Bare {
+  @Get
+  touch() {}
+}
+
+@Controller()
+class Called {
+  @Get("x")
+  poke() {}
+}
+`;
+  const file = synthFile("syn-decorator-forms.ts", content);
+  const view = buildSynthetic([file]);
+  const declarations = new Map(view.files[0]!.declarations.map((declaration) => [declaration.name, declaration]));
+  expect(
+    deepEqual(declarations.get("Bare")?.decorators, [
+      { name: "Controller", arguments: [], line: lineOf(content, "@Controller\nclass Bare"), bare: true },
+    ] satisfies ViewFile["declarations"][number]["decorators"], "$"),
+    "N1: the bare @Controller is marked bare, with its own line and no arguments",
+  );
+  expect(
+    deepEqual(declarations.get("Called")?.decorators, [
+      { name: "Controller", arguments: [], line: lineOf(content, "@Controller()\nclass Called") },
+    ] satisfies ViewFile["declarations"][number]["decorators"], "$"),
+    "N1: the call-form @Controller() at zero arguments carries no bare flag — the forms stay distinct",
+  );
+  expect(
+    deepEqual(declarations.get("Bare.touch")?.decorators, [
+      { name: "Get", arguments: [], line: lineOf(content, "@Get\n  touch"), bare: true },
+    ] satisfies ViewFile["declarations"][number]["decorators"], "$"),
+    "N1: a bare method decorator is marked bare",
+  );
+  expect(
+    deepEqual(declarations.get("Called.poke")?.decorators, [
+      { name: "Get", arguments: [{ kind: "string", value: "x" }], line: lineOf(content, '@Get("x")') },
+    ] satisfies ViewFile["declarations"][number]["decorators"], "$"),
+    "N1: the call-form method decorator keeps its argument and line, unmarked",
+  );
+}
+
+// N2: anonymous classes and computed-name methods — the declarations the
+// legacy route readers process but the view used to drop — are carried in
+// document order, with ownerClass giving every method its class by per-file
+// ordinal. Nothing is evaluated or invented: a computed name is "" and
+// flagged, and ownership never depends on a synthetic name.
+{
+  const content = `const Controller: unknown = undefined;
+const Get: unknown = undefined;
+
+@Get()
+class Twin {
+  @Get()
+  alpha() {}
+
+  @Get()
+  ["beta"]() {}
+}
+
+@Get()
+class Twin {
+  @Get()
+  alpha() {}
+
+  @Get()
+  extra() {}
+}
+
+export default @Get()
+class {
+  @Get()
+  index() {}
+
+  @Get()
+  ["gamma"]() {}
+}
+`;
+  const file = synthFile("syn-declaration-ownership.ts", content);
+  const view = buildSynthetic([file]);
+  const decls = view.files[0]!.declarations;
+  expect(
+    deepEqual(decls, [
+      {
+        name: "Twin",
+        kind: "class",
+        line: lineOf(content, "@Get()\nclass Twin"),
+        decorators: [{ name: "Get", arguments: [], line: lineOf(content, "@Get()\nclass Twin") }],
+        initializerCall: null,
+      },
+      {
+        name: "Twin.alpha",
+        kind: "function",
+        line: lineOf(content, "@Get()\n  alpha"),
+        decorators: [{ name: "Get", arguments: [], line: lineOf(content, "@Get()\n  alpha") }],
+        initializerCall: null,
+        ownerClass: 1,
+      },
+      {
+        name: "",
+        kind: "function",
+        line: lineOf(content, '@Get()\n  ["beta"]'),
+        decorators: [{ name: "Get", arguments: [], line: lineOf(content, '@Get()\n  ["beta"]') }],
+        initializerCall: null,
+        ownerClass: 1,
+        nameComputed: true,
+      },
+      {
+        name: "Twin",
+        kind: "class",
+        line: lineOf(content, "@Get()\nclass Twin", 1),
+        decorators: [{ name: "Get", arguments: [], line: lineOf(content, "@Get()\nclass Twin", 1) }],
+        initializerCall: null,
+      },
+      {
+        name: "Twin.alpha",
+        kind: "function",
+        line: lineOf(content, "@Get()\n  alpha", 1),
+        decorators: [{ name: "Get", arguments: [], line: lineOf(content, "@Get()\n  alpha", 1) }],
+        initializerCall: null,
+        ownerClass: 2,
+      },
+      {
+        name: "Twin.extra",
+        kind: "function",
+        line: lineOf(content, "@Get()\n  extra"),
+        decorators: [{ name: "Get", arguments: [], line: lineOf(content, "@Get()\n  extra") }],
+        initializerCall: null,
+        ownerClass: 2,
+      },
+      {
+        name: "",
+        kind: "class",
+        line: lineOf(content, "@Get()\nclass {"),
+        decorators: [{ name: "Get", arguments: [], line: lineOf(content, "@Get()\nclass {") }],
+        initializerCall: null,
+      },
+      {
+        name: "index",
+        kind: "function",
+        line: lineOf(content, "@Get()\n  index"),
+        decorators: [{ name: "Get", arguments: [], line: lineOf(content, "@Get()\n  index") }],
+        initializerCall: null,
+        ownerClass: 3,
+      },
+      {
+        name: "",
+        kind: "function",
+        line: lineOf(content, '@Get()\n  ["gamma"]'),
+        decorators: [{ name: "Get", arguments: [], line: lineOf(content, '@Get()\n  ["gamma"]') }],
+        initializerCall: null,
+        ownerClass: 3,
+        nameComputed: true,
+      },
+      { name: "Controller", kind: "const", line: lineOf(content, "const Controller"), decorators: [], initializerCall: null },
+      { name: "Get", kind: "const", line: lineOf(content, "const Get"), decorators: [], initializerCall: null },
+    ] satisfies ViewFile["declarations"], "$"),
+    "N2: anonymous classes, computed-name methods and duplicate class names are carried in document order with ordinal ownership",
+  );
+  const classes = decls.filter((declaration) => declaration.kind === "class");
+  expect(
+    deepEqual(classes.map((declaration) => declaration.name), ["Twin", "Twin", ""] satisfies string[], "$"),
+    "N2: three class declarations in document order; the anonymous one carries no name",
+  );
+  expect(
+    deepEqual(decls.filter((declaration) => declaration.name === "Twin.alpha").map((declaration) => declaration.ownerClass), [1, 2] satisfies (number | undefined)[], "$"),
+    "N2: same-named classes' same-named methods separate by owner ordinal",
+  );
+  expect(
+    deepEqual(classes.map((_, index) => decls.filter((declaration) => declaration.ownerClass === index + 1).length), [2, 2, 2] satisfies number[], "$"),
+    "N2: each class recovers exactly its own two methods by counting class declarations in order",
+  );
+  expect(
+    deepEqual(buildSynthetic([file]), buildSynthetic([file]), "$"),
+    "N2: identity and ownership are deterministic across repeated builds",
+  );
+}
+
+// N3: the view records each file's rank in the repository walk's original
+// order, so a consumer can iterate the walker's own order — naming the first
+// offending file in a withhold reason exactly as the legacy route readers
+// did — while `files` stays sorted by path. The synthetic repo makes the two
+// orders disagree: the walker visits src/index.js before src.js; the path
+// sort reverses them.
+{
+  const versioningContent = "app.enableVersioning();\n";
+  const dir = mkdtempSync(path.join(tmpdir(), "adapter-view-walk-"));
+  try {
+    mkdirSync(path.join(dir, "src"), { recursive: true });
+    writeFileSync(path.join(dir, "src", "index.js"), versioningContent, "utf8");
+    writeFileSync(path.join(dir, "src.js"), versioningContent, "utf8");
+
+    const selection = selectFiles(dir);
+    const walkOrder = selection.walk.candidates.map((candidate) => candidate.path);
+    expect(
+      deepEqual(walkOrder, ["src/index.js", "src.js"] satisfies string[], "$"),
+      "N3: the walker's actual output visits src/index.js before src.js (per-directory entry sort, not a path sort)",
+    );
+
+    const entries = selection.walk.candidates.map((candidate, rank) => ({
+      path: candidate.path,
+      absolutePath: candidate.absolutePath,
+      source: syntheticProject.createSourceFile(candidate.absolutePath, candidate.content, { overwrite: true }),
+      walkOrder: rank,
+    }));
+    const view = buildFrameworkView({ project: ".", files: entries, skipped: [], resolveSpecifier: stubResolve });
+
+    expect(
+      deepEqual(view.files.map((file) => file.path), ["src.js", "src/index.js"] satisfies string[], "$"),
+      "N3: view.files stays path-sorted — which here reverses the walk order",
+    );
+    expect(
+      deepEqual(view.files.map((file) => [file.path, file.walkOrder]), [["src.js", 1], ["src/index.js", 0]] satisfies (string | number | undefined)[][], "$"),
+      "N3: each file's walkOrder is its rank in the walker's original order",
+    );
+    const byWalkOrder = [...view.files].sort((a, b) => (a.walkOrder ?? 0) - (b.walkOrder ?? 0));
+    expect(
+      deepEqual(byWalkOrder.map((file) => file.path), walkOrder satisfies string[], "$"),
+      "N3: sorting a copy by walkOrder recovers the walker's original order",
+    );
+    expect(
+      deepEqual(view.files.every((file) => file.calls.some((call) => call.member === "enableVersioning")), true, "$"),
+      "N3: both files' versioning calls are carried (per-file document order intact)",
+    );
+
+    // The legacy reader — iterating in walk order — withholds naming the
+    // FIRST offender; iterating path-sorted would name the other. The
+    // walkOrder metadata is what lets a view consumer name the same file.
+    const sources = new Map(entries.map((entry) => [entry.path, entry.source]));
+    const legacyWalk = nestjsAdapter.routes({ files: byWalkOrder.map((file) => ({ path: file.path, source: sources.get(file.path)! })), unparsed: [] });
+    expect(
+      deepEqual(legacyWalk.withheld, "src/index.js enables versioning, which can add a version to any path", "$"),
+      "N3: legacy, iterating in walk order, names the first walk-ordered offender — recoverable from the metadata",
+    );
+    const legacySorted = nestjsAdapter.routes({ files: view.files.map((file) => ({ path: file.path, source: sources.get(file.path)! })), unparsed: [] });
+    expect(
+      deepEqual(legacySorted.withheld, "src.js enables versioning, which can add a version to any path", "$"),
+      "N3: path-sorted iteration would name the other file — the divergence the metadata exists to repair",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// The same recovery for the RouterModule withholding, whose reason also names
+// the first offending file in iteration order.
+{
+  const moduleContent = 'import { RouterModule } from "@nestjs/core";\n';
+  const dir = mkdtempSync(path.join(tmpdir(), "adapter-view-walk-rm-"));
+  try {
+    mkdirSync(path.join(dir, "src"), { recursive: true });
+    writeFileSync(path.join(dir, "src", "index.ts"), moduleContent, "utf8");
+    writeFileSync(path.join(dir, "src.ts"), moduleContent, "utf8");
+
+    const selection = selectFiles(dir);
+    const walkOrder = selection.walk.candidates.map((candidate) => candidate.path);
+    expect(
+      deepEqual(walkOrder, ["src/index.ts", "src.ts"] satisfies string[], "$"),
+      "N3: the walker's actual output visits src/index.ts before src.ts",
+    );
+
+    const entries = selection.walk.candidates.map((candidate, rank) => ({
+      path: candidate.path,
+      absolutePath: candidate.absolutePath,
+      source: syntheticProject.createSourceFile(candidate.absolutePath, candidate.content, { overwrite: true }),
+      walkOrder: rank,
+    }));
+    const view = buildFrameworkView({ project: ".", files: entries, skipped: [], resolveSpecifier: stubResolve });
+    expect(
+      deepEqual(
+        view.files.every((file) =>
+          file.imports.some((imported) => imported.specifier === "@nestjs/core" && imported.bindings.some((binding) => binding.imported === "RouterModule")),
+        ),
+        true,
+        "$",
+      ),
+      "N3: both files' RouterModule imports are carried",
+    );
+    const byWalkOrder = [...view.files].sort((a, b) => (a.walkOrder ?? 0) - (b.walkOrder ?? 0));
+    const sources = new Map(entries.map((entry) => [entry.path, entry.source]));
+    const legacy = nestjsAdapter.routes({ files: byWalkOrder.map((file) => ({ path: file.path, source: sources.get(file.path)! })), unparsed: [] });
+    expect(
+      deepEqual(legacy.withheld, "src/index.ts uses RouterModule, which prefixes whole modules", "$"),
+      "N3: the first RouterModule importer in walk order is the one legacy names, and the metadata recovers it",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// A caller that doesn't track the walk order carries none: the field is
+// optional end to end, so nothing existing changes shape.
+{
+  const file = synthFile("syn-no-walk-order.ts", "export const x = 1;\n");
+  const view = buildSynthetic([file]);
+  expect(deepEqual(view.files[0]?.walkOrder, undefined, "$"), "N3: a caller that passes no walk order carries none");
+}
+
+// ---- Section 10: NestJS routes over the view (Batch 3.3b.2) ----
+
+console.log("=== 10. NestJS route migration: view-fed routesFromView equals the legacy report ===");
+
+// The acceptance is strict, as in Section 8: the complete RouteReport must be
+// what it was when nestRoutes read the source trees — every route, omission,
+// withheld gate, line number and record order included. The legacy reader
+// (still in nestjs.ts until Batch 3.3d) is the behavioral specification; the
+// view reader sees the same parsed sources, so a deep-equal of the two
+// complete reports over the real fixture and over every synthetic shape proves
+// the migration changed nothing — including its quirks (bare identifier
+// versioning calls undetected, bare decorators unrecognized, the version
+// property's precedence, computed keys and spreads).
+
+// One comparison point: the same entries feed both readers (sorted by path,
+// the order view.files carries when no walk order is attached), `unparsed`
+// goes to both untouched, and the complete reports must be deeply equal.
+const nestjsReportDiff = (
+  what: string,
+  entries: readonly ViewSourceEntry[],
+  unparsed: readonly string[] = [],
+): { legacy: RouteReport; view: RouteReport } => {
+  const ordered = [...entries].sort((a, b) => a.path.localeCompare(b.path));
+  const legacy = nestjsAdapter.routes({ files: ordered.map((entry) => ({ path: entry.path, source: entry.source })), unparsed });
+  const view = nestjsAdapter.routesFromView!(buildSynthetic(ordered, [], "."), unparsed);
+  expect(
+    deepEqual(legacy, view, "$"),
+    `${what}: the view-based RouteReport equals the legacy report (routes, omitted, withheld, order)`,
+  );
+  return { legacy, view };
+};
+
+// 1. The real fixture: complete-report equivalence plus the frozen baseline.
+{
+  const entry = corpus.get("two-framework-monorepo");
+  if (!entry) fail("two-framework-monorepo: corpus entry missing");
+  else {
+    const project = "packages/api";
+    const view = entry.views.get(project);
+    const files = entry.replay.parsed
+      .filter((parsed) => parsed.project === project)
+      .map((parsed) => ({ path: withinProject(project, parsed.path), source: parsed.source }));
+    const unparsed = entry.replay.skipped
+      .filter((f) => entry.walk.projectOf.get(f.path) === project && f.reason !== "declaration-file")
+      .map((f) => withinProject(project, f.path));
+    if (!view) fail("two-framework-monorepo: packages/api view missing");
+    else {
+      const legacy = nestjsAdapter.routes({ files, unparsed });
+      const viewReport = nestjsAdapter.routesFromView!(view, unparsed);
+      expect(
+        deepEqual(legacy, viewReport, "$"),
+        "nestjs fixture: the view-based RouteReport deep-equals the legacy report over packages/api",
+      );
+      const frozen = JSON.parse(readBaseline(path.join(FIXTURES, "two-framework-monorepo", "expected.json"))) as ParseResult;
+      // The frozen baseline names files the way the parser records routes —
+      // repository-relative — while a RouteReport is project-relative.
+      const unique = new Map(
+        viewReport.routes.map((r) => [
+          `${r.method} ${r.pattern} ${r.path}`,
+          { file: `${project}/${r.path}`, method: r.method, pattern: r.pattern, line: r.line },
+        ]),
+      );
+      const folded = [...unique.values()].sort(
+        (a, b) => a.pattern.localeCompare(b.pattern) || a.method.localeCompare(b.method) || a.file.localeCompare(b.file),
+      );
+      expect(
+        deepEqual(folded, frozen.routes, "$"),
+        "nestjs fixture: the report's routes, deduped last-wins and sorted, equal the frozen expected.json",
+      );
+      expect(deepEqual(viewReport.withheld, null, "$"), "nestjs fixture: the report is not withheld, as frozen");
+      expect(
+        deepEqual(frozen.coverage.routes.withheld, [], "$"),
+        "nestjs fixture: no project is withheld in the frozen expected.json",
+      );
+    }
+  }
+}
+
+// 2. Bootstrap + single literal prefix: NestFactory.create counts, the
+// prefix composes into every pattern, routes keep their decorator lines.
+{
+  const content = `import { NestFactory } from "@nestjs/core";
+import { Controller, Get, Post } from "@nestjs/common";
+
+@Controller("/users")
+class UsersController {
+  @Get()
+  list() {}
+  @Post("create")
+  create() {}
+}
+
+async function bootstrap() {
+  const app = await NestFactory.create(0);
+  app.setGlobalPrefix("/api");
+}
+`;
+  const file = synthFile("syn-nest-main.ts", content);
+  const { legacy } = nestjsReportDiff("bootstrap + prefix", [file]);
+  expect(
+    deepEqual(
+      routeKeys(legacy),
+      [
+        `GET /api/users syn-nest-main.ts@${lineOf(content, "@Get()\n  list")}`,
+        `POST /api/users/create syn-nest-main.ts@${lineOf(content, '@Post("create")')}`,
+      ],
+      "$",
+    ),
+    "bootstrap + prefix: the global prefix composes and the decorator lines survive",
+  );
+}
+
+// 3–6. Prefix validation, in the legacy order: more than one prefix call,
+// zero bootstraps, two bootstraps, a computed value, an options argument.
+{
+  const twiceContent = `import { Controller } from "@nestjs/common";
+
+@Controller("/x")
+class C {}
+
+app.setGlobalPrefix("/a");
+app.setGlobalPrefix("/b");
+`;
+  expect(
+    deepEqual(nestjsReportDiff("two prefix calls", [synthFile("syn-nest-prefix-twice.ts", twiceContent)]).legacy.withheld, "setGlobalPrefix is called more than once", "$"),
+    "two prefix calls: the exact withheld reason, before any bootstrap check",
+  );
+
+  const zeroContent = `app.setGlobalPrefix("/api");
+`;
+  expect(
+    deepEqual(nestjsReportDiff("zero bootstraps", [synthFile("syn-nest-no-bootstrap.ts", zeroContent)]).legacy.withheld, "setGlobalPrefix is called, but there are 0 bootstraps it could apply to", "$"),
+    "zero bootstraps: the exact withheld reason fires at 0 too",
+  );
+
+  const twoContent = `const a = await NestFactory.create(0);
+const b = await NestFactory.create(0);
+app.setGlobalPrefix("/api");
+`;
+  expect(
+    deepEqual(nestjsReportDiff("two bootstraps", [synthFile("syn-nest-two-bootstraps.ts", twoContent)]).legacy.withheld, "setGlobalPrefix is called, but there are 2 bootstraps it could apply to", "$"),
+    "two bootstraps: the exact withheld reason counts both NestFactory.create calls",
+  );
+
+  const computedContent = `const app = await NestFactory.create(0);
+app.setGlobalPrefix(basePath);
+`;
+  expect(
+    deepEqual(nestjsReportDiff("computed prefix", [synthFile("syn-nest-prefix-computed.ts", computedContent)]).legacy.withheld, "syn-nest-prefix-computed.ts sets the global prefix to a computed value", "$"),
+    "computed prefix: the withheld reason names the file",
+  );
+
+  const optionsContent = `const app = await NestFactory.create(0);
+app.setGlobalPrefix("/api", { exclude: ["a"] });
+`;
+  expect(
+    deepEqual(nestjsReportDiff("prefix options", [synthFile("syn-nest-prefix-options.ts", optionsContent)]).legacy.withheld, "syn-nest-prefix-options.ts excludes some routes from the global prefix", "$"),
+    "prefix options: a second argument excludes the whole report",
+  );
+}
+
+// 7–9. Versioning: any property-access enableVersioning call withholds
+// naming the file — chained and optional-chained receivers included — while
+// a bare identifier call stays undetected, as in the legacy scan.
+{
+  const plainContent = `app.enableVersioning();
+`;
+  expect(
+    deepEqual(nestjsReportDiff("versioning", [synthFile("syn-nest-versioning.ts", plainContent)]).legacy.withheld, "syn-nest-versioning.ts enables versioning, which can add a version to any path", "$"),
+    "versioning: the exact withheld reason names the file",
+  );
+
+  const chainedContent = `globalApp.versioning.enableVersioning();
+`;
+  expect(
+    deepEqual(nestjsReportDiff("chained versioning", [synthFile("syn-nest-versioning-chained.ts", chainedContent)]).legacy.withheld, "syn-nest-versioning-chained.ts enables versioning, which can add a version to any path", "$"),
+    "chained versioning: a chained receiver is still detected",
+  );
+
+  const optionalContent = `app?.enableVersioning();
+`;
+  expect(
+    deepEqual(nestjsReportDiff("optional-chained versioning", [synthFile("syn-nest-versioning-optional.ts", optionalContent)]).legacy.withheld, "syn-nest-versioning-optional.ts enables versioning, which can add a version to any path", "$"),
+    "optional-chained versioning: detected, exactly as the legacy property-access scan saw it",
+  );
+
+  const bareContent = `import { Controller, Get } from "@nestjs/common";
+
+@Controller("/users")
+class UsersController {
+  @Get()
+  list() {}
+}
+
+enableVersioning(app);
+`;
+  const { legacy } = nestjsReportDiff("bare versioning call", [synthFile("syn-nest-versioning-bare.ts", bareContent)]);
+  expect(deepEqual(legacy.withheld, null, "$"), "bare versioning call: an identifier callee is NOT versioning — the legacy quirk");
+  expect(
+    deepEqual(routeKeys(legacy), [`GET /users syn-nest-versioning-bare.ts@${lineOf(bareContent, "@Get()\n  list")}`], "$"),
+    "bare versioning call: routes flow as if versioning was never there",
+  );
+}
+
+// 10–14. RouterModule: a named import from @nestjs/core withholds naming
+// the file — aliased or not — while namespace, import-equals, named-default,
+// require and an unrelated specifier stay silent, exactly as the legacy
+// named-import map saw them.
+{
+  const controller = (extra: string) => `import { Controller, Get } from "@nestjs/common";
+${extra}
+@Controller("/x")
+class C {
+  @Get("/y")
+  m() {}
+}
+`;
+  const plain = nestjsReportDiff("RouterModule plain", [synthFile("syn-nest-routermodule.ts", `import { RouterModule } from "@nestjs/core";\n`)]);
+  expect(deepEqual(plain.legacy.withheld, "syn-nest-routermodule.ts uses RouterModule, which prefixes whole modules", "$"), "RouterModule plain: the exact withheld reason");
+
+  const aliased = nestjsReportDiff("RouterModule aliased", [synthFile("syn-nest-routermodule-alias.ts", `import { RouterModule as RM } from "@nestjs/core";\n`)]);
+  expect(deepEqual(aliased.legacy.withheld, "syn-nest-routermodule-alias.ts uses RouterModule, which prefixes whole modules", "$"), "RouterModule aliased: an alias is still RouterModule");
+
+  for (const [name, extra] of [
+    ["unrelated package", `import { RouterModule } from "@nestjs/router";`],
+    ["namespace import", `import * as core from "@nestjs/core";`],
+    ["import-equals", `import core = require("@nestjs/core");`],
+    ["named default", `import { default as RM } from "@nestjs/core";`],
+    ["require", `const { RouterModule } = require("@nestjs/core");`],
+  ] as const) {
+    const content = controller(extra);
+    const { legacy } = nestjsReportDiff(`RouterModule ${name}`, [synthFile(`syn-nest-rm-${name.replace(/ /g, "-")}.ts`, content)]);
+    expect(deepEqual(legacy.withheld, null, "$"), `RouterModule ${name}: no withholding`);
+    expect(
+      deepEqual(routeKeys(legacy), [`GET /x/y ${`syn-nest-rm-${name.replace(/ /g, "-")}.ts`}@${lineOf(content, '@Get("/y")')}`], "$"),
+      `RouterModule ${name}: routes flow normally`,
+    );
+  }
+}
+
+// 15–16. Bare @Controller invents nothing; the call form is recognized.
+// (This comparison is only writable since Batch 3.3b.1 gave the view the
+// bare marker.)
+{
+  const content = `import { Controller, Get } from "@nestjs/common";
+
+@Controller
+class Bare {
+  @Get("/hidden")
+  m() {}
+}
+
+@Controller()
+class Called {
+  @Get("/found")
+  n() {}
+}
+`;
+  const { legacy } = nestjsReportDiff("bare controller", [synthFile("syn-nest-bare-controller.ts", content)]);
+  expect(
+    deepEqual(routeKeys(legacy), [`GET /found syn-nest-bare-controller.ts@${lineOf(content, '@Get("/found")')}`], "$"),
+    "bare controller: only the call-form class is a controller; the bare spelling invents no route",
+  );
+}
+
+// 17–23. Controller and method path shapes, every supported method
+// decorator, unknown decorators, and every omission — one kitchen-sink
+// file, complete-report equality plus exact pins on the subtle outcomes.
+{
+  const content = `import { Controller, Get, Post, Put, Delete, Patch, Options, Head, Search, All, Custom } from "@nestjs/common";
+
+@Controller("/users")
+class Users {
+  @Get()
+  list() {}
+  @Post("create")
+  create() {}
+  @Put(["/a", "/b"])
+  put() {}
+  @Delete("/d")
+  del() {}
+  @Patch()
+  patch() {}
+  @Options()
+  opts() {}
+  @Head()
+  head() {}
+  @Search()
+  search() {}
+  @All()
+  all() {}
+  @Custom()
+  unknown() {}
+  @Get(path)
+  nonLiteral() {}
+  @Get(["/x", ok()])
+  mixed() {}
+}
+
+@Controller("/empty-string")
+class EmptyStr {
+  @Get("")
+  empty() {}
+}
+
+@Controller()
+class NoArg {
+  @Get("/x")
+  x() {}
+}
+
+@Controller(["/one", "/two"])
+class Arrays {
+  @Get("/leaf")
+  leaf() {}
+}
+
+@Controller([])
+class EmptyArr {
+  @Get("/never")
+  never() {}
+}
+
+@Controller({ path: "/obj" })
+class ObjPath {
+  @Get("/deep")
+  deep() {}
+}
+
+@Controller({})
+class EmptyObj {
+  @Get("/still")
+  still() {}
+}
+
+@Controller({ path: "/v", version: "1" })
+class Versioned {
+  @Get("/hidden")
+  hidden() {}
+}
+
+@Controller({ version })
+class VersionShorthand {
+  @Get("/hidden2")
+  hidden2() {}
+}
+
+@Controller({ path })
+class ShorthandPath {
+  @Get("/hidden3")
+  hidden3() {}
+}
+
+@Controller({ ["path"]: "/ck" })
+class ComputedKey {
+  @Get("/visible")
+  visible() {}
+}
+
+@Controller({ ...rest })
+class SpreadOnly {
+  @Get("/visible2")
+  visible2() {}
+}
+`;
+  const file = synthFile("syn-nest-controllers.ts", content);
+  const { legacy } = nestjsReportDiff("controller and method path shapes", [file]);
+  expect(
+    deepEqual(
+      routeKeys(legacy),
+      [
+        `GET /users syn-nest-controllers.ts@${lineOf(content, "@Get()\n  list")}`,
+        `POST /users/create syn-nest-controllers.ts@${lineOf(content, '@Post("create")')}`,
+        `PUT /users/a syn-nest-controllers.ts@${lineOf(content, '@Put(["/a", "/b"])')}`,
+        `PUT /users/b syn-nest-controllers.ts@${lineOf(content, '@Put(["/a", "/b"])')}`,
+        `DELETE /users/d syn-nest-controllers.ts@${lineOf(content, '@Delete("/d")')}`,
+        `PATCH /users syn-nest-controllers.ts@${lineOf(content, "@Patch()\n  patch")}`,
+        `OPTIONS /users syn-nest-controllers.ts@${lineOf(content, "@Options()\n  opts")}`,
+        `HEAD /users syn-nest-controllers.ts@${lineOf(content, "@Head()\n  head")}`,
+        `SEARCH /users syn-nest-controllers.ts@${lineOf(content, "@Search()\n  search")}`,
+        `ALL /users syn-nest-controllers.ts@${lineOf(content, "@All()\n  all")}`,
+        `GET /empty-string syn-nest-controllers.ts@${lineOf(content, '@Get("")')}`,
+        `GET /x syn-nest-controllers.ts@${lineOf(content, '@Get("/x")')}`,
+        `GET /one/leaf syn-nest-controllers.ts@${lineOf(content, '@Get("/leaf")')}`,
+        `GET /two/leaf syn-nest-controllers.ts@${lineOf(content, '@Get("/leaf")')}`,
+        `GET /obj/deep syn-nest-controllers.ts@${lineOf(content, '@Get("/deep")')}`,
+        `GET /still syn-nest-controllers.ts@${lineOf(content, '@Get("/still")')}`,
+        `GET /visible syn-nest-controllers.ts@${lineOf(content, '@Get("/visible")')}`,
+        `GET /visible2 syn-nest-controllers.ts@${lineOf(content, '@Get("/visible2")')}`,
+      ],
+      "$",
+    ),
+    "path shapes: every supported method decorator maps, array and object paths compose, computed keys and spreads fall back to the empty path",
+  );
+  expect(
+    deepEqual(
+      omittedKeys(legacy).filter((key) => key.includes("isn't a string literal")),
+      [
+        `syn-nest-controllers.ts@${lineOf(content, "@Get(path)")}: @Get() is given a path that isn't a string literal`,
+        `syn-nest-controllers.ts@${lineOf(content, '@Get(["/x", ok()])')}: @Get() is given a path that isn't a string literal`,
+        `syn-nest-controllers.ts@${lineOf(content, "@Controller([])")}: @Controller() is given a path that isn't a string literal`,
+        `syn-nest-controllers.ts@${lineOf(content, "@Controller({ path })")}: @Controller() is given a path that isn't a string literal`,
+      ],
+      "$",
+    ),
+    "path shapes: an empty array, an identifier, a mixed array and a shorthand path are omitted with the exact reason, in document order",
+  );
+  expect(
+    deepEqual(
+      omittedKeys(legacy).filter((key) => key.includes("version, which changes")),
+      [
+        `syn-nest-controllers.ts@${lineOf(content, '@Controller({ path: "/v", version: "1" })')}: @Controller() sets a version, which changes the path`,
+        `syn-nest-controllers.ts@${lineOf(content, "@Controller({ version })")}: @Controller() sets a version, which changes the path`,
+      ],
+      "$",
+    ),
+    "path shapes: the version property (shorthand included) wins over path and withholds the class's methods",
+  );
+  if (routeKeys(legacy).every((key) => !key.includes("/hidden") && !key.includes("/never"))) {
+    pass("path shapes: no route is invented for omitted classes (version, shorthand path, empty array)");
+  } else {
+    fail("path shapes: an omitted class still produced a route");
+  }
+}
+
+// 24–27. Structural shapes: multiple controllers per file, two same-named
+// classes whose methods must not merge, anonymous decorated classes, and
+// computed-name methods — on both named and anonymous classes.
+{
+  const content = `import { Controller, Get } from "@nestjs/common";
+
+@Controller("/first")
+class Same {
+  @Get("/one")
+  handler() {}
+}
+
+@Controller("/second")
+class Same {
+  @Get("/two")
+  handler() {}
+}
+
+export default @Controller("/anon")
+class {
+  @Get("/three")
+  index() {}
+  @Get("/four")
+  ["computed"]() {}
+}
+
+@Controller("/computed")
+class ComputedMethods {
+  @Get("/named")
+  named() {}
+  @Get("/unnamed")
+  ["renamed"]() {}
+}
+`;
+  const { legacy } = nestjsReportDiff("structural shapes", [synthFile("syn-nest-shapes.ts", content)]);
+  expect(
+    deepEqual(
+      routeKeys(legacy),
+      [
+        `GET /first/one syn-nest-shapes.ts@${lineOf(content, '@Get("/one")')}`,
+        `GET /second/two syn-nest-shapes.ts@${lineOf(content, '@Get("/two")')}`,
+        `GET /anon/three syn-nest-shapes.ts@${lineOf(content, '@Get("/three")')}`,
+        `GET /anon/four syn-nest-shapes.ts@${lineOf(content, '@Get("/four")')}`,
+        `GET /computed/named syn-nest-shapes.ts@${lineOf(content, '@Get("/named")')}`,
+        `GET /computed/unnamed syn-nest-shapes.ts@${lineOf(content, '@Get("/unnamed")')}`,
+      ],
+      "$",
+    ),
+    "structural shapes: duplicate-named classes keep their own methods, anonymous classes are controllers, computed-name methods carry routes",
+  );
+}
+
+// 28. Multiple files: routes accumulate in the path-sorted file order the
+// view carries, each file's own document order intact.
+{
+  const make = (name: string, controllerPath: string, methodPath: string) =>
+    synthFile(name, `import { Controller, Get } from "@nestjs/common";\n\n@Controller("${controllerPath}")\nclass C {\n  @Get("${methodPath}")\n  m() {}\n}\n`);
+  const a = make("syn-nest-order-a.ts", "/a", "/one");
+  const b = make("syn-nest-order-b.ts", "/b", "/one");
+  const c = make("syn-nest-order-c.ts", "/c", "/one");
+  const { legacy } = nestjsReportDiff("multiple files", [c, a, b]);
+  expect(
+    deepEqual(
+      routeKeys(legacy),
+      [
+        `GET /a/one syn-nest-order-a.ts@${lineOf(a.source.getFullText(), '@Get("/one")')}`,
+        `GET /b/one syn-nest-order-b.ts@${lineOf(b.source.getFullText(), '@Get("/one")')}`,
+        `GET /c/one syn-nest-order-c.ts@${lineOf(c.source.getFullText(), '@Get("/one")')}`,
+      ],
+      "$",
+    ),
+    "multiple files: route order is file order then document order, identical on both readers",
+  );
+}
+
+// 31. Unparsed withholding: the exact singular and plural reasons, straight
+// from the `unparsed` argument.
+{
+  const file = synthFile("syn-nest-unparsed.ts", `const x = 1;\n`);
+  expect(
+    deepEqual(nestjsReportDiff("unparsed singular", [file], ["syn-broken.ts"]).legacy.withheld, "1 file wasn't parsed, and one could set a global prefix", "$"),
+    "unparsed: the exact singular withheld reason",
+  );
+  expect(
+    deepEqual(nestjsReportDiff("unparsed plural", [file], ["syn-broken.ts", "syn-broken2.ts"]).legacy.withheld, "2 files weren't parsed, and one could set a global prefix", "$"),
+    "unparsed: the exact plural withheld reason",
+  );
+}
+
+// 32–34. Walk order. With the metadata attached, the view reader iterates in
+// the walker's original order — the order the legacy reader received — so
+// the reports are equal AND the withhold reason names the same first
+// offender. Without the metadata, both readers see the path-sorted order and
+// are still equal, naming the other file.
+{
+  const versioningContent = "app.enableVersioning();\n";
+  const dir = mkdtempSync(path.join(tmpdir(), "nest-routes-walk-"));
+  try {
+    mkdirSync(path.join(dir, "src"), { recursive: true });
+    writeFileSync(path.join(dir, "src", "index.js"), versioningContent, "utf8");
+    writeFileSync(path.join(dir, "src.js"), versioningContent, "utf8");
+    const selection = selectFiles(dir);
+
+    const withOrder = selection.walk.candidates.map((candidate, rank) => ({
+      path: candidate.path,
+      absolutePath: candidate.absolutePath,
+      source: syntheticProject.createSourceFile(candidate.absolutePath, candidate.content, { overwrite: true }),
+      walkOrder: rank,
+    }));
+    const orderedView = buildFrameworkView({ project: ".", files: withOrder, skipped: [], resolveSpecifier: stubResolve });
+    const legacyWalk = nestjsAdapter.routes({ files: withOrder.map((entry) => ({ path: entry.path, source: entry.source })), unparsed: [] });
+    const viewWalk = nestjsAdapter.routesFromView!(orderedView, []);
+    expect(
+      deepEqual(legacyWalk, viewWalk, "$"),
+      "walk order, metadata attached: the complete reports are equal (32)",
+    );
+    expect(
+      deepEqual(viewWalk.withheld, "src/index.js enables versioning, which can add a version to any path", "$"),
+      "walk order, metadata attached: the withhold reason names the first file in the walker's original order",
+    );
+
+    const withoutOrder = selection.walk.candidates.map((candidate) => ({
+      path: candidate.path,
+      absolutePath: candidate.absolutePath,
+      source: syntheticProject.createSourceFile(candidate.absolutePath, candidate.content, { overwrite: true }),
+    }));
+    const pathView = buildFrameworkView({ project: ".", files: withoutOrder, skipped: [], resolveSpecifier: stubResolve });
+    const legacyPath = nestjsAdapter.routes({
+      files: [...withoutOrder].sort((a, b) => a.path.localeCompare(b.path)).map((entry) => ({ path: entry.path, source: entry.source })),
+      unparsed: [],
+    });
+    const viewPath = nestjsAdapter.routesFromView!(pathView, []);
+    expect(
+      deepEqual(legacyPath, viewPath, "$"),
+      "walk order, metadata absent: the fallback to view.files order keeps the reports equal (34)",
+    );
+    expect(
+      deepEqual(viewPath.withheld, "src.js enables versioning, which can add a version to any path", "$"),
+      "walk order, metadata absent: the withhold reason names the path-sorted first file — the documented divergence the metadata repairs",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+{
+  const moduleContent = 'import { RouterModule } from "@nestjs/core";\n';
+  const dir = mkdtempSync(path.join(tmpdir(), "nest-routes-walk-rm-"));
+  try {
+    mkdirSync(path.join(dir, "src"), { recursive: true });
+    writeFileSync(path.join(dir, "src", "index.ts"), moduleContent, "utf8");
+    writeFileSync(path.join(dir, "src.ts"), moduleContent, "utf8");
+    const selection = selectFiles(dir);
+    const withOrder = selection.walk.candidates.map((candidate, rank) => ({
+      path: candidate.path,
+      absolutePath: candidate.absolutePath,
+      source: syntheticProject.createSourceFile(candidate.absolutePath, candidate.content, { overwrite: true }),
+      walkOrder: rank,
+    }));
+    const view = buildFrameworkView({ project: ".", files: withOrder, skipped: [], resolveSpecifier: stubResolve });
+    const legacy = nestjsAdapter.routes({ files: withOrder.map((entry) => ({ path: entry.path, source: entry.source })), unparsed: [] });
+    const viewReport = nestjsAdapter.routesFromView!(view, []);
+    expect(
+      deepEqual(legacy, viewReport, "$"),
+      "walk order, RouterModule: the complete reports are equal over the walker's original order (33)",
+    );
+    expect(
+      deepEqual(viewReport.withheld, "src/index.ts uses RouterModule, which prefixes whole modules", "$"),
+      "walk order, RouterModule: the withhold reason names the first importer in the walker's original order",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 }
 

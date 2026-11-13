@@ -51,6 +51,15 @@ export type ViewSourceEntry = {
   /** Absolute path, for the resolver. */
   absolutePath: string;
   source: SourceFile;
+  /**
+   * The file's rank in the original repository walk order (0-based, counted
+   * over this project's parsed files in the order the walker produced them).
+   * Optional: a caller that didn't track the walk order omits it, and the
+   * view then carries none for the file. The view's `files` stay sorted by
+   * path; this rank is the way back to the walker's own iteration order for
+   * the consumers that need it.
+   */
+  walkOrder?: number;
 };
 
 export type FrameworkViewInput = {
@@ -89,6 +98,7 @@ function viewFile(project: string, entry: ViewSourceEntry, resolve: FrameworkVie
     declarations: collectDeclarations(source),
     calls: collectCalls(source),
     objectProperties: collectObjectProperties(source),
+    ...(entry.walkOrder !== undefined && { walkOrder: entry.walkOrder }),
   };
 }
 
@@ -250,26 +260,64 @@ function collectDeclarations(source: SourceFile): ViewDeclaration[] {
   const found: ViewDeclaration[] = [];
 
   // Classes and their methods: the surface the NestJS adapter reads. The
-  // qualified name carries the scope, as the parser's symbols do.
-  for (const cls of source.getClasses()) {
+  // qualified name carries the scope, as the parser's symbols do. An
+  // anonymous class binds no name but the legacy route readers still process
+  // it (its decorators and methods are read all the same), so it is recorded
+  // with `name: ""` — nothing is written there, and no written name is "".
+  // Each method records `ownerClass`, the 1-based ordinal of its class among
+  // the file's class declarations in document order, whenever its name
+  // cannot identify that class within the file: an anonymous owner, a
+  // computed method name (recorded with `name: ""` and `nameComputed`,
+  // never evaluated), or a class name another class in the file also
+  // writes. Named classes' methods with unique names keep the qualified
+  // name and no owner field.
+  const classes = source.getClasses();
+  const classNameCounts = new Map<string, number>();
+  for (const cls of classes) {
     const name = cls.getName();
-    if (name === undefined) continue; // an anonymous class binds nothing by name
+    if (name !== undefined) classNameCounts.set(name, (classNameCounts.get(name) ?? 0) + 1);
+  }
+  let classOrdinal = 0;
+  for (const cls of classes) {
+    classOrdinal += 1;
+    const name = cls.getName();
+    const needsOwner = name === undefined || (classNameCounts.get(name) ?? 0) > 1;
     found.push({
-      name,
+      name: name ?? "",
       kind: "class",
       line: cls.getStartLineNumber(),
       decorators: collectDecorators(cls.getDecorators()),
       initializerCall: null,
     });
     for (const method of cls.getMethods()) {
-      const methodName = method.getNameNode();
-      if (!Node.isIdentifier(methodName)) continue; // a computed method name is not a static name
+      const nameNode = method.getNameNode();
+      const line = method.getStartLineNumber();
+      const decorators = collectDecorators(method.getDecorators());
+      if (Node.isComputedPropertyName(nameNode)) {
+        // A computed method name is not a static name: nothing is written,
+        // nothing is evaluated, and ownership comes from `ownerClass`.
+        found.push({
+          name: "",
+          kind: "function", // methods persist as functions in the parser's lexicon
+          line,
+          decorators,
+          initializerCall: null,
+          ownerClass: classOrdinal,
+          nameComputed: true,
+        });
+        continue;
+      }
+      const staticName =
+        Node.isStringLiteral(nameNode) || Node.isNoSubstitutionTemplateLiteral(nameNode)
+          ? (nameNode.getLiteralValue() as string)
+          : nameNode.getText(); // identifier, private identifier (`#m`), numeric literal
       found.push({
-        name: `${name}.${methodName.getText()}`,
+        name: name === undefined ? staticName : `${name}.${staticName}`,
         kind: "function", // methods persist as functions in the parser's lexicon
-        line: method.getStartLineNumber(),
-        decorators: collectDecorators(method.getDecorators()),
+        line,
+        decorators,
         initializerCall: null,
+        ...(needsOwner && { ownerClass: classOrdinal }),
       });
     }
   }
@@ -327,6 +375,10 @@ function collectDecorators(decorators: readonly Decorator[]): ViewDecorator[] {
       name: call ? call.getExpression().getText() : decorator.getExpression().getText(),
       arguments: (call?.getArguments() ?? []).map((argument) => viewValue(argument, 0)),
       line: decorator.getStartLineNumber(),
+      // A bare decorator (`@Controller`, no call) is marked as such; the call
+      // form (`@Controller()`) carries no flag even at zero arguments, so an
+      // empty argument list alone never reads as the bare spelling.
+      ...(!call && { bare: true }),
     };
   });
 }
