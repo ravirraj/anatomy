@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 5,
+  "schemaVersion": 7,
   "root": "<repo>",
   "projects": [
     {
@@ -69,6 +69,14 @@
     {
       "source": "packages/calc/double.ts",
       "target": "packages/calc/shared.ts",
+      "kind": "call",
+      "typeOnly": false,
+      "specifier": "shared",
+      "line": 5
+    },
+    {
+      "source": "packages/calc/double.ts",
+      "target": "packages/calc/shared.ts",
       "kind": "import",
       "typeOnly": false,
       "specifier": "./shared",
@@ -81,29 +89,117 @@
       "name": "double",
       "kind": "function",
       "line": 4,
+      "endLine": 6,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [
+        {
+          "name": "n",
+          "type": "number"
+        }
+      ],
+      "returnType": "number",
+      "signature": "double(n: number): number",
       "file": "packages/calc/double.ts"
     },
     {
       "name": "sphere",
       "kind": "function",
       "line": 8,
+      "endLine": 10,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [
+        {
+          "name": "radius",
+          "type": "number"
+        }
+      ],
+      "returnType": "number",
+      "signature": "sphere(radius: number): number",
       "file": "packages/calc/main.ts"
     },
     {
       "name": "shared",
       "kind": "function",
       "line": 1,
+      "endLine": 3,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [],
+      "returnType": "number",
+      "signature": "shared(): number",
       "file": "packages/calc/shared.ts"
     },
     {
       "name": "area",
       "kind": "function",
       "line": 1,
+      "endLine": 3,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [
+        {
+          "name": "radius",
+          "type": "number"
+        }
+      ],
+      "returnType": "number",
+      "signature": "area(radius: number): number",
       "file": "packages/geometry/index.ts"
+    }
+  ],
+  "manifests": [
+    {
+      "path": "package.json",
+      "dir": ".",
+      "project": ".",
+      "ecosystem": "npm",
+      "name": "unlinked-workspaces",
+      "workspaces": [
+        "packages/*"
+      ],
+      "scripts": [],
+      "problems": []
+    },
+    {
+      "path": "packages/calc/package.json",
+      "dir": "packages/calc",
+      "project": ".",
+      "ecosystem": "npm",
+      "name": "@unlinked/calc",
+      "workspaces": [],
+      "scripts": [],
+      "problems": []
+    },
+    {
+      "path": "packages/geometry/package.json",
+      "dir": "packages/geometry",
+      "project": ".",
+      "ecosystem": "npm",
+      "name": "@unlinked/geometry",
+      "workspaces": [],
+      "scripts": [],
+      "problems": []
+    }
+  ],
+  "dependencies": [],
+  "configReferences": [],
+  "envDeclarations": [],
+  "entryPoints": [
+    {
+      "path": "packages/calc/main.ts",
+      "kind": "inferred",
+      "source": "package root module",
+      "manifest": null,
+      "resolved": true
+    },
+    {
+      "path": "packages/geometry/index.ts",
+      "kind": "inferred",
+      "source": "package root module",
+      "manifest": null,
+      "resolved": true
     }
   ],
   "coverage": {
@@ -150,6 +246,13 @@
           "external": 0,
           "excluded": 0,
           "unresolved": 0
+        },
+        "call": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
         }
       },
       "external": {
@@ -175,7 +278,55 @@
     "routes": {
       "omitted": [],
       "withheld": []
+    },
+    "calls": {
+      "total": 2,
+      "resolved": 1,
+      "unresolved": 1,
+      "unresolvedCalls": [
+        {
+          "from": "packages/calc/main.ts",
+          "callee": "area",
+          "line": 9,
+          "reason": "unresolved-call"
+        }
+      ]
     }
   },
-  "configs": []
+  "configs": [],
+  "nonCodeCandidates": [
+    {
+      "path": "package.json",
+      "absolutePath": "C:\\Users\\thorfinn\\projects\\cartograph\\fixtures\\unlinked-workspaces\\repo\\package.json",
+      "module": ".",
+      "content": "{\n  \"name\": \"unlinked-workspaces\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"workspaces\": [\n    \"packages/*\"\n  ]\n}\n",
+      "bytes": 117,
+      "lines": 8,
+      "hash": "91791e26da7d06d70f63dee93bb79ef75e601a1dde7f6e631a789f68df3eb852",
+      "project": ".",
+      "category": "primary_manifest"
+    },
+    {
+      "path": "packages/calc/package.json",
+      "absolutePath": "C:\\Users\\thorfinn\\projects\\cartograph\\fixtures\\unlinked-workspaces\\repo\\packages\\calc\\package.json",
+      "module": "packages/calc",
+      "content": "{\n  \"name\": \"@unlinked/calc\",\n  \"version\": \"1.0.0\",\n  \"private\": true\n}\n",
+      "bytes": 72,
+      "lines": 5,
+      "hash": "f7a8e345453514e8b6511eac180344154240590ed986b92fdc2eaac03dd3d96b",
+      "project": ".",
+      "category": "primary_manifest"
+    },
+    {
+      "path": "packages/geometry/package.json",
+      "absolutePath": "C:\\Users\\thorfinn\\projects\\cartograph\\fixtures\\unlinked-workspaces\\repo\\packages\\geometry\\package.json",
+      "module": "packages/geometry",
+      "content": "{\n  \"name\": \"@unlinked/geometry\",\n  \"version\": \"1.0.0\",\n  \"private\": true\n}\n",
+      "bytes": 76,
+      "lines": 5,
+      "hash": "98a0724cfe9d94582ebb66ba9721b9239ef9b2a9b57f0d91494c84d55c7463d1",
+      "project": ".",
+      "category": "primary_manifest"
+    }
+  ]
 }

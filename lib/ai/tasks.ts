@@ -1,8 +1,25 @@
 import { createHash } from "node:crypto";
 import { isModelRole, MODEL_ROLES, type ModelRole } from "../roles.ts";
 import { traceable } from "langsmith/traceable";
+import { isContentHash, IntegrityError } from "../content/store.ts";
 import { ai, MODELS, openAIOnly, traceConfig } from "./client.ts";
-import { verifyCitations, CitationError } from "./citations.ts";
+import { verifyCitations, CitationError, extractCitations, type FileEvidence, type ManifestFile, type ParsedCitation } from "./citations.ts";
+import {
+  assertPromptBudget,
+  resolveModelProfile,
+  fallbackProfileNotice,
+  BudgetExhaustedError,
+  BudgetOverflowError,
+  type ModelContextProfile,
+} from "./budget.ts";
+export {
+  assertPromptBudget,
+  resolveModelProfile,
+  BudgetExhaustedError,
+  BudgetOverflowError,
+  type ModelContextProfile,
+};
+import { resolveBaseUrl } from "./client.ts";
 import {
   CLASSIFY_SYSTEM,
   classifyMessage,
@@ -10,24 +27,86 @@ import {
   EXPLAIN_FOLDER_SYSTEM,
   explainFileMessage,
   explainFolderMessage,
+  QUESTION_SYSTEM,
+  questionMessage,
   PROMPT_VERSION,
   type ClassifyInput,
   type FileInput,
   type FolderInput,
+  type QuestionInput,
 } from "./prompts.ts";
 
 // The model calls, each behind its cache. The cache read is the first thing
 // inside the traced function, so a hit is still a recorded run, one with no
 // model call in it, and a broken cache is visible as a trace full of calls.
 
-export type Task = "explain-file" | "explain-folder" | "classify-file";
+export type Task = "explain-file" | "explain-folder" | "classify-file" | "answer-question";
+
+export const TASK_MAX_OUTPUT_TOKENS: Record<Task, number> = {
+  "answer-question": 3500,
+  "explain-file": 1500,
+  "explain-folder": 1500,
+  "classify-file": 100,
+};
+
+export type TaskUsage = {
+  task?: Task;
+  model: string;
+  elapsedMs: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens?: number;
+};
+
+type TelemetryListener = (usage: TaskUsage) => void;
+const telemetryListeners = new Set<TelemetryListener>();
+
+export function onTaskTelemetry(listener: TelemetryListener): () => void {
+  telemetryListeners.add(listener);
+  return () => {
+    telemetryListeners.delete(listener);
+  };
+}
+
+function emitTelemetry(usage: TaskUsage): void {
+  for (const listener of telemetryListeners) {
+    try {
+      listener(usage);
+    } catch {
+      try {
+        console.error("[Telemetry] A telemetry listener threw an exception");
+      } catch {
+        // Defensive: prevent any console error failure from propagating
+      }
+    }
+  }
+}
+
+export function isContextLengthExceededError(error: unknown): boolean {
+  if (!error) return false;
+  if (error instanceof BudgetOverflowError) return true;
+  const status = (error as { status?: number })?.status;
+  const message = (error as { message?: string })?.message ?? String(error);
+  const code = (error as { code?: string; error?: { code?: string } })?.code ?? (error as { error?: { code?: string } })?.error?.code;
+
+  if (code === "context_length_exceeded") return true;
+  if (status !== undefined && status !== 400 && status !== 422) return false;
+
+  return /context_length_exceeded|maximum context length|context length|prompt is too long|too many tokens|exceeds context|reduce the length of the messages/i.test(message);
+}
 
 export type Cache = {
   read: (key: string) => Promise<string | null>;
   write: (entry: { key: string; task: Task; model: string; body: string }) => Promise<void>;
+  /** Removes one entry. Best effort from the caller's side: a failed delete never blocks serving, because every read re-verifies. */
+  delete: (key: string) => Promise<void>;
 };
 
 export type Explanation = { body: string; model: string; cached: boolean };
+export type QuestionAnswer = { body: string; model: string; cached: boolean; citations: ParsedCitation[] };
+
+export const INSUFFICIENT_EVIDENCE_ANSWER =
+  "No relevant code snippets or repository evidence were found in the stored analysis for this query.";
 
 // The source is only fetched on a miss: a hit answers from the stored hash alone.
 export type SourceOf = () => Promise<string>;
@@ -52,7 +131,11 @@ export async function explainFile(input: FileInput, deps: { cache: Cache; source
       verifyCitationsBody(hit, allowed);
       return { body: hit, model, cached: true };
     }
-    const body = await complete(model, EXPLAIN_FILE_SYSTEM, explainFileMessage(question, capped(await deps.source())));
+    const profile = resolveModelProfile(model, resolveBaseUrl());
+    const system = EXPLAIN_FILE_SYSTEM;
+    const user = explainFileMessage(question, capped(await deps.source()));
+    assertPromptBudget(profile, system, user);
+    const body = await complete(model, system, user, { task: "explain-file" });
     verifyCitationsBody(body, allowed);
     await deps.cache.write({ key, task: "explain-file", model, body });
     return { body, model, cached: false };
@@ -70,12 +153,174 @@ export async function explainFolder(input: FolderInput, deps: { cache: Cache }):
       verifyCitationsBody(hit, allowed);
       return { body: hit, model, cached: true };
     }
-    const body = await complete(model, EXPLAIN_FOLDER_SYSTEM, explainFolderMessage(question));
+    const profile = resolveModelProfile(model, resolveBaseUrl());
+    const system = EXPLAIN_FOLDER_SYSTEM;
+    const user = explainFolderMessage(question);
+    assertPromptBudget(profile, system, user);
+    const body = await complete(model, system, user, { task: "explain-folder" });
     verifyCitationsBody(body, allowed);
     await deps.cache.write({ key, task: "explain-folder", model, body });
     return { body, model, cached: false };
   }, traceConfig("explain-folder"));
   return run(input);
+}
+
+// Fallback-profile visibility (Phase 1D, V4): when the question model has no
+// verified pin, everything derived from its profile silently shrinks — the
+// 13.5k-character input ceiling also caps the retrieved-evidence package.
+// Say so once per process, exactly where the budget is applied: fresh
+// generation. A cached answer returns before this line is ever reached, so
+// a cache-only process stays silent.
+let warnedFallbackProfile = false;
+function warnFallbackProfileOnce(profile: ModelContextProfile): void {
+  if (warnedFallbackProfile) return;
+  const notice = fallbackProfileNotice(profile);
+  if (notice === null) return;
+  warnedFallbackProfile = true;
+  console.warn(notice);
+}
+
+export async function answerQuestion(
+  input: QuestionInput,
+  deps: {
+    cache: Cache;
+    complete?: (model: string, system: string, user: string) => Promise<string>;
+    allAnalysisFiles?: Set<string>;
+    manifestsByPath?: Map<string, ManifestFile>;
+    analysisId?: string;
+  },
+): Promise<QuestionAnswer> {
+  const model = MODELS.question;
+  // Evidence identity is the hash each file's window header carries into the
+  // rendered message and therefore into the cache key. A missing or
+  // non-canonical hash would be rendered as it stands and keyed as it stands,
+  // so a malformed identity could be served — fail closed instead: the
+  // parser always writes sha256, so anything else is corrupt or tampered
+  // evidence, not a valid basis for an answer (Phase 2, B2).
+  const allowedEvidence = new Map<string, FileEvidence>();
+  for (const f of input.files) {
+    if (typeof f.contentHash !== "string" || !isContentHash(f.contentHash)) {
+      throw new IntegrityError(
+        `Evidence for "${f.path}" has a missing or malformed content hash; refusing to answer (full sha256 required)`,
+      );
+    }
+    allowedEvidence.set(f.path, {
+      lines: f.totalLines,
+      contentHash: f.contentHash,
+      ...(f.windows ? { windows: f.windows } : {}),
+    });
+  }
+
+  const run = traceable(async (question: QuestionInput): Promise<QuestionAnswer> => {
+    // Deterministic abstention: when retrieval has genuinely found no usable evidence,
+    // return an honest abstention response without calling the model or caching.
+    const isExplicitlyInsufficient =
+      question.insufficientEvidence ||
+      (question.files.length === 0 &&
+        (!deps.manifestsByPath || deps.manifestsByPath.size === 0) &&
+        question.contextText.includes("No relevant code snippets were found in the stored analysis for this query"));
+
+    if (isExplicitlyInsufficient) {
+      return {
+        body: INSUFFICIENT_EVIDENCE_ANSWER,
+        model,
+        cached: false,
+        citations: [],
+      };
+    }
+
+    // Cache identity is the exact input the model sees: the system prompt and
+    // the rendered user message. The message carries the question, the whole
+    // formatted context (windows, packaging, API surface, formatting) and the
+    // coverage block, so packaging or coverage changes that leave the file
+    // hashes untouched still change the key. The task's old files list is not
+    // in the payload: everything citable is rendered into the message, whose
+    // window headers name each file and its hash. The question is keyed in
+    // lower case — the model still receives the original text — so a casing
+    // difference keeps hitting the same answer, as before. Both renders come
+    // from the same questionMessage; only the question field differs.
+    const key = cacheKey("answer-question", model, {
+      system: QUESTION_SYSTEM,
+      body: questionMessage({
+        ...question,
+        question: question.question.trim().toLowerCase(),
+      }),
+    });
+
+    const hit = await deps.cache.read(key);
+    if (hit !== null) {
+      try {
+        verifyCitationsEvidence(hit, allowedEvidence, deps.allAnalysisFiles, deps.manifestsByPath, deps.analysisId);
+        return {
+          body: hit,
+          model,
+          cached: true,
+          citations: extractCitations(hit, {
+            allAnalysisFiles: deps.allAnalysisFiles,
+            manifestsByPath: deps.manifestsByPath,
+            analysisId: deps.analysisId,
+          }),
+        };
+      } catch (error) {
+        // A cached answer whose evidence no longer verifies is never served:
+        // not as the answer, and not as a citation set. Drop the entry (best
+        // effort) and regenerate; the fresh answer faces the same verification
+        // below before it is served or cached. One regeneration per ask — the
+        // hit path never recurses into itself, so a poisoned entry cannot
+        // loop.
+        if (!(error instanceof CitationError)) throw error;
+        try {
+          await deps.cache.delete(key);
+        } catch {
+          // Deletion failing is not a reason to fail the ask: the entry, if
+          // it somehow remains, is also never served, because reads
+          // re-verify every time. (If the write below also lands, the cached
+          // spot may keep the old row when the cache stores ignore
+          // duplicates — the verification here is what keeps it inert.)
+        }
+      }
+    }
+
+    const profile = resolveModelProfile(model, resolveBaseUrl());
+    warnFallbackProfileOnce(profile);
+    const system = QUESTION_SYSTEM;
+    const user = questionMessage(question);
+    assertPromptBudget(profile, system, user);
+
+    const completer = deps.complete ?? ((m, s, u) => complete(m, s, u, { task: "answer-question" }));
+    const body = await completer(model, system, user);
+    verifyCitationsEvidence(body, allowedEvidence, deps.allAnalysisFiles, deps.manifestsByPath, deps.analysisId);
+    await deps.cache.write({ key, task: "answer-question", model, body });
+    return {
+      body,
+      model,
+      cached: false,
+      citations: extractCitations(body, {
+        allAnalysisFiles: deps.allAnalysisFiles,
+        manifestsByPath: deps.manifestsByPath,
+        analysisId: deps.analysisId,
+      }),
+    };
+  }, traceConfig("answer-question"));
+
+  return run(input);
+}
+
+// Verifies a Q&A body against the evidence the generation stage actually saw:
+// the structured per-file evidence map (what retrieval served), the
+// analysis-wide path set for error classification, and the manifest gate. A
+// bare path is acceptable only when its file was actually served or the
+// manifest itself was stored, rendered and field-trusted — never merely
+// because its string appears in the rendered context text (Phase 2, F5).
+function verifyCitationsEvidence(
+  body: string,
+  allowed: Map<string, FileEvidence>,
+  allAnalysisFiles?: Set<string>,
+  manifestsByPath?: Map<string, ManifestFile>,
+  analysisId?: string,
+): void {
+  const failing = verifyCitations(body, allowed, { allAnalysisFiles, manifestsByPath, analysisId });
+  if (failing.paths.length) throw new CitationError(failing.paths, failing.details);
 }
 
 // Every path the model was allowed to name: the file itself, what reaches it,
@@ -106,7 +351,9 @@ function folderCitationsAllowed(input: FolderInput): Set<string> {
 
 function verifyCitationsBody(body: string, allowed: Set<string>): void {
   const failing = verifyCitations(body, allowed);
-  if (failing.paths.length) throw new CitationError(failing.paths);
+  // Details are carried through (Phase 2, F8): an explain refusal is
+  // explainable, including the "Unverifiable line citation" reason.
+  if (failing.paths.length) throw new CitationError(failing.paths, failing.details);
 }
 
 // "none" is a real answer, and cached like any other: the model wasn't made
@@ -128,8 +375,12 @@ export async function classifyFile(input: ClassifyInput, deps: { cache: Cache; s
     const key = cacheKey("classify-file", model, question);
     const hit = await deps.cache.read(key);
     if (hit !== null) return { role: parseRole(hit), cached: true };
+    const profile = resolveModelProfile(model, resolveBaseUrl());
+    const system = CLASSIFY_SYSTEM;
     const excerpt = (await deps.source()).split("\n").slice(0, EXCERPT_LINES).join("\n");
-    const answer = readRole(await askForRole(model, CLASSIFY_SYSTEM, classifyMessage(question, excerpt)));
+    const user = classifyMessage(question, excerpt);
+    assertPromptBudget(profile, system, user);
+    const answer = readRole(await askForRole(model, system, user));
     // Parsed before caching, so a refused answer is never stored and served.
     const role = parseRole(answer);
     await deps.cache.write({ key, task: "classify-file", model, body: answer });
@@ -154,18 +405,160 @@ function readRole(content: string | null): string {
   return role;
 }
 
-async function complete(model: string, system: string, user: string): Promise<string> {
-  const response = await ai().chat.completions.create({
-    model,
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: user },
-    ],
-    reasoning_effort: "low",
-    ...openAIOnly(),
-  });
-  const body = response.choices[0]?.message.content?.trim();
-  if (!body) throw new Error(`${model} returned an empty answer (finish reason: ${response.choices[0]?.finish_reason ?? "none"})`);
+/**
+ * Resolves deterministic sampling parameters (temperature: 0, seed: 42) for models
+ * that support them.
+ *
+ * Compatibility note:
+ * - OpenAI reasoning models (e.g. o1, o3 families) reject temperature != 1 (or reject
+ *   temperature entirely) and may reject custom seeds.
+ * - Standard completion models (e.g. GPT-4o, GPT-4o-mini, GPT-4, generic test endpoints)
+ *   support temperature: 0 and seed: 42 for greedy, best-effort deterministic sampling.
+ * - Determinism is best-effort: upstream providers, architecture differences (e.g. MoE),
+ *   and backend cluster routing mean output reproducibility is not guaranteed across providers.
+ */
+export function deterministicSamplingParams(
+  model: string,
+  provider?: "openai" | "openrouter" | "custom",
+): { temperature?: number; seed?: number } {
+  const normalized = model.toLowerCase().replace(/^(openai\/|openrouter\/)/, "");
+  if (/^o[13](-|$)/i.test(normalized)) {
+    return {};
+  }
+  const supportsSeed = provider === "openai" || (provider === "openrouter" && model.toLowerCase().startsWith("openai/"));
+  if (!supportsSeed) {
+    return { temperature: 0 };
+  }
+  return {
+    temperature: 0,
+    seed: 42,
+  };
+}
+
+export type CompleteOptions = {
+  task?: Task;
+  maxTokens?: number;
+};
+
+async function complete(
+  model: string,
+  system: string,
+  user: string,
+  options: CompleteOptions = {},
+): Promise<string> {
+  const profile = resolveModelProfile(model, resolveBaseUrl());
+  assertPromptBudget(profile, system, user);
+
+  const taskTarget = options.maxTokens ?? (options.task ? TASK_MAX_OUTPUT_TOKENS[options.task] : 3500);
+  const max_completion_tokens = Math.min(profile.maxOutputTokens, taskTarget);
+
+  let attempts = 0;
+  while (true) {
+    attempts++;
+    const t0 = performance.now();
+    try {
+      const response = await ai().chat.completions.create({
+        model,
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+        reasoning_effort: "low",
+        max_completion_tokens,
+        ...deterministicSamplingParams(model, profile.provider),
+        ...openAIOnly(),
+      });
+      const elapsed = Math.round(performance.now() - t0);
+      if (response.usage) {
+        const usage = response.usage;
+        const promptTokens = usage.prompt_tokens ?? 0;
+        const completionTokens = usage.completion_tokens ?? 0;
+        console.log(
+          `[AI complete] model=${model} elapsed=${elapsed}ms promptTokens=${promptTokens} completionTokens=${completionTokens}`,
+        );
+        emitTelemetry({
+          task: options.task,
+          model,
+          elapsedMs: elapsed,
+          promptTokens,
+          completionTokens,
+          totalTokens: usage.total_tokens,
+        });
+      }
+      const body = takeCompletion(model, response.choices[0]);
+      return body;
+    } catch (err: unknown) {
+      if (isContextLengthExceededError(err)) {
+        const message = (err as Error)?.message ?? String(err);
+        throw new BudgetOverflowError(model, message);
+      }
+      const status = (err as { status?: number })?.status;
+      const isTransient = status === 503 || status === 429 || status === 502;
+      if (isTransient && attempts <= 3) {
+        const delayMs = attempts * 3000;
+        console.warn(`[AI complete] Transient ${status} error, retrying attempt ${attempts}/3 in ${delayMs}ms...`);
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+// A completion's text is taken only together with what the endpoint says
+// about how it ended. These answers are cached, so a body the endpoint cut
+// off mid-flight would be poisoning, not just one bad answer — and a
+// termination reason that can't be interpreted can't be trusted either.
+//
+//   stop                         accepted
+//   length / max_tokens          refused: cut off by the token limit
+//   content_filter               refused: withheld by a filter (refusal, not truncation)
+//   tool_calls / function_call   refused: no way to end a text answer
+//   missing / null / ""          accepted with a warning: absence is not
+//                                evidence of truncation, and plenty of
+//                                OpenAI-compatible endpoints send none
+//   anything else                refused: an unknown reason may well mean
+//                                "cut off", and cannot be read as complete
+// ("max_tokens" is the native stop name several OpenAI-compatible shims
+// expose for their own token cap; OpenAI itself uses "length".)
+type CompletionChoice = { message: { content: string | null }; finish_reason: string | null | undefined };
+
+function takeCompletion(model: string, choice: CompletionChoice): string {
+  if (!choice) throw new Error(`${model} returned an empty answer (finish reason: none)`);
+  const reason: string | null | undefined = choice.finish_reason;
+  const body = choice.message.content?.trim();
+  if (reason === undefined || reason === null || reason === "") {
+    // Missing metadata is compatible, not trustworthy: accept loudly rather
+    // than pattern-matching it into a pretend stop.
+    console.warn(`[AI complete] ${model} gave no termination reason; accepting its answer by convention`);
+  } else {
+    switch (reason) {
+      case "stop":
+        break;
+      case "length":
+      case "max_tokens":
+        throw new Error(
+          `${model} was cut off by the completion-token limit (finish reason "${reason}"): the incomplete answer was neither served nor stored`,
+        );
+      case "content_filter":
+        throw new Error(
+          `${model} stopped on a content filter (finish reason "content_filter"): the withheld answer was neither served nor stored`,
+        );
+      case "tool_calls":
+        throw new Error(
+          `${model} ended with a tool call (finish reason "tool_calls"), not a text answer: nothing was served or stored`,
+        );
+      case "function_call":
+        throw new Error(
+          `${model} ended with a function call (finish reason "function_call"), not a text answer: nothing was served or stored`,
+        );
+      default:
+        throw new Error(
+          `${model} ended with the unrecognized termination reason "${reason}", which cannot be read as a complete answer: nothing was served or stored`,
+        );
+    }
+  }
+  if (!body) throw new Error(`${model} returned an empty answer (finish reason: ${reason ?? "none"})`);
   return body;
 }
 
@@ -173,6 +566,9 @@ async function complete(model: string, system: string, user: string): Promise<st
 // implements that, so a refusal falls back to plain JSON mode, which every
 // one of them does. Either way the answer is checked before it is stored.
 async function askForRole(model: string, system: string, user: string): Promise<string | null> {
+  const profile = resolveModelProfile(model, resolveBaseUrl());
+  const max_completion_tokens = Math.min(profile.maxOutputTokens, TASK_MAX_OUTPUT_TOKENS["classify-file"]);
+
   const base = {
     model,
     messages: [
@@ -180,9 +576,15 @@ async function askForRole(model: string, system: string, user: string): Promise<
       { role: "user" as const, content: user },
     ],
     reasoning_effort: "low" as const,
+    max_completion_tokens,
+    ...deterministicSamplingParams(model, profile.provider),
     ...openAIOnly(),
   };
+
+  // Primary call: strictly schema-constrained structured output
+  assertPromptBudget(profile, system, user);
   try {
+    const t0 = performance.now();
     const response = await ai().chat.completions.create({
       ...base,
       response_format: {
@@ -190,14 +592,50 @@ async function askForRole(model: string, system: string, user: string): Promise<
         json_schema: { name: "file_role", strict: true, schema: ROLE_SCHEMA },
       },
     });
-    return response.choices[0]?.message.content ?? null;
+    const elapsed = Math.round(performance.now() - t0);
+    if (response.usage) {
+      emitTelemetry({
+        task: "classify-file",
+        model,
+        elapsedMs: elapsed,
+        promptTokens: response.usage.prompt_tokens ?? 0,
+        completionTokens: response.usage.completion_tokens ?? 0,
+        totalTokens: response.usage.total_tokens,
+      });
+    }
+    return takeCompletion(model, response.choices[0]);
   } catch (error) {
+    if (isContextLengthExceededError(error)) {
+      throw new BudgetOverflowError(model, (error as Error)?.message ?? String(error));
+    }
     if (!schemaRefused(error)) throw error;
-    const response = await ai().chat.completions.create({
-      ...base,
-      response_format: { type: "json_object" },
-    });
-    return response.choices[0]?.message.content ?? null;
+
+    // Fallback call: independently budgeted plain JSON mode
+    assertPromptBudget(profile, system, user);
+    try {
+      const t0 = performance.now();
+      const response = await ai().chat.completions.create({
+        ...base,
+        response_format: { type: "json_object" },
+      });
+      const elapsed = Math.round(performance.now() - t0);
+      if (response.usage) {
+        emitTelemetry({
+          task: "classify-file",
+          model,
+          elapsedMs: elapsed,
+          promptTokens: response.usage.prompt_tokens ?? 0,
+        completionTokens: response.usage.completion_tokens ?? 0,
+          totalTokens: response.usage.total_tokens,
+        });
+      }
+      return takeCompletion(model, response.choices[0]);
+    } catch (fallbackError) {
+      if (isContextLengthExceededError(fallbackError)) {
+        throw new BudgetOverflowError(model, (fallbackError as Error)?.message ?? String(fallbackError));
+      }
+      throw fallbackError;
+    }
   }
 }
 

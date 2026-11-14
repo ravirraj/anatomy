@@ -1,12 +1,15 @@
 import { statSync } from "node:fs";
 import path from "node:path";
-import { Project, ts } from "ts-morph";
-import { extractExports, extractImports, extractSymbols } from "./extract.ts";
+import { Project, ts, type SourceFile } from "ts-morph";
+import { extractCalls, extractExports, extractImportBindings, extractImports, extractSymbols } from "./extract.ts";
 import { dedupeEdges, fanCounts } from "./graph.ts";
 import { createResolver } from "./resolve.ts";
+import { dedupeConfigReferences, scanConfigObjects, scanEnvTemplates, scanSourceConfig } from "./config.ts";
+import { discoverEntryPoints, resolveDeclaredEntries } from "./entries.ts";
 import {
   SCHEMA_VERSION,
   type Coverage,
+  type Dependency,
   type Edge,
   type ImportStatus,
   type ParseResult,
@@ -17,7 +20,8 @@ import {
   type StatusCounts,
 } from "./types.ts";
 import type { Role } from "../roles.ts";
-import type { AdapterFile } from "./adapters/types.ts";
+import { NO_ROUTES } from "./adapters/types.ts";
+import { buildFrameworkView, type ViewSourceEntry } from "./adapters/view.ts";
 import { walkRepository, withinProject, type WalkResult } from "./walk.ts";
 
 export type Selection = { root: string; walk: WalkResult };
@@ -79,7 +83,7 @@ export function parseSelection({ root, walk }: Selection): ParseResult {
 
   const coverage: Coverage["imports"] = {
     total: emptyCounts(),
-    byKind: { import: emptyCounts(), "re-export": emptyCounts(), "dynamic-import": emptyCounts(), require: emptyCounts() },
+    byKind: { import: emptyCounts(), "re-export": emptyCounts(), "dynamic-import": emptyCounts(), require: emptyCounts(), call: emptyCounts() },
     external: { package: 0, builtin: 0, "outside-root": 0 },
     excluded: {},
     unresolvedByReason: {},
@@ -88,10 +92,23 @@ export function parseSelection({ root, walk }: Selection): ParseResult {
   const rawEdges: Edge[] = [];
   const exportsOf = new Map<string, string[]>();
   const symbolsOf = new Map<string, Omit<ParsedSymbol, "file">[]>();
+  // local binding name -> { target file, imported name } for internal imports
+  const importMaps = new Map<string, Map<string, { target: string; imported: string }>>();
 
   for (const { candidate, sourceFile } of parsed) {
     exportsOf.set(candidate.path, extractExports(sourceFile));
     symbolsOf.set(candidate.path, extractSymbols(sourceFile));
+
+    // Resolve imported binding names to their target files (for call resolution).
+    const imap = new Map<string, { target: string; imported: string }>();
+    for (const b of extractImportBindings(sourceFile)) {
+      const outcome = resolver.resolve(candidate.absolutePath, b.specifier, "import");
+      if (outcome.status === "internal") {
+        imap.set(b.local, { target: outcome.target, imported: b.imported });
+      }
+    }
+    importMaps.set(candidate.path, imap);
+
     for (const found of extractImports(sourceFile)) {
       const specifier = found.literal ? found.specifier : found.expression;
       const outcome: ImportStatus = found.literal
@@ -139,10 +156,145 @@ export function parseSelection({ root, walk }: Selection): ParseResult {
     }
   }
 
+  // ---- Call relationships (Phase 3) ----
+  const callCoverage: { total: number; resolved: number; unresolved: number; unresolvedCalls: { from: string; callee: string; line: number; reason: string }[] } = {
+    total: 0,
+    resolved: 0,
+    unresolved: 0,
+    unresolvedCalls: [],
+  };
+
+  for (const { candidate, sourceFile } of parsed) {
+    const callSites = extractCalls(sourceFile);
+    const symbols = symbolsOf.get(candidate.path) ?? [];
+    const imap = importMaps.get(candidate.path) ?? new Map();
+    // Helper: find the enclosing symbol for a line.
+    const enclosingSymbol = (line: number): (typeof symbols)[number] | undefined =>
+      symbols.find((s) => s.line <= line && (s.endLine ?? s.line) >= line);
+
+    for (const site of callSites) {
+      callCoverage.total++;
+      const callee = site.callee.trim();
+      // Resolve callee to a target file.
+      let targetFile: string | null = null;
+      let resolvedSymbolName: string | null = null;
+
+      // Constructor / simple identifier / member expression base.
+      const isMember = callee.includes(".");
+      const baseName = isMember ? callee.split(".")[0]! : callee;
+      const memberName = isMember ? callee.split(".").slice(1).join(".") : null;
+
+      // 1. Local symbol in the same file.
+      if (!isMember && symbols.some((s) => s.name === baseName)) {
+        targetFile = candidate.path;
+        resolvedSymbolName = baseName;
+      }
+
+      // 2. Imported binding.
+      if (!targetFile) {
+        const imp = imap.get(baseName);
+        if (imp) {
+          targetFile = imp.target;
+          // Determine the exported name in the target.
+          const targetExports = exportsOf.get(targetFile as string) ?? [];
+          if (memberName) {
+            if (targetExports.includes(memberName)) resolvedSymbolName = memberName;
+            else resolvedSymbolName = memberName; // best-effort
+          } else {
+            const importedName = imp.imported;
+            resolvedSymbolName = importedName === "default" ? "default" : importedName;
+            // If target doesn't export it, mark unresolved.
+            if (importedName !== "*" && importedName !== "default" && !targetExports.includes(importedName)) {
+              targetFile = null;
+            }
+          }
+        }
+      }
+
+      // 3. Namespace import member: ns.method()
+      if (!targetFile && isMember) {
+        const imp = imap.get(baseName);
+        if (imp && imp.imported === "*") {
+          targetFile = imp.target;
+          const targetExports = exportsOf.get(targetFile as string) ?? [];
+          if (memberName && targetExports.includes(memberName)) {
+            resolvedSymbolName = memberName;
+          } else if (memberName) {
+            resolvedSymbolName = memberName;
+          } else {
+            targetFile = null;
+          }
+        }
+      }
+
+      if (targetFile && targetFile !== candidate.path) {
+        // cross-file: ensure target exists in parsed files
+        if (!exportsOf.has(targetFile as string)) targetFile = null;
+      }
+
+      if (targetFile) {
+        callCoverage.resolved++;
+        // Only cross-file calls become graph edges; intra-file calls are
+        // recorded in coverage but do not create a file-level edge.
+        if (targetFile !== candidate.path) {
+          rawEdges.push({
+            source: candidate.path,
+            target: targetFile,
+            kind: "call",
+            typeOnly: false,
+            specifier: callee,
+            line: site.line,
+          });
+        }
+      } else {
+        callCoverage.unresolved++;
+        callCoverage.unresolvedCalls.push({
+          from: candidate.path,
+          callee,
+          line: site.line,
+          reason: "unresolved-call",
+        });
+      }
+    }
+  }
+
   const edges = dedupeEdges(rawEdges);
   const paths = parsed.map((entry) => entry.candidate.path);
   const fan = fanCounts(paths, edges);
-  const conventions = applyAdapters(walk, parsed, skipped);
+
+  // ---- Phase 4: packaging, configuration and entry points ----
+  // Everything below is read from what the walk already collected plus the
+  // parsed text. No second filesystem pass, no question text, no model.
+  const conventions = applyAdapters(walk, parsed, skipped, resolver);
+
+  const manifests = walk.manifests.map((m) => m.manifest);
+  const dependencies = countDependencyImports(
+    walk.manifests.flatMap((m) => m.dependencies),
+    bareSpecifiersByFile(parsed, resolver),
+    walk.projectOf,
+  );
+
+  const declaredEntries = walk.manifests.flatMap((m) => resolveDeclaredEntries(m.manifest, m.declared));
+  const textOf = new Map(parsed.map(({ candidate, sourceFile }) => [candidate.path, sourceFile.getFullText()]));
+  const entryPoints = discoverEntryPoints({
+    declared: declaredEntries,
+    files: paths,
+    otherFiles: walk.otherFiles,
+    textOf,
+    routes: conventions.routes,
+    edges,
+    packageDirs: walk.manifestDirs,
+  });
+
+  const configReferences = dedupeConfigReferences([
+    ...parsed.flatMap(({ candidate, sourceFile }) => {
+      const text = sourceFile.getFullText();
+      return [...scanSourceConfig(candidate.path, text), ...scanConfigObjects(candidate.path, text)];
+    }),
+    ...scanEnvTemplates(root).references,
+  ]);
+  const envDeclarations = scanEnvTemplates(root).declarations;
+
   const symbols = paths
     .flatMap((file) => (symbolsOf.get(file) ?? []).map((s) => ({ ...s, file })))
     .sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
@@ -173,6 +325,11 @@ export function parseSelection({ root, walk }: Selection): ParseResult {
     edges,
     routes: conventions.routes,
     symbols,
+    manifests,
+    dependencies,
+    configReferences,
+    envDeclarations,
+    entryPoints,
     coverage: {
       files: {
         found: walk.found,
@@ -183,17 +340,91 @@ export function parseSelection({ root, walk }: Selection): ParseResult {
       },
       imports: coverage,
       routes: { omitted: conventions.omitted, withheld: conventions.withheld },
+      calls: callCoverage,
     },
     configs: resolver.configs(),
+    nonCodeCandidates: walk.nonCodeCandidates,
   };
 }
 
+/**
+ * Bare package specifiers each parsed file imports, keyed by file path. Built
+ * from the resolver's own classification so a specifier counts as a package
+ * only when the resolver said it was one: a relative path, an alias, a
+ * workspace link and a Node builtin are all excluded by construction.
+ */
+function bareSpecifiersByFile(
+  parsed: readonly { candidate: { path: string; absolutePath: string }; sourceFile: SourceFile }[],
+  resolver: ReturnType<typeof createResolver>,
+): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const { candidate, sourceFile } of parsed) {
+    const packages = new Set<string>();
+    for (const found of extractImports(sourceFile)) {
+      if (!found.literal) continue;
+      const outcome = resolver.resolve(candidate.absolutePath, found.specifier, found.kind);
+      if (outcome.status !== "external" || outcome.external !== "package") continue;
+      const name = packageNameOf(found.specifier);
+      if (name) packages.add(name);
+    }
+    if (packages.size > 0) out.set(candidate.path, packages);
+  }
+  return out;
+}
+
+/**
+ * The package a bare specifier names: "@scope/pkg/sub/path" -> "@scope/pkg",
+ * "pkg/sub" -> "pkg". A specifier that names no package (an empty string, a
+ * bare "@scope") yields null rather than a guess.
+ */
+export function packageNameOf(specifier: string): string | null {
+  const clean = specifier.split("?")[0]!.trim();
+  if (!clean || clean.startsWith(".") || clean.startsWith("/")) return null;
+  const parts = clean.split("/");
+  if (clean.startsWith("@")) {
+    return parts.length >= 2 && parts[0] && parts[1] ? `${parts[0]}/${parts[1]}` : null;
+  }
+  return parts[0] || null;
+}
+
+/**
+ * Records, for each declared dependency, how many parsed files import that
+ * package by bare specifier. This is reachability from indexed source, not
+ * usage proof: a dependency nothing imports may still be used by a config
+ * file, a CLI, a script or a file the parser skipped.
+ *
+ * Counts are per project, so a monorepo's two packages never borrow each
+ * other's imports: a dependency declared by packages/web is counted against
+ * packages/web's files only.
+ */
+function countDependencyImports(
+  dependencies: readonly Dependency[],
+  importsByFile: ReadonlyMap<string, Set<string>>,
+  projectOfFile: ReadonlyMap<string, string>,
+): Dependency[] {
+  const byProject = new Map<string, Map<string, number>>();
+  for (const [file, packages] of importsByFile) {
+    const project = projectOfFile.get(file) ?? ".";
+    const forProject = byProject.get(project) ?? new Map<string, number>();
+    for (const pkg of packages) forProject.set(pkg, (forProject.get(pkg) ?? 0) + 1);
+    byProject.set(project, forProject);
+  }
+  return dependencies.map((d) => ({
+    ...d,
+    importedBy: byProject.get(d.project)?.get(d.name) ?? 0,
+  }));
+}
+
 // Each project's adapter is asked about its own files, by project-relative
-// path, and what it answers is mapped back to repository paths.
+// path, and what it answers is mapped back to repository paths. Roles and
+// routes are both read off the project's FrameworkView, built once per
+// project and handed to roleOf and routesFromView alike; an adapter with no
+// route logic contributes none (Batch 3.3d.1).
 function applyAdapters(
   walk: WalkResult,
-  parsed: readonly { candidate: { path: string; project: string }; sourceFile: AdapterFile["source"] }[],
+  parsed: readonly { candidate: { path: string; project: string; absolutePath: string }; sourceFile: SourceFile }[],
   skipped: readonly SkippedFile[],
+  resolver: ReturnType<typeof createResolver>,
 ) {
   const roles = new Map<string, Role>();
   const routes: Route[] = [];
@@ -202,20 +433,40 @@ function applyAdapters(
 
   for (const [project, adapter] of walk.adapters) {
     const toRepo = (p: string) => (project === "." ? p : `${project}/${p}`);
-    const files: AdapterFile[] = [];
+    const entries: ViewSourceEntry[] = [];
     for (const { candidate, sourceFile } of parsed) {
       if (candidate.project !== project) continue;
-      const file = { path: withinProject(project, candidate.path), source: sourceFile };
-      files.push(file);
+      // `parsed` is in the walker's own order (walk.candidates), so the rank
+      // this project's files reach here IS the original walk order — recorded
+      // on the view entry, whose files array is sorted by path.
+      entries.push({
+        path: candidate.path,
+        absolutePath: candidate.absolutePath,
+        source: sourceFile,
+        walkOrder: entries.length,
+      });
+    }
+    const view = buildFrameworkView({
+      project,
+      files: entries,
+      skipped: skipped.filter((f) => walk.projectOf.get(f.path) === project),
+      resolveSpecifier: resolver.resolve,
+    });
+    for (const file of view.files) {
       const role = adapter.roleOf(file);
-      if (role) roles.set(candidate.path, role);
+      if (role) roles.set(toRepo(file.path), role);
     }
     // A declaration file has no runtime code, so it can't hold anything an adapter reads.
     const unparsed = skipped
       .filter((f) => f.reason !== "declaration-file" && walk.projectOf.get(f.path) === project)
       .map((f) => withinProject(project, f.path));
 
-    const report = adapter.routes({ files, unparsed });
+    // Production routes read the view only (Batch 3.3d.1): every adapter with
+    // route logic answers over routesFromView on the same instance roleOf
+    // read, and an adapter with none contributes none. The legacy routes()
+    // spellings are compatibility oracles — the route migration tests call
+    // them directly; the orchestration never does.
+    const report = adapter.routesFromView?.(view, unparsed) ?? NO_ROUTES;
     if (report.withheld !== null) {
       withheld.push({ project, reason: report.withheld });
       continue;

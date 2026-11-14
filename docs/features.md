@@ -335,7 +335,10 @@ and for a file compares GitHub's bytes against the hash the parser stored.
 **Files.** `lib/ai/tasks.ts`, `app/(workspace)/analyses/[id]/actions.ts`,
 `components/explanation-panel.tsx`, `components/explanation-store.ts`.
 
-**Limitations.** The cache is never evicted. Re-analysis is manual.
+**Limitations.** The cache is retained, not permanent: answers become
+cleanup-eligible after 90 days and are pruned once per successful analysis
+completion ([architecture.md](architecture.md) §11.6). Re-analysis is
+manual.
 
 ---
 
@@ -583,7 +586,7 @@ variable that an earlier revision of the environment template mentioned is
 gone, because nothing reads it.
 
 **What it would take.** Repository-wide retrieval, a question interface, and
-citations. Designed in [docs/ai-system.md](ai-system.md#9-proposed-repository-wide-question-answering).
+citations. Implemented in [docs/ai-system.md](ai-system.md#9-implemented-repository-wide-question-answering-phase-5).
 
 ### A call graph
 

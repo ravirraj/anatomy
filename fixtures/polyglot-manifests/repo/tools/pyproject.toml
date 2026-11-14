@@ -1,0 +1,13 @@
+[project]
+name = "polyglot-tools"
+version = "0.2.0"
+dependencies = [
+  "click>=8.1",
+  "rich",
+]
+
+[project.scripts]
+polyglot-tools = "polyglot_tools.cli:main"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0"

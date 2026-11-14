@@ -1,14 +1,22 @@
 import { ROLE_IDS } from "../roles.ts";
 import {
+  CONFIG_REFERENCE_KINDS,
+  DEPENDENCY_KINDS,
   EDGE_KINDS,
+  MANIFEST_ECOSYSTEMS,
   SCHEMA_VERSION,
   SYMBOL_KINDS,
+  type ConfigReference,
   type ConfigReport,
   type Coverage,
+  type Dependency,
   type Edge,
   type EdgeKind,
+  type EntryPoint,
+  type EnvDeclaration,
   type ExcludedDirectory,
   type ExcludedReason,
+  type Manifest,
   type OmittedRoute,
   type ParseResult,
   type ParsedFile,
@@ -61,8 +69,14 @@ export function validateParseResult(value: unknown): ParseResult {
     edges: array(o.edges, "$.edges", edge),
     routes: array(o.routes, "$.routes", route),
     symbols: array(o.symbols, "$.symbols", symbol),
+    manifests: array(o.manifests, "$.manifests", manifest),
+    dependencies: array(o.dependencies, "$.dependencies", dependency),
+    configReferences: array(o.configReferences, "$.configReferences", configReference),
+    envDeclarations: array(o.envDeclarations, "$.envDeclarations", envDeclaration),
+    entryPoints: array(o.entryPoints, "$.entryPoints", entryPoint),
     coverage: coverage(o.coverage, "$.coverage"),
     configs: array(o.configs, "$.configs", configReport),
+    ...(Array.isArray(o.nonCodeCandidates) ? { nonCodeCandidates: o.nonCodeCandidates as ParseResult["nonCodeCandidates"] } : {}),
   };
 
   // Structural guarantees the rest of the app relies on, checked rather than trusted.
@@ -76,6 +90,42 @@ export function validateParseResult(value: unknown): ParseResult {
   });
   result.symbols.forEach((s, i) => {
     if (!paths.has(s.file)) throw new ContractError(`$.symbols[${i}].file`, `${s.file} is not a file in the output`);
+  });
+  // An entry point marked resolved must name a file that is actually here; one
+  // marked unresolved must not. The flag is the whole distinction between a
+  // declaration that landed and one that did not, so it is verified.
+  result.entryPoints.forEach((e, i) => {
+    if (e.resolved && !paths.has(e.path)) {
+      throw new ContractError(`$.entryPoints[${i}].resolved`, `${e.path} is marked resolved but is not a file in the output`);
+    }
+    if (!e.resolved && paths.has(e.path)) {
+      throw new ContractError(`$.entryPoints[${i}].resolved`, `${e.path} is marked unresolved but is a file in the output`);
+    }
+    for (const via of e.via ?? []) {
+      if (!paths.has(via)) throw new ContractError(`$.entryPoints[${i}].via`, `${via} is not a file in the output`);
+    }
+  });
+  // A dependency's manifest must be one of the manifests listed, and a
+  // configuration reference must sit in a file that exists — either an indexed
+  // file or an environment template the parser recorded.
+  const manifestPaths = new Set<string>();
+  result.manifests.forEach((m, i) => {
+    if (manifestPaths.has(m.path)) throw new ContractError(`$.manifests[${i}].path`, `duplicate manifest path: ${m.path}`);
+    manifestPaths.add(m.path);
+  });
+  result.dependencies.forEach((d, i) => {
+    if (!manifestPaths.has(d.manifest)) {
+      throw new ContractError(`$.dependencies[${i}].manifest`, `${d.manifest} is not a manifest in the output`);
+    }
+  });
+  const envPaths = new Set(result.envDeclarations.map((e) => e.path));
+  result.configReferences.forEach((r, i) => {
+    if (r.kind !== "env-example" && !paths.has(r.file)) {
+      throw new ContractError(`$.configReferences[${i}].file`, `${r.file} is not a file in the output`);
+    }
+    if (r.kind === "env-example" && !envPaths.has(r.file)) {
+      throw new ContractError(`$.configReferences[${i}].file`, `${r.file} is not an environment template in the output`);
+    }
   });
   if (result.projects[0]?.path !== ".") throw new ContractError("$.projects[0].path", "the root must be the first project");
   const { found, parsed, skipped } = result.coverage.files;
@@ -161,6 +211,7 @@ function coverage(value: unknown, at: string): Coverage {
   const byKind = object(imports.byKind, `${at}.imports.byKind`);
   const external = object(imports.external, `${at}.imports.external`);
   const routes = object(o.routes, `${at}.routes`);
+  const calls = object(o.calls, `${at}.calls`);
   return {
     files: {
       found: count(files.found, `${at}.files.found`),
@@ -176,6 +227,7 @@ function coverage(value: unknown, at: string): Coverage {
         "re-export": statusCounts(byKind["re-export"], `${at}.imports.byKind.re-export`),
         "dynamic-import": statusCounts(byKind["dynamic-import"], `${at}.imports.byKind.dynamic-import`),
         require: statusCounts(byKind.require, `${at}.imports.byKind.require`),
+        call: statusCounts(byKind.call, `${at}.imports.byKind.call`),
       },
       external: {
         package: count(external.package, `${at}.imports.external.package`),
@@ -189,6 +241,19 @@ function coverage(value: unknown, at: string): Coverage {
     routes: {
       omitted: array(routes.omitted, `${at}.routes.omitted`, omittedRoute),
       withheld: array(routes.withheld, `${at}.routes.withheld`, withheldRoutes),
+    },
+    calls: {
+      total: count(calls.total, `${at}.calls.total`),
+      resolved: count(calls.resolved, `${at}.calls.resolved`),
+      unresolved: count(calls.unresolved, `${at}.calls.unresolved`),
+      unresolvedCalls: array(calls.unresolvedCalls, `${at}.calls.unresolvedCalls`, (v, p) => {
+        const o = object(v, p);
+        const from = string(o.from, `${p}.from`);
+        const callee = string(o.callee, `${p}.callee`);
+        const line = count(o.line, `${p}.line`);
+        const reason = string(o.reason, `${p}.reason`);
+        return { from, callee, line, reason };
+      }),
     },
   };
 }
@@ -233,6 +298,76 @@ function unresolvedImport(value: unknown, at: string): UnresolvedImport {
 function configReport(value: unknown, at: string): ConfigReport {
   const o = object(value, at);
   return { path: string(o.path, `${at}.path`), errors: array(o.errors, `${at}.errors`, string) };
+}
+
+function manifest(value: unknown, at: string): Manifest {
+  const o = object(value, at);
+  return {
+    path: string(o.path, `${at}.path`),
+    dir: string(o.dir, `${at}.dir`),
+    project: string(o.project, `${at}.project`),
+    ecosystem: oneOf(o.ecosystem, `${at}.ecosystem`, MANIFEST_ECOSYSTEMS),
+    name: o.name === null ? null : string(o.name, `${at}.name`),
+    workspaces: array(o.workspaces, `${at}.workspaces`, string),
+    scripts: array(o.scripts, `${at}.scripts`, (v, p) => {
+      const s = object(v, p);
+      return { name: string(s.name, `${p}.name`), command: string(s.command, `${p}.command`) };
+    }),
+    problems: array(o.problems, `${at}.problems`, string),
+  };
+}
+
+function dependency(value: unknown, at: string): Dependency {
+  const o = object(value, at);
+  return {
+    name: string(o.name, `${at}.name`),
+    version: o.version === null ? null : string(o.version, `${at}.version`),
+    kind: oneOf(o.kind, `${at}.kind`, DEPENDENCY_KINDS),
+    manifest: string(o.manifest, `${at}.manifest`),
+    dir: string(o.dir, `${at}.dir`),
+    project: string(o.project, `${at}.project`),
+    importedBy: count(o.importedBy, `${at}.importedBy`),
+  };
+}
+
+function configReference(value: unknown, at: string): ConfigReference {
+  const o = object(value, at);
+  return {
+    file: string(o.file, `${at}.file`),
+    variable: string(o.variable, `${at}.variable`),
+    line: count(o.line, `${at}.line`),
+    kind: oneOf(o.kind, `${at}.kind`, CONFIG_REFERENCE_KINDS),
+    ...(o.detail === undefined ? {} : { detail: string(o.detail, `${at}.detail`) }),
+  };
+}
+
+function envDeclaration(value: unknown, at: string): EnvDeclaration {
+  const o = object(value, at);
+  return { path: string(o.path, `${at}.path`), keys: array(o.keys, `${at}.keys`, string) };
+}
+
+function entryPoint(value: unknown, at: string): EntryPoint {
+  const o = object(value, at);
+  const resolved = boolean(o.resolved, `${at}.resolved`);
+  const reason = o.unresolvedReason === undefined ? undefined : oneOf(o.unresolvedReason, `${at}.unresolvedReason`, ["not-indexed", "not-found"] as const);
+  // The reason exists only to explain an unresolved entry; carrying one on a
+  // resolved entry would be a contradiction the rest of the app could act on.
+  if (resolved && reason !== undefined) {
+    throw new ContractError(`${at}.unresolvedReason`, "a resolved entry point cannot carry an unresolved reason");
+  }
+  if (!resolved && reason === undefined) {
+    throw new ContractError(`${at}.unresolvedReason`, "an unresolved entry point must carry an unresolved reason");
+  }
+  return {
+    path: string(o.path, `${at}.path`),
+    kind: oneOf(o.kind, `${at}.kind`, ["declared", "inferred"] as const),
+    source: string(o.source, `${at}.source`),
+    manifest: o.manifest === null ? null : string(o.manifest, `${at}.manifest`),
+    ...(o.detail === undefined ? {} : { detail: string(o.detail, `${at}.detail`) }),
+    resolved,
+    ...(reason === undefined ? {} : { unresolvedReason: reason }),
+    ...(o.via === undefined ? {} : { via: array(o.via, `${at}.via`, string) }),
+  };
 }
 
 function countsKeyedBy<K extends string>(value: unknown, at: string, keys: readonly K[]): Partial<Record<K, number>> {

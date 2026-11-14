@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 5,
+  "schemaVersion": 7,
   "root": "<repo>",
   "projects": [
     {
@@ -98,24 +98,63 @@
       "name": "address",
       "kind": "function",
       "line": 6,
+      "endLine": 8,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [],
+      "returnType": "string",
+      "signature": "address(): string",
       "file": "app/main.ts"
     },
     {
       "name": "settings",
       "kind": "const",
       "line": 3,
+      "endLine": 3,
       "exported": false,
+      "exportKind": "none",
+      "signature": "settings = require(\"./config\")",
       "file": "lib/bridge.js"
     },
     {
       "name": "Connection",
       "kind": "class",
       "line": 3,
+      "endLine": 7,
       "exported": false,
+      "exportKind": "none",
+      "signature": "class Connection {",
+      "file": "lib/helper.ts"
+    },
+    {
+      "name": "Connection.open",
+      "kind": "function",
+      "line": 4,
+      "endLine": 6,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [],
+      "returnType": "boolean",
+      "signature": "Connection.open(): boolean",
       "file": "lib/helper.ts"
     }
   ],
+  "manifests": [
+    {
+      "path": "package.json",
+      "dir": ".",
+      "project": ".",
+      "ecosystem": "npm",
+      "name": "export-import-equals",
+      "workspaces": [],
+      "scripts": [],
+      "problems": []
+    }
+  ],
+  "dependencies": [],
+  "configReferences": [],
+  "envDeclarations": [],
+  "entryPoints": [],
   "coverage": {
     "files": {
       "found": 4,
@@ -160,6 +199,13 @@
           "external": 0,
           "excluded": 0,
           "unresolved": 0
+        },
+        "call": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
         }
       },
       "external": {
@@ -174,7 +220,33 @@
     "routes": {
       "omitted": [],
       "withheld": []
+    },
+    "calls": {
+      "total": 1,
+      "resolved": 0,
+      "unresolved": 1,
+      "unresolvedCalls": [
+        {
+          "from": "app/main.ts",
+          "callee": "Connection.open",
+          "line": 7,
+          "reason": "unresolved-call"
+        }
+      ]
     }
   },
-  "configs": []
+  "configs": [],
+  "nonCodeCandidates": [
+    {
+      "path": "package.json",
+      "absolutePath": "C:\\Users\\thorfinn\\projects\\cartograph\\fixtures\\export-import-equals\\repo\\package.json",
+      "module": ".",
+      "content": "{\n  \"name\": \"export-import-equals\",\n  \"version\": \"1.0.0\",\n  \"private\": true\n}\n",
+      "bytes": 78,
+      "lines": 5,
+      "hash": "b23ac58326ab0283efb13a9805dbda3f675cc11ab86402bf2aa530d944d062fa",
+      "project": ".",
+      "category": "primary_manifest"
+    }
+  ]
 }

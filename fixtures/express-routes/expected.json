@@ -1,0 +1,1375 @@
+{
+  "schemaVersion": 7,
+  "root": "<repo>",
+  "projects": [
+    {
+      "path": ".",
+      "adapter": "Express"
+    }
+  ],
+  "files": [
+    {
+      "path": "app.js",
+      "module": ".",
+      "lines": 29,
+      "bytes": 675,
+      "hash": "57a6179c93d6dccde553a5236c89d8f1ac05036745275bb3e92caa93ffd537f8",
+      "fanIn": 0,
+      "fanOut": 3,
+      "reachedBy": null,
+      "role": null,
+      "exports": []
+    },
+    {
+      "path": "routes/index.js",
+      "module": "routes",
+      "lines": 8,
+      "bytes": 172,
+      "hash": "84e2f6bc081e1428a6b80531284ff3fe5fbec524b661949bfd63434bc043d3a7",
+      "fanIn": 1,
+      "fanOut": 1,
+      "reachedBy": null,
+      "role": "router",
+      "exports": [
+        "module.exports"
+      ]
+    },
+    {
+      "path": "routes/misc.js",
+      "module": "routes",
+      "lines": 11,
+      "bytes": 182,
+      "hash": "f973693cb54577380e3f38a5bc51256ba21123ef0b030ccabe55b5d45b050d01",
+      "fanIn": 1,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": "router",
+      "exports": [
+        "module.exports"
+      ]
+    },
+    {
+      "path": "routes/orphan.js",
+      "module": "routes",
+      "lines": 16,
+      "bytes": 284,
+      "hash": "836634672130e85e5ff9e21aae47bd19cf94b1b32a919783bdb5b02ae290c0bd",
+      "fanIn": 0,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": "router",
+      "exports": [
+        "module.exports"
+      ]
+    },
+    {
+      "path": "routes/posts.js",
+      "module": "routes",
+      "lines": 58,
+      "bytes": 1079,
+      "hash": "85657fb35b10d83d8b3623135c54cd4c8223e0bcdeeaf149b64e416cd1032c98",
+      "fanIn": 1,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": "router",
+      "exports": [
+        "module.exports"
+      ]
+    },
+    {
+      "path": "routes/users.js",
+      "module": "routes",
+      "lines": 31,
+      "bytes": 570,
+      "hash": "9dfb7ff1e5608aa4d38ff9c01f51a44b477839e17e73a02bf9d6b53a31155c52",
+      "fanIn": 1,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": "router",
+      "exports": [
+        "module.exports"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source": "app.js",
+      "target": "routes/index.js",
+      "kind": "require",
+      "typeOnly": false,
+      "specifier": "./routes/index",
+      "line": 2
+    },
+    {
+      "source": "app.js",
+      "target": "routes/misc.js",
+      "kind": "require",
+      "typeOnly": false,
+      "specifier": "./routes/misc",
+      "line": 4
+    },
+    {
+      "source": "app.js",
+      "target": "routes/posts.js",
+      "kind": "require",
+      "typeOnly": false,
+      "specifier": "./routes/posts",
+      "line": 3
+    },
+    {
+      "source": "routes/index.js",
+      "target": "routes/users.js",
+      "kind": "require",
+      "typeOnly": false,
+      "specifier": "./users",
+      "line": 2
+    }
+  ],
+  "routes": [
+    {
+      "file": "routes/posts.js",
+      "method": "GET",
+      "pattern": "/api/archive",
+      "line": 12
+    },
+    {
+      "file": "routes/posts.js",
+      "method": "GET",
+      "pattern": "/api/feed",
+      "line": 12
+    },
+    {
+      "file": "routes/posts.js",
+      "method": "ALL",
+      "pattern": "/api/ping",
+      "line": 11
+    },
+    {
+      "file": "routes/posts.js",
+      "method": "GET",
+      "pattern": "/api/posts",
+      "line": 6
+    },
+    {
+      "file": "routes/posts.js",
+      "method": "HEAD",
+      "pattern": "/api/posts",
+      "line": 10
+    },
+    {
+      "file": "routes/posts.js",
+      "method": "OPTIONS",
+      "pattern": "/api/posts",
+      "line": 9
+    },
+    {
+      "file": "routes/posts.js",
+      "method": "POST",
+      "pattern": "/api/posts",
+      "line": 7
+    },
+    {
+      "file": "routes/posts.js",
+      "method": "PATCH",
+      "pattern": "/api/posts/:postId",
+      "line": 8
+    },
+    {
+      "file": "routes/users.js",
+      "method": "GET",
+      "pattern": "/api/users",
+      "line": 5
+    },
+    {
+      "file": "routes/users.js",
+      "method": "POST",
+      "pattern": "/api/users",
+      "line": 6
+    },
+    {
+      "file": "routes/users.js",
+      "method": "DELETE",
+      "pattern": "/api/users/:userId",
+      "line": 9
+    },
+    {
+      "file": "routes/users.js",
+      "method": "GET",
+      "pattern": "/api/users/:userId",
+      "line": 7
+    },
+    {
+      "file": "routes/users.js",
+      "method": "PUT",
+      "pattern": "/api/users/:userId",
+      "line": 8
+    },
+    {
+      "file": "app.js",
+      "method": "GET",
+      "pattern": "/health",
+      "line": 10
+    },
+    {
+      "file": "app.js",
+      "method": "DELETE",
+      "pattern": "/sessions/:sessionId",
+      "line": 12
+    },
+    {
+      "file": "app.js",
+      "method": "GET",
+      "pattern": "/users/:userId/posts/:postId",
+      "line": 11
+    }
+  ],
+  "symbols": [
+    {
+      "name": "express",
+      "kind": "const",
+      "line": 1,
+      "endLine": 1,
+      "exported": false,
+      "exportKind": "none",
+      "signature": "express = require(\"express\")",
+      "file": "app.js"
+    },
+    {
+      "name": "apiRouter",
+      "kind": "const",
+      "line": 2,
+      "endLine": 2,
+      "exported": false,
+      "exportKind": "none",
+      "signature": "apiRouter = require(\"./routes/index\")",
+      "file": "app.js"
+    },
+    {
+      "name": "postsRouter",
+      "kind": "const",
+      "line": 3,
+      "endLine": 3,
+      "exported": false,
+      "exportKind": "none",
+      "signature": "postsRouter = require(\"./routes/posts\")",
+      "file": "app.js"
+    },
+    {
+      "name": "miscRouter",
+      "kind": "const",
+      "line": 4,
+      "endLine": 4,
+      "exported": false,
+      "exportKind": "none",
+      "signature": "miscRouter = require(\"./routes/misc\")",
+      "file": "app.js"
+    },
+    {
+      "name": "miscMount",
+      "kind": "const",
+      "line": 6,
+      "endLine": 6,
+      "exported": false,
+      "exportKind": "none",
+      "signature": "miscMount = process.env.MISC_MOUNT || \"/misc\"",
+      "file": "app.js"
+    },
+    {
+      "name": "app",
+      "kind": "const",
+      "line": 8,
+      "endLine": 8,
+      "exported": false,
+      "exportKind": "none",
+      "signature": "app = express()",
+      "file": "app.js"
+    },
+    {
+      "name": "healthCheck",
+      "kind": "function",
+      "line": 17,
+      "endLine": 19,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [
+        {
+          "name": "_req",
+          "type": "any"
+        },
+        {
+          "name": "res",
+          "type": "any"
+        }
+      ],
+      "returnType": "void",
+      "signature": "healthCheck(_req: any, res: any): void",
+      "file": "app.js"
+    },
+    {
+      "name": "showUserPost",
+      "kind": "function",
+      "line": 21,
+      "endLine": 23,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [
+        {
+          "name": "_req",
+          "type": "any"
+        },
+        {
+          "name": "res",
+          "type": "any"
+        }
+      ],
+      "returnType": "void",
+      "signature": "showUserPost(_req: any, res: any): void",
+      "file": "app.js"
+    },
+    {
+      "name": "endSession",
+      "kind": "function",
+      "line": 25,
+      "endLine": 27,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [
+        {
+          "name": "_req",
+          "type": "any"
+        },
+        {
+          "name": "res",
+          "type": "any"
+        }
+      ],
+      "returnType": "void",
+      "signature": "endSession(_req: any, res: any): void",
+      "file": "app.js"
+    },
+    {
+      "name": "express",
+      "kind": "const",
+      "line": 1,
+      "endLine": 1,
+      "exported": false,
+      "exportKind": "none",
+      "signature": "express = require(\"express\")",
+      "file": "routes/index.js"
+    },
+    {
+      "name": "usersRouter",
+      "kind": "const",
+      "line": 2,
+      "endLine": 2,
+      "exported": false,
+      "exportKind": "none",
+      "signature": "usersRouter = require(\"./users\")",
+      "file": "routes/index.js"
+    },
+    {
+      "name": "router",
+      "kind": "const",
+      "line": 4,
+      "endLine": 4,
+      "exported": false,
+      "exportKind": "none",
+      "signature": "router = express.Router()",
+      "file": "routes/index.js"
+    },
+    {
+      "name": "express",
+      "kind": "const",
+      "line": 1,
+      "endLine": 1,
+      "exported": false,
+      "exportKind": "none",
+      "signature": "express = require(\"express\")",
+      "file": "routes/misc.js"
+    },
+    {
+      "name": "router",
+      "kind": "const",
+      "line": 3,
+      "endLine": 3,
+      "exported": false,
+      "exportKind": "none",
+      "signature": "router = express.Router()",
+      "file": "routes/misc.js"
+    },
+    {
+      "name": "miscStatus",
+      "kind": "function",
+      "line": 7,
+      "endLine": 9,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [
+        {
+          "name": "_req",
+          "type": "any"
+        },
+        {
+          "name": "res",
+          "type": "any"
+        }
+      ],
+      "returnType": "void",
+      "signature": "miscStatus(_req: any, res: any): void",
+      "file": "routes/misc.js"
+    },
+    {
+      "name": "express",
+      "kind": "const",
+      "line": 1,
+      "endLine": 1,
+      "exported": false,
+      "exportKind": "none",
+      "signature": "express = require(\"express\")",
+      "file": "routes/orphan.js"
+    },
+    {
+      "name": "router",
+      "kind": "const",
+      "line": 3,
+      "endLine": 3,
+      "exported": false,
+      "exportKind": "none",
+      "signature": "router = express.Router()",
+      "file": "routes/orphan.js"
+    },
+    {
+      "name": "showSecret",
+      "kind": "function",
+      "line": 8,
+      "endLine": 10,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [
+        {
+          "name": "_req",
+          "type": "any"
+        },
+        {
+          "name": "res",
+          "type": "any"
+        }
+      ],
+      "returnType": "void",
+      "signature": "showSecret(_req: any, res: any): void",
+      "file": "routes/orphan.js"
+    },
+    {
+      "name": "makeSecret",
+      "kind": "function",
+      "line": 12,
+      "endLine": 14,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [
+        {
+          "name": "_req",
+          "type": "any"
+        },
+        {
+          "name": "res",
+          "type": "any"
+        }
+      ],
+      "returnType": "void",
+      "signature": "makeSecret(_req: any, res: any): void",
+      "file": "routes/orphan.js"
+    },
+    {
+      "name": "express",
+      "kind": "const",
+      "line": 1,
+      "endLine": 1,
+      "exported": false,
+      "exportKind": "none",
+      "signature": "express = require(\"express\")",
+      "file": "routes/posts.js"
+    },
+    {
+      "name": "router",
+      "kind": "const",
+      "line": 3,
+      "endLine": 3,
+      "exported": false,
+      "exportKind": "none",
+      "signature": "router = express.Router()",
+      "file": "routes/posts.js"
+    },
+    {
+      "name": "unlistedPath",
+      "kind": "const",
+      "line": 16,
+      "endLine": 16,
+      "exported": false,
+      "exportKind": "none",
+      "signature": "unlistedPath = \"/unlisted\"",
+      "file": "routes/posts.js"
+    },
+    {
+      "name": "listPosts",
+      "kind": "function",
+      "line": 18,
+      "endLine": 20,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [
+        {
+          "name": "_req",
+          "type": "any"
+        },
+        {
+          "name": "res",
+          "type": "any"
+        }
+      ],
+      "returnType": "void",
+      "signature": "listPosts(_req: any, res: any): void",
+      "file": "routes/posts.js"
+    },
+    {
+      "name": "listPostsCached",
+      "kind": "function",
+      "line": 22,
+      "endLine": 24,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [
+        {
+          "name": "_req",
+          "type": "any"
+        },
+        {
+          "name": "res",
+          "type": "any"
+        }
+      ],
+      "returnType": "void",
+      "signature": "listPostsCached(_req: any, res: any): void",
+      "file": "routes/posts.js"
+    },
+    {
+      "name": "createPost",
+      "kind": "function",
+      "line": 26,
+      "endLine": 28,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [
+        {
+          "name": "_req",
+          "type": "any"
+        },
+        {
+          "name": "res",
+          "type": "any"
+        }
+      ],
+      "returnType": "void",
+      "signature": "createPost(_req: any, res: any): void",
+      "file": "routes/posts.js"
+    },
+    {
+      "name": "patchPost",
+      "kind": "function",
+      "line": 30,
+      "endLine": 32,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [
+        {
+          "name": "_req",
+          "type": "any"
+        },
+        {
+          "name": "res",
+          "type": "any"
+        }
+      ],
+      "returnType": "void",
+      "signature": "patchPost(_req: any, res: any): void",
+      "file": "routes/posts.js"
+    },
+    {
+      "name": "postOptions",
+      "kind": "function",
+      "line": 34,
+      "endLine": 36,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [
+        {
+          "name": "_req",
+          "type": "any"
+        },
+        {
+          "name": "res",
+          "type": "any"
+        }
+      ],
+      "returnType": "void",
+      "signature": "postOptions(_req: any, res: any): void",
+      "file": "routes/posts.js"
+    },
+    {
+      "name": "postHead",
+      "kind": "function",
+      "line": 38,
+      "endLine": 40,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [
+        {
+          "name": "_req",
+          "type": "any"
+        },
+        {
+          "name": "res",
+          "type": "any"
+        }
+      ],
+      "returnType": "void",
+      "signature": "postHead(_req: any, res: any): void",
+      "file": "routes/posts.js"
+    },
+    {
+      "name": "ping",
+      "kind": "function",
+      "line": 42,
+      "endLine": 44,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [
+        {
+          "name": "_req",
+          "type": "any"
+        },
+        {
+          "name": "res",
+          "type": "any"
+        }
+      ],
+      "returnType": "void",
+      "signature": "ping(_req: any, res: any): void",
+      "file": "routes/posts.js"
+    },
+    {
+      "name": "listArchived",
+      "kind": "function",
+      "line": 46,
+      "endLine": 48,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [
+        {
+          "name": "_req",
+          "type": "any"
+        },
+        {
+          "name": "res",
+          "type": "any"
+        }
+      ],
+      "returnType": "void",
+      "signature": "listArchived(_req: any, res: any): void",
+      "file": "routes/posts.js"
+    },
+    {
+      "name": "showUnlisted",
+      "kind": "function",
+      "line": 50,
+      "endLine": 52,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [
+        {
+          "name": "_req",
+          "type": "any"
+        },
+        {
+          "name": "res",
+          "type": "any"
+        }
+      ],
+      "returnType": "void",
+      "signature": "showUnlisted(_req: any, res: any): void",
+      "file": "routes/posts.js"
+    },
+    {
+      "name": "deleteDraft",
+      "kind": "function",
+      "line": 54,
+      "endLine": 56,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [
+        {
+          "name": "_req",
+          "type": "any"
+        },
+        {
+          "name": "res",
+          "type": "any"
+        }
+      ],
+      "returnType": "void",
+      "signature": "deleteDraft(_req: any, res: any): void",
+      "file": "routes/posts.js"
+    },
+    {
+      "name": "express",
+      "kind": "const",
+      "line": 1,
+      "endLine": 1,
+      "exported": false,
+      "exportKind": "none",
+      "signature": "express = require(\"express\")",
+      "file": "routes/users.js"
+    },
+    {
+      "name": "router",
+      "kind": "const",
+      "line": 3,
+      "endLine": 3,
+      "exported": false,
+      "exportKind": "none",
+      "signature": "router = express.Router()",
+      "file": "routes/users.js"
+    },
+    {
+      "name": "listUsers",
+      "kind": "function",
+      "line": 11,
+      "endLine": 13,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [
+        {
+          "name": "_req",
+          "type": "any"
+        },
+        {
+          "name": "res",
+          "type": "any"
+        }
+      ],
+      "returnType": "any",
+      "signature": "listUsers(_req: any, res: any): any",
+      "file": "routes/users.js"
+    },
+    {
+      "name": "createUser",
+      "kind": "function",
+      "line": 15,
+      "endLine": 17,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [
+        {
+          "name": "_req",
+          "type": "any"
+        },
+        {
+          "name": "res",
+          "type": "any"
+        }
+      ],
+      "returnType": "any",
+      "signature": "createUser(_req: any, res: any): any",
+      "file": "routes/users.js"
+    },
+    {
+      "name": "getUser",
+      "kind": "function",
+      "line": 19,
+      "endLine": 21,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [
+        {
+          "name": "_req",
+          "type": "any"
+        },
+        {
+          "name": "res",
+          "type": "any"
+        }
+      ],
+      "returnType": "any",
+      "signature": "getUser(_req: any, res: any): any",
+      "file": "routes/users.js"
+    },
+    {
+      "name": "updateUser",
+      "kind": "function",
+      "line": 23,
+      "endLine": 25,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [
+        {
+          "name": "_req",
+          "type": "any"
+        },
+        {
+          "name": "res",
+          "type": "any"
+        }
+      ],
+      "returnType": "any",
+      "signature": "updateUser(_req: any, res: any): any",
+      "file": "routes/users.js"
+    },
+    {
+      "name": "deleteUser",
+      "kind": "function",
+      "line": 27,
+      "endLine": 29,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [
+        {
+          "name": "_req",
+          "type": "any"
+        },
+        {
+          "name": "res",
+          "type": "any"
+        }
+      ],
+      "returnType": "any",
+      "signature": "deleteUser(_req: any, res: any): any",
+      "file": "routes/users.js"
+    }
+  ],
+  "manifests": [
+    {
+      "path": "package.json",
+      "dir": ".",
+      "project": ".",
+      "ecosystem": "npm",
+      "name": "express-routes",
+      "workspaces": [],
+      "scripts": [],
+      "problems": []
+    }
+  ],
+  "dependencies": [
+    {
+      "name": "express",
+      "version": "^4.19.2",
+      "kind": "runtime",
+      "manifest": "package.json",
+      "dir": ".",
+      "project": ".",
+      "importedBy": 6
+    }
+  ],
+  "configReferences": [
+    {
+      "file": "app.js",
+      "variable": "MISC_MOUNT",
+      "line": 6,
+      "kind": "process.env"
+    }
+  ],
+  "envDeclarations": [],
+  "entryPoints": [
+    {
+      "path": "app.js",
+      "kind": "inferred",
+      "source": "framework route",
+      "manifest": null,
+      "detail": "GET /health",
+      "resolved": true
+    },
+    {
+      "path": "routes/posts.js",
+      "kind": "inferred",
+      "source": "framework route",
+      "manifest": null,
+      "detail": "GET /api/archive",
+      "resolved": true
+    },
+    {
+      "path": "routes/users.js",
+      "kind": "inferred",
+      "source": "framework route",
+      "manifest": null,
+      "detail": "GET /api/users",
+      "resolved": true
+    }
+  ],
+  "coverage": {
+    "files": {
+      "found": 6,
+      "parsed": 6,
+      "skipped": 0,
+      "skippedFiles": [],
+      "excludedDirectories": []
+    },
+    "imports": {
+      "total": {
+        "seen": 10,
+        "internal": 4,
+        "external": 6,
+        "excluded": 0,
+        "unresolved": 0
+      },
+      "byKind": {
+        "import": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "re-export": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "dynamic-import": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "require": {
+          "seen": 10,
+          "internal": 4,
+          "external": 6,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "call": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        }
+      },
+      "external": {
+        "package": 6,
+        "builtin": 0,
+        "outside-root": 0
+      },
+      "excluded": {},
+      "unresolvedByReason": {},
+      "unresolved": []
+    },
+    "routes": {
+      "omitted": [
+        {
+          "file": "routes/misc.js",
+          "line": 5,
+          "reason": "the router it's registered on is mounted at a path that isn't a string literal"
+        },
+        {
+          "file": "routes/orphan.js",
+          "line": 5,
+          "reason": "the router it's registered on is never mounted"
+        },
+        {
+          "file": "routes/orphan.js",
+          "line": 6,
+          "reason": "the router it's registered on is never mounted"
+        },
+        {
+          "file": "routes/posts.js",
+          "line": 13,
+          "reason": "router.get() is given a path that isn't a string literal"
+        },
+        {
+          "file": "routes/posts.js",
+          "line": 14,
+          "reason": "router.delete() is given a path that isn't a string literal"
+        }
+      ],
+      "withheld": []
+    },
+    "calls": {
+      "total": 60,
+      "resolved": 1,
+      "unresolved": 59,
+      "unresolvedCalls": [
+        {
+          "from": "app.js",
+          "callee": "app.get",
+          "line": 10,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "app.js",
+          "callee": "app.get",
+          "line": 11,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "app.js",
+          "callee": "app.delete",
+          "line": 12,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "app.js",
+          "callee": "app.use",
+          "line": 13,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "app.js",
+          "callee": "app.use",
+          "line": 14,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "app.js",
+          "callee": "app.use",
+          "line": 15,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "app.js",
+          "callee": "res.json",
+          "line": 18,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "app.js",
+          "callee": "res.json",
+          "line": 22,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "app.js",
+          "callee": "res.status(204).end",
+          "line": 26,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "app.js",
+          "callee": "res.status",
+          "line": 26,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "app.js",
+          "callee": "app.listen",
+          "line": 29,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/index.js",
+          "callee": "express.Router",
+          "line": 4,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/index.js",
+          "callee": "router.use",
+          "line": 6,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/misc.js",
+          "callee": "express.Router",
+          "line": 3,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/misc.js",
+          "callee": "router.get",
+          "line": 5,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/misc.js",
+          "callee": "res.json",
+          "line": 8,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/orphan.js",
+          "callee": "express.Router",
+          "line": 3,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/orphan.js",
+          "callee": "router.get",
+          "line": 5,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/orphan.js",
+          "callee": "router.post",
+          "line": 6,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/orphan.js",
+          "callee": "res.json",
+          "line": 9,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/orphan.js",
+          "callee": "res.status(201).json",
+          "line": 13,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/orphan.js",
+          "callee": "res.status",
+          "line": 13,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/posts.js",
+          "callee": "express.Router",
+          "line": 3,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/posts.js",
+          "callee": "router.get",
+          "line": 5,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/posts.js",
+          "callee": "router.get",
+          "line": 6,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/posts.js",
+          "callee": "router.post",
+          "line": 7,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/posts.js",
+          "callee": "router.patch",
+          "line": 8,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/posts.js",
+          "callee": "router.options",
+          "line": 9,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/posts.js",
+          "callee": "router.head",
+          "line": 10,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/posts.js",
+          "callee": "router.all",
+          "line": 11,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/posts.js",
+          "callee": "router.get",
+          "line": 12,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/posts.js",
+          "callee": "router.get",
+          "line": 13,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/posts.js",
+          "callee": "router.delete",
+          "line": 14,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/posts.js",
+          "callee": "res.json",
+          "line": 19,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/posts.js",
+          "callee": "res.json",
+          "line": 23,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/posts.js",
+          "callee": "res.status(201).json",
+          "line": 27,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/posts.js",
+          "callee": "res.status",
+          "line": 27,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/posts.js",
+          "callee": "res.json",
+          "line": 31,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/posts.js",
+          "callee": "res.status(204).end",
+          "line": 35,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/posts.js",
+          "callee": "res.status",
+          "line": 35,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/posts.js",
+          "callee": "res.end",
+          "line": 39,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/posts.js",
+          "callee": "res.json",
+          "line": 43,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/posts.js",
+          "callee": "res.json",
+          "line": 47,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/posts.js",
+          "callee": "res.json",
+          "line": 51,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/posts.js",
+          "callee": "res.status(204).end",
+          "line": 55,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/posts.js",
+          "callee": "res.status",
+          "line": 55,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/users.js",
+          "callee": "express.Router",
+          "line": 3,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/users.js",
+          "callee": "router.get",
+          "line": 5,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/users.js",
+          "callee": "router.post",
+          "line": 6,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/users.js",
+          "callee": "router.get",
+          "line": 7,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/users.js",
+          "callee": "router.put",
+          "line": 8,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/users.js",
+          "callee": "router.delete",
+          "line": 9,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/users.js",
+          "callee": "res.json",
+          "line": 12,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/users.js",
+          "callee": "res.status(201).json",
+          "line": 16,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/users.js",
+          "callee": "res.status",
+          "line": 16,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/users.js",
+          "callee": "res.json",
+          "line": 20,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/users.js",
+          "callee": "res.json",
+          "line": 24,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/users.js",
+          "callee": "res.status(204).end",
+          "line": 28,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "routes/users.js",
+          "callee": "res.status",
+          "line": 28,
+          "reason": "unresolved-call"
+        }
+      ]
+    }
+  },
+  "configs": [],
+  "nonCodeCandidates": [
+    {
+      "path": "package.json",
+      "absolutePath": "C:\\Users\\thorfinn\\projects\\cartograph\\fixtures\\express-routes\\repo\\package.json",
+      "module": ".",
+      "content": "{\n  \"name\": \"express-routes\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"express\": \"^4.19.2\"\n  }\n}\n",
+      "bytes": 122,
+      "lines": 8,
+      "hash": "70e5b5131ff922199b89effd646cfc33df62038464b40a15a819ca3fbea269c7",
+      "project": ".",
+      "category": "primary_manifest"
+    }
+  ]
+}

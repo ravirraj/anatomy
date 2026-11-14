@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 5,
+  "schemaVersion": 7,
   "root": "<repo>",
   "projects": [
     {
@@ -110,29 +110,168 @@
       "name": "UsersController",
       "kind": "class",
       "line": 4,
+      "endLine": 17,
       "exported": true,
+      "exportKind": "named",
+      "signature": "@Controller(\"users\")",
+      "file": "packages/api/src/users/users.controller.ts"
+    },
+    {
+      "name": "UsersController.list",
+      "kind": "function",
+      "line": 8,
+      "endLine": 11,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [],
+      "returnType": "{}",
+      "signature": "UsersController.list(): {}",
+      "file": "packages/api/src/users/users.controller.ts"
+    },
+    {
+      "name": "UsersController.create",
+      "kind": "function",
+      "line": 13,
+      "endLine": 16,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [
+        {
+          "name": "_body",
+          "type": "unknown"
+        }
+      ],
+      "returnType": "{ created: boolean; }",
+      "signature": "UsersController.create(_body: unknown): { created: boolean; }",
       "file": "packages/api/src/users/users.controller.ts"
     },
     {
       "name": "UsersService",
       "kind": "class",
       "line": 3,
+      "endLine": 8,
       "exported": true,
+      "exportKind": "named",
+      "signature": "@Injectable()",
+      "file": "packages/api/src/users/users.service.ts"
+    },
+    {
+      "name": "UsersService.all",
+      "kind": "function",
+      "line": 5,
+      "endLine": 7,
+      "exported": false,
+      "exportKind": "none",
+      "parameters": [],
+      "returnType": "string[]",
+      "signature": "UsersService.all(): string[]",
       "file": "packages/api/src/users/users.service.ts"
     },
     {
       "name": "default",
       "kind": "function",
       "line": 3,
+      "endLine": 5,
       "exported": true,
+      "exportKind": "default",
+      "parameters": [],
+      "returnType": "any",
+      "signature": "default(): any",
       "file": "packages/web/app/page.tsx"
     },
     {
       "name": "brand",
       "kind": "const",
       "line": 1,
+      "endLine": 1,
       "exported": true,
+      "exportKind": "named",
+      "signature": "brand = \"monorepo web\"",
       "file": "packages/web/lib/branding.ts"
+    }
+  ],
+  "manifests": [
+    {
+      "path": "package.json",
+      "dir": ".",
+      "project": ".",
+      "ecosystem": "npm",
+      "name": "two-framework-monorepo",
+      "workspaces": [
+        "packages/*"
+      ],
+      "scripts": [],
+      "problems": []
+    },
+    {
+      "path": "packages/api/package.json",
+      "dir": "packages/api",
+      "project": "packages/api",
+      "ecosystem": "npm",
+      "name": "@monorepo/api",
+      "workspaces": [],
+      "scripts": [],
+      "problems": []
+    },
+    {
+      "path": "packages/web/package.json",
+      "dir": "packages/web",
+      "project": "packages/web",
+      "ecosystem": "npm",
+      "name": "@monorepo/web",
+      "workspaces": [],
+      "scripts": [],
+      "problems": []
+    }
+  ],
+  "dependencies": [
+    {
+      "name": "@nestjs/core",
+      "version": "11.0.0",
+      "kind": "runtime",
+      "manifest": "packages/api/package.json",
+      "dir": "packages/api",
+      "project": "packages/api",
+      "importedBy": 0
+    },
+    {
+      "name": "@nestjs/common",
+      "version": "11.0.0",
+      "kind": "runtime",
+      "manifest": "packages/api/package.json",
+      "dir": "packages/api",
+      "project": "packages/api",
+      "importedBy": 2
+    },
+    {
+      "name": "next",
+      "version": "16.0.0",
+      "kind": "runtime",
+      "manifest": "packages/web/package.json",
+      "dir": "packages/web",
+      "project": "packages/web",
+      "importedBy": 0
+    },
+    {
+      "name": "react",
+      "version": "19.0.0",
+      "kind": "runtime",
+      "manifest": "packages/web/package.json",
+      "dir": "packages/web",
+      "project": "packages/web",
+      "importedBy": 0
+    }
+  ],
+  "configReferences": [],
+  "envDeclarations": [],
+  "entryPoints": [
+    {
+      "path": "packages/api/src/users/users.controller.ts",
+      "kind": "inferred",
+      "source": "framework route",
+      "manifest": null,
+      "detail": "GET /users",
+      "resolved": true
     }
   ],
   "coverage": {
@@ -179,6 +318,13 @@
           "external": 0,
           "excluded": 0,
           "unresolved": 0
+        },
+        "call": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
         }
       },
       "external": {
@@ -193,7 +339,79 @@
     "routes": {
       "omitted": [],
       "withheld": []
+    },
+    "calls": {
+      "total": 5,
+      "resolved": 0,
+      "unresolved": 5,
+      "unresolvedCalls": [
+        {
+          "from": "packages/api/src/users/users.controller.ts",
+          "callee": "Controller",
+          "line": 4,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "packages/api/src/users/users.controller.ts",
+          "callee": "Get",
+          "line": 8,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "packages/api/src/users/users.controller.ts",
+          "callee": "this.users.all",
+          "line": 10,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "packages/api/src/users/users.controller.ts",
+          "callee": "Post",
+          "line": 13,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "packages/api/src/users/users.service.ts",
+          "callee": "Injectable",
+          "line": 3,
+          "reason": "unresolved-call"
+        }
+      ]
     }
   },
-  "configs": []
+  "configs": [],
+  "nonCodeCandidates": [
+    {
+      "path": "package.json",
+      "absolutePath": "C:\\Users\\thorfinn\\projects\\cartograph\\fixtures\\two-framework-monorepo\\repo\\package.json",
+      "module": ".",
+      "content": "{\n  \"name\": \"two-framework-monorepo\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"workspaces\": [\n    \"packages/*\"\n  ]\n}\n",
+      "bytes": 120,
+      "lines": 8,
+      "hash": "842fac936f29e2a166fffbf0a6e4e4369df01a5ca6ea94c421ec0b2862003d33",
+      "project": ".",
+      "category": "primary_manifest"
+    },
+    {
+      "path": "packages/api/package.json",
+      "absolutePath": "C:\\Users\\thorfinn\\projects\\cartograph\\fixtures\\two-framework-monorepo\\repo\\packages\\api\\package.json",
+      "module": "packages/api",
+      "content": "{\n  \"name\": \"@monorepo/api\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"@nestjs/core\": \"11.0.0\",\n    \"@nestjs/common\": \"11.0.0\"\n  }\n}\n",
+      "bytes": 157,
+      "lines": 9,
+      "hash": "f05894098e7f915b8e830f73ef0d54703b6fb5c52b88d8ed92b0247ef59c6a3f",
+      "project": "packages/api",
+      "category": "primary_manifest"
+    },
+    {
+      "path": "packages/web/package.json",
+      "absolutePath": "C:\\Users\\thorfinn\\projects\\cartograph\\fixtures\\two-framework-monorepo\\repo\\packages\\web\\package.json",
+      "module": "packages/web",
+      "content": "{\n  \"name\": \"@monorepo/web\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"next\": \"16.0.0\",\n    \"react\": \"19.0.0\"\n  }\n}\n",
+      "bytes": 140,
+      "lines": 9,
+      "hash": "ead9ee6a61d9e751a462eb5a2088974786cb7a396fa1c843704e16e345ee0cfa",
+      "project": "packages/web",
+      "category": "primary_manifest"
+    }
+  ]
 }

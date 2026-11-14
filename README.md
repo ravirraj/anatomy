@@ -259,6 +259,8 @@ behaviour and exit non-zero on failure, so they run in CI as they run locally.
 |---|---|
 | `scripts/test-provider.ts` | The AI layer against a fake OpenAI-compatible endpoint: request shape, provider-specific parameters, the cache read inside the traced call, the model in the cache key, and the JSON-schema fallback. |
 | `scripts/test-explanation-store.ts` | The explanation store: answers survive a re-render, a request in flight is not stored as an answer, and a store that cannot be written still works in memory. |
+| `scripts/test-packaging.ts` | Packaging, configuration and entry points across structurally different repositories: six manifest formats, every dependency kind, declared-vs-inferred entry points, re-export chains, broken manifests, duplicate declarations, workspace association, and that no configuration value reaches the output. |
+| `scripts/test-packaging-db.ts` | The Phase 4 tables against the live database: organization isolation, the manifest→dependency foreign key, the resolved/unresolved invariant, cascade on analysis deletion, and that `config_references` has no column a value could occupy. |
 
 ```bash
 pnpm test
@@ -303,6 +305,53 @@ Two cases are omitted rather than withheld, because there is a route but no
 method to state: a Next.js **Pages Router** page has no method written
 anywhere, and a `pages/api/**` handler picks its method at runtime. The route
 table lists App Router route handlers and NestJS controller methods.
+
+## Packaging, configuration and entry points
+
+Beyond the code graph, the parser reads what a repository **declares about
+itself**. All three are extracted from the same walk, stored in the same
+analysis, and served to retrieval alongside code windows.
+
+**Manifests and dependencies.** Six formats are read: `package.json`,
+`pnpm-workspace.yaml`, `Cargo.toml`, `go.mod`, `requirements.txt` and
+`pyproject.toml` (PEP 621 and Poetry groups). Each dependency records its name,
+its version or constraint exactly as written, its kind (`runtime`, `dev`,
+`optional`, `peer`, `build`, `indirect`), the manifest that declares it, and the
+workspace package it belongs to.
+
+A dependency row is a **declaration**, never an installation. Nothing is read
+from a lockfile or an installed tree, and the schema has no column that could
+express "installed". The one usage signal is `importedBy`: how many indexed
+files import that package by bare specifier, counted per workspace package so a
+monorepo's two packages never borrow each other's imports. A zero means no
+indexed file imports it, which is not the same as unused — a CLI, a config file
+or a skipped file may still use it.
+
+**Configuration references.** `process.env.X`, `process.env["X"]`,
+`import.meta.env.X`, config object declarations, and the keys declared in
+`.env.example` / `.env.sample` / `.env.template`. Each records its file, line
+and provenance.
+
+**No configuration value is ever stored.** The scanner is value-blind by
+construction and the table has no column a value could go into. A test asserts
+that every value in a fixture's `.env.example` is absent from the entire parse
+output.
+
+**Entry points.** Declared entries come from `package.json` `main`, `module`,
+`exports` and `bin`, `Cargo.toml` `[lib]` and `[[bin]]`, and `pyproject.toml`
+`[project.scripts]`. Inferred entries come from structural conventions:
+framework routes, `index`/`main` files at a package root, Go `package main`,
+Cargo's `src/main.rs` and `src/lib.rs`, and Python `__main__.py`.
+
+The two are **never merged**. An entry that does not resolve is kept and marked
+with why: `not-indexed` (the file exists but is not code this parser reads — a
+`.rs` or `.py` file) or `not-found` (nothing is at that path). Re-export chains
+are followed from each entry, so what a package actually exposes is visible
+beyond its entry file.
+
+Retrieval includes these facts only when a question touches packaging,
+configuration or startup vocabulary, and the blocks state their own limits, so
+an answer cannot upgrade a declaration into a usage claim.
 
 ## Security and privacy
 

@@ -7,6 +7,25 @@ import type { Database } from "../supabase/database.types.ts";
 
 export type Db = SupabaseClient<Database>;
 
+/** One body offered for storage. Nothing else about it is trusted. */
+export type ContentWrite = { body: Uint8Array };
+
+/**
+ * What became of one body offered to the batched write, in the order the
+ * writes were given. A whole request's failure marks its writes failed with
+ * the database's own reason: requests are not transactions.
+ */
+export type ContentWriteResult =
+  | { stored: true; contentHash: string; size: number }
+  | { stored: false; reason: string; reasonCode?: string };
+
+export type ContentStatus = "stored" | "absent" | "excluded" | "legacy_unclassified";
+
+/** Only an explicitly absent file may use the commit-pinned GitHub backfill. */
+export function isBackfillEligible(status: string): status is "absent" {
+  return status === "absent";
+}
+
 /** A fact about stored bytes: which organization holds them, what their identity is, how long they are. */
 export type ContentReference = {
   organizationId: string;
@@ -30,6 +49,32 @@ export class IntegrityError extends Error {
   }
 }
 
+/**
+ * The database contradicts itself about a file and its content: a `stored`
+ * file with no content row under its hash, a status the schema does not
+ * define, or bytes offered for storage that do not hash to the identity
+ * they were fetched for. Never silenced into a typed null — null means
+ * "genuinely absent", and a self-contradiction is not absence.
+ */
+export class ConsistencyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConsistencyError";
+  }
+}
+
+/**
+ * The database security gate rejected bytes that were quarantined while a
+ * writer or GitHub backfill was in flight. The message is deliberately
+ * generic and safe to surface in diagnostics.
+ */
+export class ContentExcludedError extends Error {
+  constructor() {
+    super("content excluded by security policy");
+    this.name = "ContentExcludedError";
+  }
+}
+
 /** The store, in the shape callers use. Implemented in store.ts; the pipeline and the read path call it, both through lib/content. */
 export interface ContentStore {
   /**
@@ -37,6 +82,12 @@ export interface ContentStore {
    * again is a no-op, never an overwrite, and returns the same identity.
    */
   putContents(organizationId: string, content: Uint8Array): Promise<ContentReference>;
+
+  /**
+   * Store several bodies in one conflict-safe request, hashing them here and
+   * collapsing identical bodies to one row. The caller owns chunking.
+   */
+  putContentsBatch(organizationId: string, writes: readonly ContentWrite[]): Promise<ContentWriteResult[]>;
 
   /**
    * The exact bytes, verified against their hash and size before being
@@ -49,14 +100,17 @@ export interface ContentStore {
 }
 
 /**
- * The garbage collector's contract, to be implemented by a later phase
- * (TODO 3.4, "Garbage collection of orphaned content"). Nothing here calls
- * it yet, and this file deliberately contains no deletion code: removing a
- * row is correct only when no lives files row references its hash any more,
- * which needs the reverse-lookup read the migration's
- * files (organization_id, hash) index serves.
- *
- * <T> deleteOrphanedContents(db: Db): Promise<number>
- * — deletes file_contents rows of organizations whose hash no files row
- * references, returning how many it removed.
+ * The garbage collector's contract, implemented in `lib/content/gc.ts`.
+ * Deletes file_contents rows of organizations whose hash no files row
+ * references, with a grace period and atomic database-side check-and-delete.
  */
+export type { GcOptions, GcStats } from "./gc.ts";
+
+/**
+ * The answer-cache retention pruning contract, implemented in
+ * `lib/content/gc.ts`. Deletes expired `ai_cache` rows and evicts the
+ * oldest rows of organizations past their row cap, database-side and
+ * bounded. Cleanup eligibility only: it never replaces verification of a
+ * cache hit and never short-circuits regeneration on a miss.
+ */
+export type { AnswerGcOptions, AnswerGcStats } from "./gc.ts";

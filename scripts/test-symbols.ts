@@ -118,6 +118,249 @@ function symbolsOf(source: string) {
   }
 }
 
+// --- Phase 4 Batch 2: class methods, nested functions, qualified identities ---
+{
+  const found = symbolsOf([
+    "class UserRepo {",
+    "  save() {",
+    "    return true;",
+    "  }",
+    "",
+    "  findById(id: number) {",
+    "    return id;",
+    "  }",
+    "}",
+    "",
+    "export class AuthService {",
+    "  verify() {",
+    "    return \"ok\";",
+    "  }",
+    "",
+    "  revoke(token: string) {",
+    "    return !token;",
+    "  }",
+    "}",
+  ].join("\n"));
+
+  const pick = (name: string) => found.filter((s) => s.name === name);
+  const one = (name: string, kind: string, exported: boolean, line: number, endLine: number) => {
+    const hits = pick(name);
+    const s = hits[0];
+    if (
+      hits.length === 1 && s && s.kind === kind && s.exported === exported
+      && s.line === line && s.endLine === endLine
+    ) {
+      pass(`${name} indexed once as ${exported ? "exported " : ""}${kind} at ${line}..${endLine}`);
+    } else {
+      fail(`${name}: expected one ${exported ? "exported " : ""}${kind} at ${line}..${endLine}, got ${JSON.stringify(hits)}`);
+    }
+  };
+
+  one("UserRepo", "class", false, 1, 9);
+  one("UserRepo.save", "function", false, 2, 4);
+  one("UserRepo.findById", "function", false, 6, 8);
+  one("AuthService", "class", true, 11, 19);
+  one("AuthService.verify", "function", false, 12, 14);
+  one("AuthService.revoke", "function", false, 16, 18);
+  if (found.every((s) => ["function", "class"].includes(s.kind))) {
+    pass("methods are stored under the schema's existing kinds (no kind outside SYMBOL_KINDS)");
+  } else {
+    fail(`unexpected kinds: ${JSON.stringify([...new Set(found.map((s) => s.kind))])}`);
+  }
+}
+
+{
+  const found = symbolsOf([
+    "function outerFunction() {",
+    "  function innerFunction() {",
+    "    return true;",
+    "  }",
+    "",
+    "  return innerFunction();",
+    "}",
+  ].join("\n"));
+  const names = found.map((s) => s.name).sort();
+  if (names.join("/") === "outerFunction/outerFunction.innerFunction") {
+    pass("nested function is indexed with a qualified identity under its parent");
+  } else {
+    fail(`nested function extraction failed: ${JSON.stringify(names)}`);
+  }
+  const inner = found.find((s) => s.name === "outerFunction.innerFunction");
+  if (inner && inner.line === 2 && inner.endLine === 4) {
+    pass("nested function keeps accurate source position");
+  } else {
+    fail(`nested position wrong: ${JSON.stringify(inner)}`);
+  }
+}
+
+{
+  const found = symbolsOf([
+    "class PaymentService {",
+    "  process(amount: number) {",
+    "    function validate() {",
+    "      return amount > 0;",
+    "    }",
+    "",
+    "    return validate();",
+    "  }",
+    "}",
+  ].join("\n"));
+  const names = found.map((s) => s.name).sort();
+  if (names.join("/") === "PaymentService/PaymentService.process/PaymentService.process.validate") {
+    pass("a nested function carries its full parent chain as a qualified identity");
+  } else {
+    fail(`qualified chain wrong: ${JSON.stringify(names)}`);
+  }
+  const nested = found.find((s) => s.name === "PaymentService.process.validate");
+  const method = found.find((s) => s.name === "PaymentService.process");
+  if (
+    nested && method
+    && nested.line === 3 && nested.endLine === 5
+    && method.line === 2 && method.endLine === 8
+  ) {
+    pass("method and its nested function keep accurate, distinct source positions");
+  } else {
+    fail(`positions wrong: method=${JSON.stringify(method)} nested=${JSON.stringify(nested)}`);
+  }
+}
+
+{
+  const found = symbolsOf([
+    "class UserService {",
+    "  public validate() {",
+    "    return true;",
+    "  }",
+    "",
+    "  private normalize() {",
+    "    return 1;",
+    "  }",
+    "",
+    "  protected check() {",
+    "    return 2;",
+    "  }",
+    "",
+    "  static create() {",
+    "    return new UserService();",
+    "  }",
+    "}",
+  ].join("\n"));
+  const methodNames = found.filter((s) => s.name.startsWith("UserService.")).map((s) => s.name).sort();
+  if (methodNames.join("/") === "UserService.check/UserService.create/UserService.normalize/UserService.validate") {
+    pass("modifier keywords (public/private/protected/static) never prevent extraction");
+  } else {
+    fail(`modified methods wrong: ${JSON.stringify(methodNames)}`);
+  }
+  const sig = found.find((s) => s.name === "UserService.create");
+  if (sig && typeof sig.signature === "string" && sig.signature.startsWith("UserService.create(")) {
+    pass("method signatures are recorded through the shared enrichment path");
+  } else {
+    fail(`signature wrong: ${JSON.stringify(sig)}`);
+  }
+}
+
+{
+  const found = symbolsOf([
+    "export const registry = {",
+    "  register() {",
+    "    return true;",
+    "  },",
+    "",
+    "  lookup: function (key: string) {",
+    "    return key;",
+    "  },",
+    "",
+    "  count: () => 0,",
+    "};",
+  ].join("\n"));
+  const names = found.filter((s) => s.name.startsWith("registry.")).map((s) => s.name).sort();
+  if (names.join("/") === "registry.count/registry.lookup/registry.register") {
+    pass("object-literal methods (shorthand, function value, arrow value) are indexed");
+  } else {
+    fail(`object methods wrong: ${JSON.stringify(names)}`);
+  }
+  const reg = found.find((s) => s.name === "registry");
+  const regMethod = found.find((s) => s.name === "registry.register");
+  if (reg && reg.exported && regMethod && regMethod.exported === false && regMethod.exportKind === "none") {
+    pass("object methods are members, not module exports: exported=false, exportKind=none");
+  } else {
+    fail(`object method export flags wrong: ${JSON.stringify(regMethod)} container=${JSON.stringify(reg)}`);
+  }
+}
+
+{
+  const found = symbolsOf([
+    "class Store {",
+    "  save(value: string): string;",
+    "  save(value: number): number;",
+    "  save(value: unknown) {",
+    "    return value;",
+    "  }",
+    "}",
+    "",
+    "class Other {",
+    "  save() {",
+    "    return \"other\";",
+    "  }",
+    "}",
+  ].join("\n"));
+  const storeSaves = found.filter((s) => s.name === "Store.save").map((s) => s.line);
+  if (storeSaves.join("/") === "2/3/4") {
+    pass("overload signatures and implementation each keep a distinct, stable identity (name + line)");
+  } else {
+    fail(`overloads wrong: ${JSON.stringify(found.filter((s) => s.name.includes("save")))}`);
+  }
+  const other = found.find((s) => s.name === "Other.save");
+  if (other && other.line === 10) {
+    pass("same method name in a different class is a distinct qualified symbol");
+  } else {
+    fail(`same-name method collision: ${JSON.stringify(found.filter((s) => s.name === "Other.save"))}`);
+  }
+  const identity = new Set(found.map((s) => `${s.name}@${s.line}`));
+  if (identity.size === found.length) {
+    pass("no two symbols in one file share a (name, line) identity");
+  } else {
+    fail(`identity collision: ${found.length} symbols, ${identity.size} identities`);
+  }
+}
+
+{
+  const found = symbolsOf([
+    "export async function load() {",
+    "  const direct = await import(\"./lazy\");",
+    "  return direct.go();",
+    "}",
+  ].join("\n"));
+  if (found.every((s) => s.name !== "load.direct")) {
+    pass("local const bindings inside a function stay out of the symbol list");
+  } else {
+    fail(`local bindings leaked into symbols: ${JSON.stringify(found.map((s) => s.name))}`);
+  }
+}
+
+{
+  const found = symbolsOf([
+    "function first() {",
+    "  function helper() {",
+    "    return 1;",
+    "  }",
+    "  return helper();",
+    "}",
+    "",
+    "function second() {",
+    "  function helper() {",
+    "    return 2;",
+    "  }",
+    "  return helper();",
+    "}",
+  ].join("\n"));
+  const helpers = found.filter((s) => s.name.endsWith(".helper")).map((s) => s.name).sort();
+  if (helpers.join("/") === "first.helper/second.helper") {
+    pass("same-name nested functions in different parents stay distinct through the parent chain");
+  } else {
+    fail(`nested twins collapsed: ${JSON.stringify(found.map((s) => s.name))}`);
+  }
+}
+
 console.log("");
 for (const line of results) console.log(line);
 const failed = results.filter((r) => r.startsWith("FAIL")).length;

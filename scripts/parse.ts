@@ -116,6 +116,45 @@ function printSummary(result: ParseResult, all: boolean): void {
   for (const w of routes.withheld) console.log(`  withheld in ${w.project}: ${w.reason}`);
   for (const o of routes.omitted) console.log(`  omitted ${o.file}:${o.line} — ${o.reason}`);
 
+  // Packaging, configuration and entry points. Declared and inferred are
+  // printed under separate headings so the distinction survives into the
+  // terminal, not just the data.
+  console.log(`\nManifests ${result.manifests.length}`);
+  for (const m of result.manifests) {
+    const bits: string[] = [m.ecosystem];
+    if (m.name) bits.push(`"${m.name}"`);
+    if (m.workspaces.length) bits.push(`workspaces ${m.workspaces.join(",")}`);
+    console.log(`  ${m.path.padEnd(34)} ${bits.join("  ")}`);
+    for (const p of m.problems) console.log(`    could not read: ${p}`);
+  }
+
+  console.log(`\nDependencies ${result.dependencies.length} (declared, not verified as installed)`);
+  const byKind = new Map<string, number>();
+  for (const d of result.dependencies) byKind.set(d.kind, (byKind.get(d.kind) ?? 0) + 1);
+  if (byKind.size) console.log(`  ${[...byKind].map(([k, n]) => `${k} ${n}`).join("  ")}`);
+  for (const d of all ? result.dependencies : result.dependencies.slice(0, 30)) {
+    const version = d.version ?? "(no version)";
+    const reach = d.importedBy > 0 ? `imported by ${d.importedBy}` : "not imported by any indexed file";
+    console.log(`  ${d.name.padEnd(30)} ${version.padEnd(18)} ${d.kind.padEnd(9)} ${d.manifest}  ${reach}`);
+  }
+  if (!all && result.dependencies.length > 30) console.log(`  … ${result.dependencies.length - 30} more (--all)`);
+
+  console.log(`\nConfig    ${result.configReferences.length} reference(s), names only`);
+  for (const c of all ? result.configReferences : result.configReferences.slice(0, 30)) {
+    const where = c.line > 0 ? `${c.file}:${c.line}` : c.file;
+    console.log(`  ${c.variable.padEnd(30)} ${c.kind.padEnd(16)} ${where}`);
+  }
+  if (!all && result.configReferences.length > 30) console.log(`  … ${result.configReferences.length - 30} more (--all)`);
+
+  const declaredEntries = result.entryPoints.filter((e) => e.kind === "declared");
+  const inferredEntries = result.entryPoints.filter((e) => e.kind === "inferred");
+  console.log(`\nEntry points  ${declaredEntries.length} declared, ${inferredEntries.length} inferred`);
+  for (const e of [...declaredEntries, ...inferredEntries]) {
+    const state = e.resolved ? "" : `  UNRESOLVED (${e.unresolvedReason})`;
+    const via = e.via?.length ? `  re-exports ${e.via.length}` : "";
+    console.log(`  ${e.kind.padEnd(9)} ${e.path.padEnd(40)} ${e.source}${state}${via}`);
+  }
+
   if (imports.unresolved.length) {
     console.log(`\nUnresolved (${imports.unresolved.length})`);
     const byReason = new Map<string, UnresolvedImport[]>();

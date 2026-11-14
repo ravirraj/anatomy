@@ -1,11 +1,12 @@
-import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
+import { clerkMiddleware } from "@clerk/nextjs/server";
 
-const isPublic = createRouteMatcher(["/sign-in(.*)", "/sign-up(.*)"]);
+const isPublicRoute = (pathname: string) =>
+  pathname.startsWith("/sign-in") || pathname.startsWith("/sign-up");
 
 // Protection happens here, before any route renders, so a signed-out visitor
 // gets a redirect and never receives the page's HTML.
 export default clerkMiddleware(async (auth, req) => {
-  if (!isPublic(req)) await auth.protect();
+  if (!isPublicRoute(req.nextUrl.pathname)) await auth.protect();
 });
 
 export const config = {

@@ -13,7 +13,9 @@ import { railLabel, UNCLASSIFIED, type ModelRole } from "@/lib/roles";
 import { ExplanationPanel, targetKey, type ExplainTarget, type ExplanationState, type Freshness } from "./explanation-panel";
 import { CategorySwatch } from "./map/swatch";
 
-export type Tab = "structure" | "explanation";
+import { QAPanel } from "./qa-panel";
+
+export type Tab = "structure" | "explanation" | "qa";
 
 /** What the pane says about the repository that isn't in the file and edge lists. */
 export type RepositoryFacts = {
@@ -82,6 +84,14 @@ export function DetailPane(props: Props) {
     />
   );
 
+  const qaPanel = (
+    <QAPanel
+      analysisId={props.analysisId}
+      onReveal={props.onReveal}
+      isPath={(p) => byPath.has(p)}
+    />
+  );
+
   if (selection.kind === "file") {
     const file = byPath.get(selection.path);
     if (!file) return null;
@@ -92,6 +102,7 @@ export function DetailPane(props: Props) {
         tab={props.tab}
         onTab={props.onTab}
         explanation={explanation({ kind: "file", path: file.path })}
+        qa={qaPanel}
       >
         <FileStructure
           file={file}
@@ -116,6 +127,7 @@ export function DetailPane(props: Props) {
       tab={props.tab}
       onTab={props.onTab}
       explanation={explanation({ kind: "group", dir: group.dir })}
+      qa={qaPanel}
     >
       <GroupStructure files={group.files} fan={groupFanOf(folding, props.edges, group.dir)} />
     </Selected>
@@ -136,11 +148,13 @@ type PathActions = {
 
 function RepositorySummary({
   files,
+  byPath,
   edges,
   repository,
   insightsOpen,
   onInsightsOpen,
   paths,
+  analysisId,
 }: Props & { paths: PathActions }) {
   const ranked = useMemo(() => rankRepository(files), [files]);
   const rootAdapter = repository.projects[0]?.adapter ?? "none";
@@ -149,6 +163,7 @@ function RepositorySummary({
   // Distinct file-to-file pairs, the unit every file's own counts use, so this
   // is the sum of what the pane says for each file.
   const imports = useMemo(() => files.reduce((n, f) => n + f.fanOut, 0), [files]);
+  const [repoTab, setRepoTab] = useState<"overview" | "qa">("overview");
   return (
     <div className="pb-3">
       <header className="border-b border-line px-3 py-2">
@@ -163,7 +178,32 @@ function RepositorySummary({
             <span className="text-fg">{p.adapter}</span> in <span className="font-mono">{p.path}/</span>
           </p>
         ))}
+        <div role="tablist" className="mt-2.5 flex gap-3 text-[11px]">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={repoTab === "overview"}
+            onClick={() => setRepoTab("overview")}
+            className={`-mb-px border-b pb-1.5 ${repoTab === "overview" ? "border-accent text-fg" : "border-transparent text-fg-muted hover:text-fg"}`}
+          >
+            Overview
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={repoTab === "qa"}
+            onClick={() => setRepoTab("qa")}
+            className={`-mb-px border-b pb-1.5 ${repoTab === "qa" ? "border-accent text-fg" : "border-transparent text-fg-muted hover:text-fg"}`}
+          >
+            Ask Repository (Q&A)
+          </button>
+        </div>
       </header>
+
+      {repoTab === "qa" ? (
+        <QAPanel analysisId={analysisId} onReveal={paths.onReveal} isPath={(p) => byPath.has(p)} />
+      ) : (
+        <>
 
       <dl className="grid grid-cols-3 border-b border-line">
         <Count label="Files" value={files.length} note={repository.skipped > 0 ? `${repository.skipped} skipped` : null} />
@@ -221,6 +261,8 @@ function RepositorySummary({
         </button>
         {insightsOpen && <InsightList files={files} edges={edges} paths={paths} />}
       </section>
+        </>
+      )}
     </div>
   );
 }
@@ -373,6 +415,7 @@ function Selected(props: {
   tab: Tab;
   onTab: (tab: Tab) => void;
   explanation: ReactNode;
+  qa: ReactNode;
   children: ReactNode;
 }) {
   return (
@@ -383,9 +426,10 @@ function Selected(props: {
         <div role="tablist" className="mt-2 flex gap-3 text-[11px]">
           <TabButton tab="structure" label="Structure" current={props.tab} onTab={props.onTab} />
           <TabButton tab="explanation" label="Explanation" current={props.tab} onTab={props.onTab} />
+          <TabButton tab="qa" label="Ask Q&A" current={props.tab} onTab={props.onTab} />
         </div>
       </header>
-      {props.tab === "structure" ? props.children : props.explanation}
+      {props.tab === "structure" ? props.children : props.tab === "explanation" ? props.explanation : props.qa}
     </div>
   );
 }

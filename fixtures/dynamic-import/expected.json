@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 5,
+  "schemaVersion": 7,
   "root": "<repo>",
   "projects": [
     {
@@ -67,22 +67,61 @@
       "name": "load",
       "kind": "function",
       "line": 2,
+      "endLine": 7,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [],
+      "returnType": "unknown",
+      "signature": "load(): unknown",
       "file": "index.ts"
     },
     {
       "name": "go",
       "kind": "function",
       "line": 1,
+      "endLine": 3,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [],
+      "returnType": "number",
+      "signature": "go(): number",
       "file": "lazy.ts"
     },
     {
       "name": "roll",
       "kind": "function",
       "line": 1,
+      "endLine": 3,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [],
+      "returnType": "number",
+      "signature": "roll(): number",
       "file": "loose.ts"
+    }
+  ],
+  "manifests": [
+    {
+      "path": "package.json",
+      "dir": ".",
+      "project": ".",
+      "ecosystem": "npm",
+      "name": "dynamic-import",
+      "workspaces": [],
+      "scripts": [],
+      "problems": []
+    }
+  ],
+  "dependencies": [],
+  "configReferences": [],
+  "envDeclarations": [],
+  "entryPoints": [
+    {
+      "path": "index.ts",
+      "kind": "inferred",
+      "source": "package root module",
+      "manifest": null,
+      "resolved": true
     }
   ],
   "coverage": {
@@ -129,6 +168,13 @@
           "external": 0,
           "excluded": 0,
           "unresolved": 0
+        },
+        "call": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
         }
       },
       "external": {
@@ -154,7 +200,39 @@
     "routes": {
       "omitted": [],
       "withheld": []
+    },
+    "calls": {
+      "total": 2,
+      "resolved": 0,
+      "unresolved": 2,
+      "unresolvedCalls": [
+        {
+          "from": "index.ts",
+          "callee": "direct.go",
+          "line": 6,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "index.ts",
+          "callee": "computed.roll",
+          "line": 6,
+          "reason": "unresolved-call"
+        }
+      ]
     }
   },
-  "configs": []
+  "configs": [],
+  "nonCodeCandidates": [
+    {
+      "path": "package.json",
+      "absolutePath": "C:\\Users\\thorfinn\\projects\\cartograph\\fixtures\\dynamic-import\\repo\\package.json",
+      "module": ".",
+      "content": "{\n  \"name\": \"dynamic-import\",\n  \"version\": \"1.0.0\",\n  \"private\": true\n}\n",
+      "bytes": 72,
+      "lines": 5,
+      "hash": "997b1e1035e28a686ec99e49484ecb421bc8604e049ecdde346f524114c7ed6e",
+      "project": ".",
+      "category": "primary_manifest"
+    }
+  ]
 }

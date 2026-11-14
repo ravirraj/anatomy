@@ -31,9 +31,15 @@
         ]
       ]
     },
+    "class-methods": {
+      "edges": []
+    },
     "commonjs": {
       "edges": [
-        ["index.js", "math.js"]
+        [
+          "index.js",
+          "math.js"
+        ]
       ]
     },
     "dynamic-import": {
@@ -57,6 +63,26 @@
         [
           "lib/bridge.js",
           "lib/config.ts"
+        ]
+      ]
+    },
+    "express-routes": {
+      "edges": [
+        [
+          "app.js",
+          "routes/index.js"
+        ],
+        [
+          "app.js",
+          "routes/posts.js"
+        ],
+        [
+          "app.js",
+          "routes/misc.js"
+        ],
+        [
+          "routes/index.js",
+          "routes/users.js"
         ]
       ]
     },
@@ -117,6 +143,46 @@
         [
           "packages/calc/double.ts",
           "packages/calc/shared.ts"
+        ]
+      ]
+    },
+    "polyglot-manifests": {
+      "edges": [
+        [
+          "src/public.ts",
+          "src/index.ts"
+        ],
+        [
+          "src/public.ts",
+          "src/helpers.ts"
+        ],
+        [
+          "src/cli.ts",
+          "src/index.ts"
+        ]
+      ]
+    },
+    "declared-entries": {
+      "edges": [
+        [
+          "src/index.ts",
+          "src/theme.ts"
+        ],
+        [
+          "src/index.ts",
+          "src/button.ts"
+        ],
+        [
+          "src/index.ts",
+          "src/input.ts"
+        ],
+        [
+          "src/theme.ts",
+          "src/palette.ts"
+        ],
+        [
+          "src/cli.ts",
+          "src/index.ts"
         ]
       ]
     }

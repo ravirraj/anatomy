@@ -1,0 +1,324 @@
+{
+  "baselineSchemaVersion": 1,
+  "dataset": {
+    "version": 1,
+    "sha256": "62f98110d4d3663c61da74b4dba99adbf5de71eaa85e7c96924a0dd31fed7b79"
+  },
+  "reference": "phase-3a",
+  "cases": {
+    "QA-01": {
+      "fixture": "barrel-index",
+      "language": "TypeScript / JavaScript",
+      "category": "symbol_definition",
+      "verdict": "PASS",
+      "metrics": {
+        "goldLines": 3,
+        "retrievedWindows": 2,
+        "retrievedLines": 6,
+        "overlapLines": 3,
+        "linePrecision": 0.5,
+        "lineRecall": 1,
+        "lineF1": 0.6666666666666666,
+        "factsTotal": 1,
+        "factsGrounded": 1,
+        "policyVerified": true
+      }
+    },
+    "QA-02": {
+      "fixture": "barrel-index",
+      "language": "TypeScript / JavaScript",
+      "category": "symbol_definition",
+      "verdict": "PASS",
+      "metrics": {
+        "goldLines": 3,
+        "retrievedWindows": 2,
+        "retrievedLines": 6,
+        "overlapLines": 3,
+        "linePrecision": 0.5,
+        "lineRecall": 1,
+        "lineF1": 0.6666666666666666,
+        "factsTotal": 1,
+        "factsGrounded": 1,
+        "policyVerified": true
+      }
+    },
+    "QA-03": {
+      "fixture": "barrel-index",
+      "language": "TypeScript / JavaScript",
+      "category": "function_calls",
+      "verdict": "PASS",
+      "metrics": {
+        "goldLines": 6,
+        "retrievedWindows": 5,
+        "retrievedLines": 16,
+        "overlapLines": 6,
+        "linePrecision": 0.375,
+        "lineRecall": 1,
+        "lineF1": 0.5454545454545454,
+        "factsTotal": 2,
+        "factsGrounded": 2,
+        "policyVerified": true
+      }
+    },
+    "QA-04": {
+      "fixture": "commonjs",
+      "language": "TypeScript / JavaScript",
+      "category": "function_calls",
+      "verdict": "PASS",
+      "metrics": {
+        "goldLines": 10,
+        "retrievedWindows": 2,
+        "retrievedLines": 10,
+        "overlapLines": 10,
+        "linePrecision": 1,
+        "lineRecall": 1,
+        "lineF1": 1,
+        "factsTotal": 3,
+        "factsGrounded": 3,
+        "policyVerified": true
+      }
+    },
+    "QA-05": {
+      "fixture": "barrel-index",
+      "language": "TypeScript / JavaScript",
+      "category": "imports_reexports",
+      "verdict": "WARN",
+      "metrics": {
+        "goldLines": 3,
+        "retrievedWindows": 5,
+        "retrievedLines": 16,
+        "overlapLines": 3,
+        "linePrecision": 0.1875,
+        "lineRecall": 1,
+        "lineF1": 0.3157894736842105,
+        "factsTotal": 2,
+        "factsGrounded": 2,
+        "policyVerified": true
+      }
+    },
+    "QA-06": {
+      "fixture": "path-aliases",
+      "language": "TypeScript / JavaScript",
+      "category": "imports_reexports",
+      "verdict": "PASS",
+      "metrics": {
+        "goldLines": 13,
+        "retrievedWindows": 2,
+        "retrievedLines": 8,
+        "overlapLines": 8,
+        "linePrecision": 1,
+        "lineRecall": 0.6153846153846154,
+        "lineF1": 0.761904761904762,
+        "factsTotal": 2,
+        "factsGrounded": 2,
+        "policyVerified": true
+      }
+    },
+    "QA-07": {
+      "fixture": "two-framework-monorepo",
+      "language": "TypeScript / JavaScript",
+      "category": "monorepo_architecture",
+      "verdict": "PASS",
+      "metrics": {
+        "goldLines": 4,
+        "retrievedWindows": 1,
+        "retrievedLines": 9,
+        "overlapLines": 4,
+        "linePrecision": 0.4444444444444444,
+        "lineRecall": 1,
+        "lineF1": 0.6153846153846153,
+        "factsTotal": 3,
+        "factsGrounded": 3,
+        "policyVerified": true
+      }
+    },
+    "QA-08": {
+      "fixture": "nextjs-app-router",
+      "language": "TypeScript / JavaScript",
+      "category": "function_calls",
+      "verdict": "PASS",
+      "metrics": {
+        "goldLines": 8,
+        "retrievedWindows": 5,
+        "retrievedLines": 33,
+        "overlapLines": 8,
+        "linePrecision": 0.24242424242424243,
+        "lineRecall": 1,
+        "lineF1": 0.3902439024390244,
+        "factsTotal": 3,
+        "factsGrounded": 3,
+        "policyVerified": true
+      }
+    },
+    "QA-09": {
+      "fixture": "polyglot-manifests",
+      "language": "Rust",
+      "category": "manifest_declarations",
+      "verdict": "PASS",
+      "metrics": {
+        "goldLines": 9,
+        "retrievedWindows": 1,
+        "retrievedLines": 21,
+        "overlapLines": 9,
+        "linePrecision": 0.42857142857142855,
+        "lineRecall": 1,
+        "lineF1": 0.6,
+        "factsTotal": 4,
+        "factsGrounded": 4,
+        "policyVerified": true
+      }
+    },
+    "QA-10": {
+      "fixture": "polyglot-manifests",
+      "language": "TypeScript / JavaScript",
+      "category": "config_reads",
+      "verdict": "PASS",
+      "metrics": {
+        "goldLines": 10,
+        "retrievedWindows": 3,
+        "retrievedLines": 24,
+        "overlapLines": 10,
+        "linePrecision": 0.4166666666666667,
+        "lineRecall": 1,
+        "lineF1": 0.5882352941176471,
+        "factsTotal": 4,
+        "factsGrounded": 4,
+        "policyVerified": true
+      }
+    },
+    "QA-11": {
+      "fixture": "dynamic-import",
+      "language": "TypeScript / JavaScript",
+      "category": "dynamic_entries",
+      "verdict": "PASS",
+      "metrics": {
+        "goldLines": 9,
+        "retrievedWindows": 2,
+        "retrievedLines": 10,
+        "overlapLines": 9,
+        "linePrecision": 0.9,
+        "lineRecall": 1,
+        "lineF1": 0.9473684210526316,
+        "factsTotal": 3,
+        "factsGrounded": 3,
+        "policyVerified": true
+      }
+    },
+    "QA-12": {
+      "fixture": "declared-entries",
+      "language": "TypeScript / JavaScript",
+      "category": "manifest_declarations",
+      "verdict": "PASS",
+      "metrics": {
+        "goldLines": 7,
+        "retrievedWindows": 3,
+        "retrievedLines": 27,
+        "overlapLines": 7,
+        "linePrecision": 0.25925925925925924,
+        "lineRecall": 1,
+        "lineF1": 0.4117647058823529,
+        "factsTotal": 3,
+        "factsGrounded": 3,
+        "policyVerified": true
+      }
+    },
+    "QA-13": {
+      "fixture": "barrel-index",
+      "language": "TypeScript / JavaScript",
+      "category": "negative_abstention",
+      "verdict": "PASS",
+      "metrics": {
+        "goldLines": 0,
+        "retrievedWindows": 0,
+        "retrievedLines": 0,
+        "overlapLines": 0,
+        "linePrecision": null,
+        "lineRecall": null,
+        "lineF1": null,
+        "factsTotal": 0,
+        "factsGrounded": 0,
+        "policyVerified": true
+      }
+    },
+    "QA-14": {
+      "fixture": "nextjs-app-router",
+      "language": "TypeScript / JavaScript",
+      "category": "negative_abstention",
+      "verdict": "PASS",
+      "metrics": {
+        "goldLines": 0,
+        "retrievedWindows": 0,
+        "retrievedLines": 0,
+        "overlapLines": 0,
+        "linePrecision": null,
+        "lineRecall": null,
+        "lineF1": null,
+        "factsTotal": 0,
+        "factsGrounded": 0,
+        "policyVerified": true
+      }
+    },
+    "QA-15": {
+      "fixture": "polyglot-manifests",
+      "language": "Go",
+      "category": "manifest_declarations",
+      "verdict": "PASS",
+      "metrics": {
+        "goldLines": 6,
+        "retrievedWindows": 1,
+        "retrievedLines": 10,
+        "overlapLines": 6,
+        "linePrecision": 0.6,
+        "lineRecall": 1,
+        "lineF1": 0.7499999999999999,
+        "factsTotal": 3,
+        "factsGrounded": 3,
+        "policyVerified": true
+      }
+    },
+    "QA-16": {
+      "fixture": "polyglot-manifests",
+      "language": "Python",
+      "category": "manifest_declarations",
+      "verdict": "PASS",
+      "metrics": {
+        "goldLines": 3,
+        "retrievedWindows": 1,
+        "retrievedLines": 10,
+        "overlapLines": 3,
+        "linePrecision": 0.3,
+        "lineRecall": 1,
+        "lineF1": 0.4615384615384615,
+        "factsTotal": 3,
+        "factsGrounded": 3,
+        "policyVerified": true
+      }
+    }
+  },
+  "summary": {
+    "passed": 15,
+    "warned": 1,
+    "failed": 0,
+    "totalFacts": 37,
+    "factsGrounded": 37,
+    "factGroundingRate": 1,
+    "abstention": {
+      "total": 2,
+      "passed": 2
+    },
+    "microMetrics": {
+      "precision": 0.4320388349514563,
+      "recall": 0.9468085106382979,
+      "f1": 0.5933333333333333,
+      "overlappingLines": 89,
+      "retrievedLines": 206,
+      "goldLines": 94
+    },
+    "macroMetrics": {
+      "precision": 0.5109904315261459,
+      "recall": 0.9725274725274725,
+      "f1": 0.6229298224851131,
+      "nCases": 14
+    }
+  }
+}

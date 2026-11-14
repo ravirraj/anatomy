@@ -32,6 +32,20 @@ grant usage, select on rls_check_id_seq to authenticated;
 insert into public.organizations (id)
 values ('rls_org_a'), ('rls_org_b');
 
+-- Approved content is readable only through a `stored` file reference, so
+-- each organization gets the smallest valid project/analysis/file chain.
+insert into public.projects (id, organization_id, repo_owner, repo_name)
+values ('11111111-1111-4111-8111-111111111111', 'rls_org_a', 'rls', 'a'),
+       ('11111111-1111-4111-8111-222222222222', 'rls_org_b', 'rls', 'b');
+
+insert into public.analyses (id, organization_id, project_id)
+values ('21111111-1111-4111-8111-111111111111', 'rls_org_a', '11111111-1111-4111-8111-111111111111'),
+       ('21111111-1111-4111-8111-222222222222', 'rls_org_b', '11111111-1111-4111-8111-222222222222');
+
+insert into public.files (id, organization_id, analysis_id, path, module, lines, bytes, hash, fan_in, fan_out, content_status)
+values ('31111111-1111-4111-8111-111111111111', 'rls_org_a', '21111111-1111-4111-8111-111111111111', 'a.ts', 'root', 1, 1, 'ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb', 0, 0, 'stored'),
+       ('31111111-1111-4111-8111-222222222222', 'rls_org_b', '21111111-1111-4111-8111-222222222222', 'b.ts', 'root', 1, 1, '3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d', 0, 0, 'stored');
+
 -- One byte of content per organization: 'a' and 'b'. The sha256 hex of each
 -- byte is the identity it is stored under (computed once, not invented: the
 -- store's own test suite pins these same digests).
@@ -62,6 +76,11 @@ select 'another organization''s hash reads as absent to a foreign member',
        (select not exists (
          select 1 from public.file_contents
          where content_hash = '3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d')),
+       null;
+
+insert into rls_check (name, pass, detail)
+select 'quarantine metadata has no member-facing table privilege',
+       not has_table_privilege('authenticated', 'public.content_quarantine', 'select'),
        null;
 
 -- 3. A member cannot write, in any form: only select was granted, and no

@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 5,
+  "schemaVersion": 7,
   "root": "<repo>",
   "projects": [
     {
@@ -69,6 +69,14 @@
     {
       "source": "src/main.ts",
       "target": "lib/format.ts",
+      "kind": "call",
+      "typeOnly": false,
+      "specifier": "formatName",
+      "line": 6
+    },
+    {
+      "source": "src/main.ts",
+      "target": "lib/format.ts",
       "kind": "import",
       "typeOnly": false,
       "specifier": "lib/format",
@@ -81,31 +89,85 @@
       "name": "formatName",
       "kind": "function",
       "line": 1,
+      "endLine": 3,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [
+        {
+          "name": "first",
+          "type": "string"
+        },
+        {
+          "name": "last",
+          "type": "string"
+        }
+      ],
+      "returnType": "string",
+      "signature": "formatName(first: string, last: string): string",
       "file": "lib/format.ts"
     },
     {
       "name": "greeting",
       "kind": "function",
       "line": 5,
+      "endLine": 7,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [
+        {
+          "name": "first",
+          "type": "string"
+        },
+        {
+          "name": "last",
+          "type": "string"
+        }
+      ],
+      "returnType": "string",
+      "signature": "greeting(first: string, last: string): string",
       "file": "src/main.ts"
     },
     {
       "name": "degrees",
       "kind": "function",
       "line": 5,
+      "endLine": 7,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [],
+      "returnType": "number",
+      "signature": "degrees(): number",
       "file": "src/pkg.ts"
     },
     {
       "name": "use",
       "kind": "function",
       "line": 5,
+      "endLine": 7,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [],
+      "returnType": "string",
+      "signature": "use(): string",
       "file": "src/wrong.ts"
     }
   ],
+  "manifests": [
+    {
+      "path": "package.json",
+      "dir": ".",
+      "project": ".",
+      "ecosystem": "npm",
+      "name": "base-url",
+      "workspaces": [],
+      "scripts": [],
+      "problems": []
+    }
+  ],
+  "dependencies": [],
+  "configReferences": [],
+  "envDeclarations": [],
+  "entryPoints": [],
   "coverage": {
     "files": {
       "found": 4,
@@ -150,6 +212,13 @@
           "external": 0,
           "excluded": 0,
           "unresolved": 0
+        },
+        "call": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
         }
       },
       "external": {
@@ -175,12 +244,44 @@
     "routes": {
       "omitted": [],
       "withheld": []
+    },
+    "calls": {
+      "total": 3,
+      "resolved": 1,
+      "unresolved": 2,
+      "unresolvedCalls": [
+        {
+          "from": "src/pkg.ts",
+          "callee": "level",
+          "line": 6,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "src/wrong.ts",
+          "callee": "gone",
+          "line": 6,
+          "reason": "unresolved-call"
+        }
+      ]
     }
   },
   "configs": [
     {
       "path": "tsconfig.json",
       "errors": []
+    }
+  ],
+  "nonCodeCandidates": [
+    {
+      "path": "package.json",
+      "absolutePath": "C:\\Users\\thorfinn\\projects\\cartograph\\fixtures\\base-url\\repo\\package.json",
+      "module": ".",
+      "content": "{\n  \"name\": \"base-url\",\n  \"version\": \"1.0.0\",\n  \"private\": true\n}\n",
+      "bytes": 66,
+      "lines": 5,
+      "hash": "a94d7deb83774311c4b0cf633ffb3e9d31c7f29aabb85481cf3b52fe2c4f495b",
+      "project": ".",
+      "category": "primary_manifest"
     }
   ]
 }

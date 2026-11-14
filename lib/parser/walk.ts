@@ -3,7 +3,24 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fallbackAdapter } from "./adapters/fallback.ts";
 import { selectAdapter, type FrameworkAdapter } from "./adapters/index.ts";
+import { manifestEcosystemOf, readManifest, type ManifestRead } from "./manifests.ts";
+import {
+  classifyNonCodeFile,
+  PRIMARY_MANIFEST_NAMES,
+  type CandidateClassification,
+  type NonCodeCandidate,
+} from "./screening.ts";
 import type { ExcludedDirectory, Project, SkippedFile } from "./types.ts";
+
+export {
+  classifyManifestBuffer,
+  classifyNonCodeFile,
+  PRIMARY_MANIFEST_NAMES,
+  type CandidateClassification,
+  type NonCodeCandidate,
+  type NonCodeRejectReason,
+  type NonCodeSkipReason,
+} from "./screening.ts";
 
 export const CODE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
 const DECLARATION = /\.d\.(ts|mts|cts)$|\.d\.[^/.]+\.ts$/;
@@ -11,6 +28,14 @@ const DECLARATION = /\.d\.(ts|mts|cts)$|\.d\.[^/.]+\.ts$/;
 // Generated bundles and vendored blobs run past this; hand-written modules don't.
 // A file over it is skipped and counted, never partially read.
 export const MAX_FILE_BYTES = 1024 * 1024;
+
+// Extensions a manifest can plausibly declare as an entry point but this
+// parser does not index. Recording that these files exist is what lets an
+// unresolved entry point say "not indexed" instead of "not found".
+const DECLARABLE_EXTENSIONS = new Set([
+  ".rs", ".go", ".py", ".rb", ".java", ".kt", ".cs", ".php", ".swift", ".c", ".cc", ".cpp", ".h", ".hpp",
+  ".json", ".yaml", ".yml", ".toml", ".md", ".html", ".css", ".sh", ".ps1",
+]);
 
 export type CandidateFile = {
   path: string;
@@ -38,6 +63,21 @@ export type WalkResult = {
   adapters: Map<string, FrameworkAdapter>;
   /** The project of every file found, parsed or skipped. */
   projectOf: Map<string, string>;
+  /** Every manifest read during the walk, with the facts only it can state. */
+  manifests: ManifestRead[];
+  /** Repository-relative directories that hold at least one manifest. */
+  manifestDirs: string[];
+  /**
+   * Repository-relative paths of files the walk saw but did not index because
+   * they are not a code file this parser reads (a Rust source, a Python
+   * module, a build output). Bounded: only files whose extension a manifest
+   * ecosystem could plausibly declare are recorded, so this stays a small set.
+   */
+  otherFiles: Set<string>;
+  /** Approved, screened non-code candidates (e.g. primary manifests). */
+  nonCodeCandidates: NonCodeCandidate[];
+  /** Structured classification decisions for non-code files encountered. */
+  nonCodeClassifications: CandidateClassification[];
 };
 
 type CurrentProject = { path: string; adapter: FrameworkAdapter };
@@ -66,7 +106,12 @@ export function moduleOf(relativePath: string): string {
   return dir === "" ? "." : dir;
 }
 
-function countLines(content: string): number {
+// The parser's line numbering, the one files.lines uses. Every line-number
+// consumer in the repository (the read service among them) counts this way,
+// so there is exactly one convention to keep in step with. An empty file
+// has no lines; a final newline ends the last line rather than beginning an
+// empty one.
+export function countLines(content: string): number {
   if (content.length === 0) return 0;
   const breaks = content.split("\n").length;
   return content.endsWith("\n") ? breaks - 1 : breaks;
@@ -88,6 +133,11 @@ export function walkRepository(root: string): WalkResult {
     projects: [],
     adapters: new Map(),
     projectOf: new Map(),
+    manifests: [],
+    manifestDirs: [],
+    otherFiles: new Set(),
+    nonCodeCandidates: [],
+    nonCodeClassifications: [],
   };
 
   const within = (project: CurrentProject, relativePath: string) => withinProject(project.path, relativePath);
@@ -100,12 +150,23 @@ export function walkRepository(root: string): WalkResult {
     // The root is always a project. Below it, a package.json starts one only
     // when a framework is detected there; otherwise the folder stays in its
     // parent's project and keeps its conventions.
+    // Early screening gate: a package.json that is not an eligible candidate
+    // (e.g. secret detected, sensitive path, oversized, binary) is blocked from
+    // framework adapter detection and workspace package name emission.
     let project = parent;
-    const manifest = entries.find((entry) => entry.isFile() && entry.name === "package.json");
-    if (!parent || manifest) {
-      const pkg = manifest ? readPackage(path.join(absoluteDir, manifest.name)) : null;
-      if (pkg?.name) result.workspacePackages.add(pkg.name);
-      const adapter = selectAdapter({ dir: absoluteDir, dependencies: pkg?.dependencies ?? new Set() });
+    const manifestEntry = entries.find((entry) => entry.isFile() && entry.name === "package.json");
+    let safePkg: { name: string | null; dependencies: Set<string> } | null = null;
+    if (manifestEntry) {
+      const manifestPath = toPosix(path.relative(root, path.join(absoluteDir, manifestEntry.name)));
+      const absPath = path.join(absoluteDir, manifestEntry.name);
+      const check = classifyNonCodeFile(absPath, manifestPath);
+      if (check.status === "eligible") {
+        safePkg = readPackage(absPath);
+      }
+    }
+    if (!parent || safePkg) {
+      if (safePkg?.name) result.workspacePackages.add(safePkg.name);
+      const adapter = selectAdapter({ dir: absoluteDir, dependencies: safePkg?.dependencies ?? new Set() });
       if (!parent || adapter !== fallbackAdapter) {
         project = { path: toPosix(path.relative(root, absoluteDir)) || ".", adapter };
         result.projects.push({ path: project.path, adapter: adapter.name });
@@ -113,6 +174,66 @@ export function walkRepository(root: string): WalkResult {
       }
     }
     if (!project) throw new Error(`No project for ${absoluteDir}`);
+
+    // Every manifest this directory holds, whatever ecosystem it belongs to.
+    // Screened first before candidate approval or newly exposed metadata.
+    const dirPath = toPosix(path.relative(root, absoluteDir)) || ".";
+    for (const entry of entries) {
+      const manifestPath = toPosix(path.relative(root, path.join(absoluteDir, entry.name)));
+      const absPath = path.join(absoluteDir, entry.name);
+
+      if (entry.isSymbolicLink() && PRIMARY_MANIFEST_NAMES.has(entry.name)) {
+        result.nonCodeClassifications.push({
+          status: "skipped",
+          path: manifestPath,
+          reason: "symlink",
+          detail: "symbolic link not followed",
+        });
+        continue;
+      }
+
+      if (!entry.isFile()) continue;
+      const ecosystem = manifestEcosystemOf(entry.name);
+      if (ecosystem === null) continue;
+
+      const classification = classifyNonCodeFile(absPath, manifestPath);
+      result.nonCodeClassifications.push(classification);
+
+      if (classification.status === "eligible") {
+        result.nonCodeCandidates.push({
+          path: manifestPath,
+          absolutePath: absPath,
+          module: dirPath,
+          content: classification.content,
+          bytes: classification.bytes,
+          lines: classification.lines,
+          hash: classification.hash,
+          project: project.path,
+          category: "primary_manifest",
+        });
+        result.manifests.push(readManifest(absPath, manifestPath, dirPath, project.path, ecosystem));
+        if (!result.manifestDirs.includes(dirPath)) result.manifestDirs.push(dirPath);
+      } else {
+        // Fail closed for all non-eligible manifests (rejected or skipped):
+        // Neither rejected nor oversized/binary/invalid-utf8 manifests reach readManifest.
+        // No dependencies, scripts, workspaces, entry points, or metadata can be extracted.
+        result.manifests.push({
+          manifest: {
+            path: manifestPath,
+            dir: dirPath,
+            project: project.path,
+            ecosystem,
+            name: null,
+            workspaces: [],
+            scripts: [],
+            problems: [`security-screening-${classification.status}: ${classification.reason}`],
+          },
+          dependencies: [],
+          declared: [],
+        });
+        if (!result.manifestDirs.includes(dirPath)) result.manifestDirs.push(dirPath);
+      }
+    }
 
     for (const entry of entries) {
       const absolutePath = path.join(absoluteDir, entry.name);
@@ -141,7 +262,15 @@ export function walkRepository(root: string): WalkResult {
         continue;
       }
 
-      if (!entry.isFile() || !isCodeFile(entry.name)) continue;
+      if (!entry.isFile() || !isCodeFile(entry.name)) {
+        // A file a manifest could name but this parser does not index is
+        // remembered, so an entry point that points at it can say "not
+        // indexed" rather than "not found". Those are different facts.
+        if (entry.isFile() && DECLARABLE_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
+          result.otherFiles.add(relativePath);
+        }
+        continue;
+      }
       result.found++;
       result.projectOf.set(relativePath, project.path);
 

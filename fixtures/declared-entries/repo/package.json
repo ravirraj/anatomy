@@ -1,0 +1,17 @@
+{
+  "name": "@acme/widgets",
+  "version": "2.0.0",
+  "main": "./src/index.ts",
+  "bin": "./src/cli.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./theme": "./src/theme.ts",
+    "./missing": "./src/does-not-exist.ts"
+  },
+  "dependencies": {
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "react": "^19.0.0"
+  }
+}

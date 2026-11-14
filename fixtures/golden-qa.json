@@ -1,0 +1,773 @@
+{
+  "version": 1,
+  "description": "Golden QA evaluation benchmark containing hand-verified repository questions with ground-truth relevant line intervals, structured fact assertions, explicit abstention policies, and a multi-language capability matrix.",
+  "capabilityMatrix": [
+    {
+      "language": "TypeScript / JavaScript",
+      "manifestSupport": "supported",
+      "symbolExtraction": "supported",
+      "importModuleExtraction": "supported",
+      "callGraphExtraction": "supported",
+      "goldenCasesAvailable": [
+        "QA-01",
+        "QA-02",
+        "QA-03",
+        "QA-04",
+        "QA-05",
+        "QA-06",
+        "QA-07",
+        "QA-08",
+        "QA-10",
+        "QA-11",
+        "QA-12",
+        "QA-13",
+        "QA-14"
+      ],
+      "unsupportedCapabilities": []
+    },
+    {
+      "language": "Rust",
+      "manifestSupport": "supported",
+      "symbolExtraction": "unsupported",
+      "importModuleExtraction": "unsupported",
+      "callGraphExtraction": "unsupported",
+      "goldenCasesAvailable": [
+        "QA-09"
+      ],
+      "unsupportedCapabilities": [
+        "source_code_symbol_extraction",
+        "source_code_import_extraction",
+        "source_code_call_graph"
+      ]
+    },
+    {
+      "language": "Go",
+      "manifestSupport": "supported",
+      "symbolExtraction": "unsupported",
+      "importModuleExtraction": "unsupported",
+      "callGraphExtraction": "unsupported",
+      "goldenCasesAvailable": [
+        "QA-15"
+      ],
+      "unsupportedCapabilities": [
+        "source_code_symbol_extraction",
+        "source_code_import_extraction",
+        "source_code_call_graph"
+      ]
+    },
+    {
+      "language": "Python",
+      "manifestSupport": "supported",
+      "symbolExtraction": "unsupported",
+      "importModuleExtraction": "unsupported",
+      "callGraphExtraction": "unsupported",
+      "goldenCasesAvailable": [
+        "QA-16"
+      ],
+      "unsupportedCapabilities": [
+        "source_code_symbol_extraction",
+        "source_code_import_extraction",
+        "source_code_call_graph"
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "id": "QA-01",
+      "fixture": "barrel-index",
+      "category": "symbol_definition",
+      "language": "TypeScript / JavaScript",
+      "question": "Where is the area calculation function defined and what is its signature?",
+      "expectedOutcome": "grounded_answer",
+      "retrievalExpectation": {
+        "mustRetrieve": true,
+        "relevantFiles": [
+          {
+            "path": "src/circle.ts",
+            "ranges": [[1, 3]]
+          }
+        ]
+      },
+      "expectedFacts": [
+        {
+          "predicate": "declares_symbol",
+          "symbol": "area",
+          "kind": "function",
+          "evidence": {
+            "path": "src/circle.ts",
+            "lines": [1, 3]
+          }
+        }
+      ]
+    },
+    {
+      "id": "QA-02",
+      "fixture": "barrel-index",
+      "category": "symbol_definition",
+      "language": "TypeScript / JavaScript",
+      "question": "Where is the default export function three defined in src/triangle.ts and what value does it return?",
+      "expectedOutcome": "grounded_answer",
+      "retrievalExpectation": {
+        "mustRetrieve": true,
+        "relevantFiles": [
+          {
+            "path": "src/triangle.ts",
+            "ranges": [[1, 3]]
+          }
+        ]
+      },
+      "expectedFacts": [
+        {
+          "predicate": "declares_symbol",
+          "symbol": "three",
+          "kind": "function",
+          "evidence": {
+            "path": "src/triangle.ts",
+            "lines": [1, 3]
+          }
+        }
+      ]
+    },
+    {
+      "id": "QA-03",
+      "fixture": "barrel-index",
+      "category": "function_calls",
+      "language": "TypeScript / JavaScript",
+      "question": "What functions does report call and what does it compute?",
+      "expectedOutcome": "grounded_answer",
+      "retrievalExpectation": {
+        "mustRetrieve": true,
+        "relevantFiles": [
+          {
+            "path": "src/main.ts",
+            "ranges": [[4, 6]]
+          },
+          {
+            "path": "src/circle.ts",
+            "ranges": [[1, 3]]
+          }
+        ]
+      },
+      "expectedFacts": [
+        {
+          "predicate": "calls",
+          "caller": "report",
+          "callee": "area",
+          "evidence": {
+            "path": "src/main.ts",
+            "lines": [4, 6]
+          }
+        },
+        {
+          "predicate": "calls",
+          "caller": "report",
+          "callee": "three",
+          "evidence": {
+            "path": "src/main.ts",
+            "lines": [4, 6]
+          }
+        }
+      ]
+    },
+    {
+      "id": "QA-04",
+      "fixture": "commonjs",
+      "category": "function_calls",
+      "language": "TypeScript / JavaScript",
+      "question": "How does run in index.js call math.js?",
+      "expectedOutcome": "grounded_answer",
+      "retrievalExpectation": {
+        "mustRetrieve": true,
+        "relevantFiles": [
+          {
+            "path": "index.js",
+            "ranges": [[1, 7]]
+          },
+          {
+            "path": "math.js",
+            "ranges": [[1, 3]]
+          }
+        ]
+      },
+      "expectedFacts": [
+        {
+          "predicate": "imports",
+          "importer": "index.js",
+          "specifier": "./math",
+          "importedSymbols": ["add"],
+          "evidence": {
+            "path": "index.js",
+            "lines": [1, 1]
+          }
+        },
+        {
+          "predicate": "calls",
+          "caller": "run",
+          "callee": "add",
+          "evidence": {
+            "path": "index.js",
+            "lines": [4, 7]
+          }
+        },
+        {
+          "predicate": "declares_symbol",
+          "symbol": "add",
+          "kind": "function",
+          "evidence": {
+            "path": "math.js",
+            "lines": [1, 3]
+          }
+        }
+      ]
+    },
+    {
+      "id": "QA-05",
+      "fixture": "barrel-index",
+      "category": "imports_reexports",
+      "language": "TypeScript / JavaScript",
+      "question": "How does src/index.ts re-export the circle and square modules?",
+      "expectedOutcome": "grounded_answer",
+      "retrievalExpectation": {
+        "mustRetrieve": true,
+        "relevantFiles": [
+          {
+            "path": "src/index.ts",
+            "ranges": [[1, 3]]
+          }
+        ]
+      },
+      "expectedFacts": [
+        {
+          "predicate": "re_exports",
+          "exportedSymbol": "*",
+          "sourceModule": "./circle",
+          "isWildcard": true,
+          "evidence": {
+            "path": "src/index.ts",
+            "lines": [1, 1]
+          }
+        },
+        {
+          "predicate": "re_exports",
+          "exportedSymbol": "SQUARE",
+          "sourceModule": "./square",
+          "isWildcard": false,
+          "evidence": {
+            "path": "src/index.ts",
+            "lines": [2, 2]
+          }
+        }
+      ]
+    },
+    {
+      "id": "QA-06",
+      "fixture": "path-aliases",
+      "category": "imports_reexports",
+      "language": "TypeScript / JavaScript",
+      "question": "Where does banner import formatPrice from and how is the path resolved?",
+      "expectedOutcome": "grounded_answer",
+      "retrievalExpectation": {
+        "mustRetrieve": true,
+        "relevantFiles": [
+          {
+            "path": "src/app.ts",
+            "ranges": [[1, 5]]
+          },
+          {
+            "path": "src/util/format.ts",
+            "ranges": [[1, 3]]
+          },
+          {
+            "path": "tsconfig.json",
+            "ranges": [[3, 7]]
+          }
+        ]
+      },
+      "expectedFacts": [
+        {
+          "predicate": "imports",
+          "importer": "src/app.ts",
+          "specifier": "@/util/format",
+          "importedSymbols": ["formatPrice"],
+          "evidence": {
+            "path": "src/app.ts",
+            "lines": [1, 1]
+          }
+        },
+        {
+          "predicate": "declares_symbol",
+          "symbol": "formatPrice",
+          "kind": "function",
+          "evidence": {
+            "path": "src/util/format.ts",
+            "lines": [1, 3]
+          }
+        }
+      ]
+    },
+    {
+      "id": "QA-07",
+      "fixture": "two-framework-monorepo",
+      "category": "monorepo_architecture",
+      "language": "TypeScript / JavaScript",
+      "question": "What dependencies are declared by @monorepo/web in packages/web/package.json, and does it declare @monorepo/api?",
+      "expectedOutcome": "grounded_scoped_negative",
+      "retrievalExpectation": {
+        "mustRetrieve": true,
+        "relevantFiles": [
+          {
+            "path": "packages/web/package.json",
+            "ranges": [[5, 8]]
+          }
+        ]
+      },
+      "expectedFacts": [
+        {
+          "predicate": "declares_dependency",
+          "manifest": "packages/web/package.json",
+          "package": "next",
+          "version": "16.0.0",
+          "kind": "runtime",
+          "evidence": {
+            "path": "packages/web/package.json",
+            "lines": [6, 6]
+          }
+        },
+        {
+          "predicate": "declares_dependency",
+          "manifest": "packages/web/package.json",
+          "package": "react",
+          "version": "19.0.0",
+          "kind": "runtime",
+          "evidence": {
+            "path": "packages/web/package.json",
+            "lines": [7, 7]
+          }
+        },
+        {
+          "predicate": "scoped_absence",
+          "target": "packages/web/package.json",
+          "absentSymbol": "@monorepo/api",
+          "scopeKind": "manifest_dependencies",
+          "evidence": {
+            "path": "packages/web/package.json",
+            "lines": [5, 8]
+          }
+        }
+      ]
+    },
+    {
+      "id": "QA-08",
+      "fixture": "nextjs-app-router",
+      "category": "function_calls",
+      "language": "TypeScript / JavaScript",
+      "question": "How does the users API route handle GET requests and what store function does it call?",
+      "expectedOutcome": "grounded_answer",
+      "retrievalExpectation": {
+        "mustRetrieve": true,
+        "relevantFiles": [
+          {
+            "path": "app/api/users/route.ts",
+            "ranges": [[1, 5]]
+          },
+          {
+            "path": "lib/store.ts",
+            "ranges": [[5, 7]]
+          }
+        ]
+      },
+      "expectedFacts": [
+        {
+          "predicate": "imports",
+          "importer": "app/api/users/route.ts",
+          "specifier": "../../../lib/store",
+          "importedSymbols": ["allUsers"],
+          "evidence": {
+            "path": "app/api/users/route.ts",
+            "lines": [1, 1]
+          }
+        },
+        {
+          "predicate": "calls",
+          "caller": "GET",
+          "callee": "allUsers",
+          "evidence": {
+            "path": "app/api/users/route.ts",
+            "lines": [3, 5]
+          }
+        },
+        {
+          "predicate": "declares_symbol",
+          "symbol": "allUsers",
+          "kind": "function",
+          "evidence": {
+            "path": "lib/store.ts",
+            "lines": [5, 7]
+          }
+        }
+      ]
+    },
+    {
+      "id": "QA-09",
+      "fixture": "polyglot-manifests",
+      "category": "manifest_declarations",
+      "language": "Rust",
+      "question": "What dependencies and dev dependencies are declared in core/Cargo.toml?",
+      "expectedOutcome": "grounded_answer",
+      "retrievalExpectation": {
+        "mustRetrieve": true,
+        "relevantFiles": [
+          {
+            "path": "core/Cargo.toml",
+            "ranges": [[6, 14]]
+          }
+        ]
+      },
+      "expectedFacts": [
+        {
+          "predicate": "declares_dependency",
+          "manifest": "core/Cargo.toml",
+          "package": "serde",
+          "version": "1.0",
+          "kind": "runtime",
+          "evidence": {
+            "path": "core/Cargo.toml",
+            "lines": [7, 7]
+          }
+        },
+        {
+          "predicate": "declares_dependency",
+          "manifest": "core/Cargo.toml",
+          "package": "tokio",
+          "version": "1.40",
+          "kind": "runtime",
+          "evidence": {
+            "path": "core/Cargo.toml",
+            "lines": [8, 8]
+          }
+        },
+        {
+          "predicate": "declares_dependency",
+          "manifest": "core/Cargo.toml",
+          "package": "criterion",
+          "version": "0.5",
+          "kind": "dev",
+          "evidence": {
+            "path": "core/Cargo.toml",
+            "lines": [11, 11]
+          }
+        },
+        {
+          "predicate": "declares_dependency",
+          "manifest": "core/Cargo.toml",
+          "package": "cc",
+          "version": "1.1",
+          "kind": "build",
+          "evidence": {
+            "path": "core/Cargo.toml",
+            "lines": [14, 14]
+          }
+        }
+      ]
+    },
+    {
+      "id": "QA-10",
+      "fixture": "polyglot-manifests",
+      "category": "config_reads",
+      "language": "TypeScript / JavaScript",
+      "question": "What environment variables are accessed by src/cli.ts and what fallback is used for PORT?",
+      "expectedOutcome": "grounded_answer",
+      "retrievalExpectation": {
+        "mustRetrieve": true,
+        "relevantFiles": [
+          {
+            "path": "src/cli.ts",
+            "ranges": [[3, 12]]
+          }
+        ]
+      },
+      "expectedFacts": [
+        {
+          "predicate": "reads_config",
+          "file": "src/cli.ts",
+          "variable": "DATABASE_URL",
+          "pattern": "process.env",
+          "evidence": {
+            "path": "src/cli.ts",
+            "lines": [3, 3]
+          }
+        },
+        {
+          "predicate": "reads_config",
+          "file": "src/cli.ts",
+          "variable": "API_KEY",
+          "pattern": "env-bracket",
+          "evidence": {
+            "path": "src/cli.ts",
+            "lines": [4, 4]
+          }
+        },
+        {
+          "predicate": "reads_config",
+          "file": "src/cli.ts",
+          "variable": "VITE_REGION",
+          "pattern": "import.meta.env",
+          "evidence": {
+            "path": "src/cli.ts",
+            "lines": [5, 5]
+          }
+        },
+        {
+          "predicate": "reads_config",
+          "file": "src/cli.ts",
+          "variable": "PORT",
+          "pattern": "process.env",
+          "evidence": {
+            "path": "src/cli.ts",
+            "lines": [8, 8]
+          }
+        }
+      ]
+    },
+    {
+      "id": "QA-11",
+      "fixture": "dynamic-import",
+      "category": "dynamic_entries",
+      "language": "TypeScript / JavaScript",
+      "question": "How does load in index.ts dynamically import the lazy module?",
+      "expectedOutcome": "grounded_answer",
+      "retrievalExpectation": {
+        "mustRetrieve": true,
+        "relevantFiles": [
+          {
+            "path": "index.ts",
+            "ranges": [[2, 7]]
+          },
+          {
+            "path": "lazy.ts",
+            "ranges": [[1, 3]]
+          }
+        ]
+      },
+      "expectedFacts": [
+        {
+          "predicate": "imports",
+          "importer": "index.ts",
+          "specifier": "./lazy",
+          "importedSymbols": ["*"],
+          "evidence": {
+            "path": "index.ts",
+            "lines": [3, 3]
+          }
+        },
+        {
+          "predicate": "calls",
+          "caller": "load",
+          "callee": "go",
+          "evidence": {
+            "path": "index.ts",
+            "lines": [2, 6]
+          }
+        },
+        {
+          "predicate": "declares_symbol",
+          "symbol": "go",
+          "kind": "function",
+          "evidence": {
+            "path": "lazy.ts",
+            "lines": [1, 3]
+          }
+        }
+      ]
+    },
+    {
+      "id": "QA-12",
+      "fixture": "declared-entries",
+      "category": "manifest_declarations",
+      "language": "TypeScript / JavaScript",
+      "question": "What entry points and binaries are declared in package.json?",
+      "expectedOutcome": "grounded_answer",
+      "retrievalExpectation": {
+        "mustRetrieve": true,
+        "relevantFiles": [
+          {
+            "path": "package.json",
+            "ranges": [[4, 10]]
+          }
+        ]
+      },
+      "expectedFacts": [
+        {
+          "predicate": "reads_config",
+          "file": "package.json",
+          "variable": "main",
+          "pattern": "config-object",
+          "evidence": {
+            "path": "package.json",
+            "lines": [4, 4]
+          }
+        },
+        {
+          "predicate": "reads_config",
+          "file": "package.json",
+          "variable": "bin",
+          "pattern": "config-object",
+          "evidence": {
+            "path": "package.json",
+            "lines": [5, 5]
+          }
+        },
+        {
+          "predicate": "reads_config",
+          "file": "package.json",
+          "variable": "exports",
+          "pattern": "config-object",
+          "evidence": {
+            "path": "package.json",
+            "lines": [6, 10]
+          }
+        }
+      ]
+    },
+    {
+      "id": "QA-13",
+      "fixture": "barrel-index",
+      "category": "negative_abstention",
+      "language": "TypeScript / JavaScript",
+      "question": "Where is PostgreSQL connection pooling configured?",
+      "expectedOutcome": "abstain_no_evidence",
+      "retrievalExpectation": {
+        "mustRetrieve": false,
+        "relevantFiles": []
+      },
+      "policyExpectation": {
+        "topic": "PostgreSQL",
+        "retrievalMustBeEmpty": true,
+        "allowFabricatedCitations": false
+      },
+      "expectedFacts": []
+    },
+    {
+      "id": "QA-14",
+      "fixture": "nextjs-app-router",
+      "category": "negative_abstention",
+      "language": "TypeScript / JavaScript",
+      "question": "Where is Stripe or PayPal payment processing configured?",
+      "expectedOutcome": "abstain_no_evidence",
+      "retrievalExpectation": {
+        "mustRetrieve": false,
+        "relevantFiles": []
+      },
+      "policyExpectation": {
+        "topic": "payments",
+        "retrievalMustBeEmpty": true,
+        "allowFabricatedCitations": false
+      },
+      "expectedFacts": []
+    },
+    {
+      "id": "QA-15",
+      "fixture": "polyglot-manifests",
+      "category": "manifest_declarations",
+      "language": "Go",
+      "question": "What dependencies are declared in service/go.mod and which one is marked indirect?",
+      "expectedOutcome": "grounded_answer",
+      "retrievalExpectation": {
+        "mustRetrieve": true,
+        "relevantFiles": [
+          {
+            "path": "service/go.mod",
+            "ranges": [[5, 10]]
+          }
+        ]
+      },
+      "expectedFacts": [
+        {
+          "predicate": "declares_dependency",
+          "manifest": "service/go.mod",
+          "package": "github.com/gin-gonic/gin",
+          "version": "v1.10.0",
+          "kind": "runtime",
+          "evidence": {
+            "path": "service/go.mod",
+            "lines": [6, 6]
+          }
+        },
+        {
+          "predicate": "declares_dependency",
+          "manifest": "service/go.mod",
+          "package": "golang.org/x/sync",
+          "version": "v0.8.0",
+          "kind": "indirect",
+          "evidence": {
+            "path": "service/go.mod",
+            "lines": [7, 7]
+          }
+        },
+        {
+          "predicate": "declares_dependency",
+          "manifest": "service/go.mod",
+          "package": "github.com/stretchr/testify",
+          "version": "v1.9.0",
+          "kind": "runtime",
+          "evidence": {
+            "path": "service/go.mod",
+            "lines": [10, 10]
+          }
+        }
+      ]
+    },
+    {
+      "id": "QA-16",
+      "fixture": "polyglot-manifests",
+      "category": "manifest_declarations",
+      "language": "Python",
+      "question": "What runtime dependencies and version constraints are declared in worker/requirements.txt?",
+      "expectedOutcome": "grounded_answer",
+      "retrievalExpectation": {
+        "mustRetrieve": true,
+        "relevantFiles": [
+          {
+            "path": "worker/requirements.txt",
+            "ranges": [[2, 4]]
+          }
+        ]
+      },
+      "expectedFacts": [
+        {
+          "predicate": "declares_dependency",
+          "manifest": "worker/requirements.txt",
+          "package": "flask",
+          "version": "==3.0.3",
+          "kind": "runtime",
+          "evidence": {
+            "path": "worker/requirements.txt",
+            "lines": [2, 2]
+          }
+        },
+        {
+          "predicate": "declares_dependency",
+          "manifest": "worker/requirements.txt",
+          "package": "requests",
+          "version": ">=2.31,<3",
+          "kind": "runtime",
+          "evidence": {
+            "path": "worker/requirements.txt",
+            "lines": [3, 3]
+          }
+        },
+        {
+          "predicate": "declares_dependency",
+          "manifest": "worker/requirements.txt",
+          "package": "celery",
+          "version": "~=5.4",
+          "kind": "runtime",
+          "evidence": {
+            "path": "worker/requirements.txt",
+            "lines": [4, 4]
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -85,6 +85,46 @@ export const WHOLE_MODULE = "module.exports";
  * the top level, and CommonJS assignments to module.exports or exports
  * wherever they appear. Source order, each name once.
  */
+export type RawImportBinding = {
+  /** Local name the module is bound to in this file. */
+  local: string;
+  /** Name exported by the source module ("default" for default imports). */
+  imported: string;
+  /** Module specifier as written. */
+  specifier: string;
+  kind: "named" | "default" | "namespace";
+  line: number;
+};
+
+/**
+ * The names a file imports from other modules, as written. Resolution to a
+ * target file happens in the parser (resolve.ts), so this stays pure syntax.
+ */
+export function extractImportBindings(sourceFile: SourceFile): RawImportBinding[] {
+  const found: RawImportBinding[] = [];
+  for (const statement of sourceFile.getStatements()) {
+    if (!Node.isImportDeclaration(statement)) continue;
+    const specifier = statement.getModuleSpecifierValue();
+    const clause = statement.getImportClause();
+    if (!clause) continue;
+    const line = statement.getStartLineNumber();
+    const defaultImport = clause.getDefaultImport();
+    if (defaultImport) {
+      found.push({ local: defaultImport.getText(), imported: "default", specifier, kind: "default", line });
+    }
+    const namespaceImport = clause.getNamespaceImport();
+    if (namespaceImport) {
+      found.push({ local: namespaceImport.getText(), imported: "*", specifier, kind: "namespace", line });
+    }
+    for (const named of clause.getNamedImports()) {
+      const imported = named.getNameNode().getText();
+      const local = named.getAliasNode()?.getText() ?? imported;
+      found.push({ local, imported, specifier, kind: "named", line });
+    }
+  }
+  return found;
+}
+
 export function extractExports(sourceFile: SourceFile): string[] {
   const found: { name: string; at: number }[] = [];
   const add = (name: string, at: Node) => found.push({ name, at: at.getStart() });
@@ -168,14 +208,112 @@ export function extractExports(sourceFile: SourceFile): string[] {
  * it is. Source order, each declaration once. CommonJS assignment isn't a
  * declaration, so it makes no symbol here; the names it exports are already
  * in extractExports.
+ *
+ * Class members and nested functions are extracted too, named by their parent
+ * chain ("UserRepo.save", "PaymentService.process.validate"): they are real
+ * declarations a question can name, and the database's `name` column carries
+ * the qualified identity. They are stored under the existing "function" kind
+ * (the schema's kind list is closed), are not module exports (members can't be
+ * individually exported in ESM), and are visited exactly once by construction.
  */
+function jsDocText(node: Node): string | undefined {
+  // ts-morph exposes getJsDocs on declarations that can carry JSDoc.
+  const docs = (node as { getJsDocs?: () => { getInnerText(): string }[] }).getJsDocs?.();
+  if (!docs || docs.length === 0) return undefined;
+  const text = docs.map((d) => d.getInnerText().trim()).filter(Boolean).join("\n").trim();
+  return text.length > 0 ? text : undefined;
+}
+
+function paramType(p: { getTypeNode?: () => Node | undefined; getType?: () => { getText: () => string } }): string {
+  const node = p.getTypeNode?.();
+  if (node) return node.getText();
+  try { return p.getType?.()?.getText() ?? "unknown"; } catch { return "unknown"; }
+}
+
+function enrichDeclaration(
+  name: string,
+  kind: SymbolKind,
+  node: Node,
+  exported: boolean,
+  defaultExport: boolean,
+): Omit<ParsedSymbol, "file"> {
+  const out: Omit<ParsedSymbol, "file"> = {
+    name,
+    kind,
+    line: node.getStartLineNumber(),
+    endLine: node.getEndLineNumber(),
+    exported,
+    exportKind: defaultExport ? "default" : exported ? "named" : "none",
+  };
+  const doc = jsDocText(node);
+  if (doc) out.documentation = doc;
+
+  // Function-like declarations carry parameters and a return type.
+  const fnLike = node as {
+    getParameters?: () => { getName(): string; getTypeNode?: () => Node | undefined; getType?: () => { getText: () => string } }[];
+    getReturnTypeNode?: () => Node | undefined;
+    getReturnType?: () => { getText: () => string };
+  };
+  if (typeof fnLike.getParameters === "function") {
+    const params = fnLike.getParameters().map((p) => ({ name: p.getName(), type: paramType(p) }));
+    out.parameters = params;
+    let rt: string | undefined;
+    if (typeof fnLike.getReturnTypeNode === "function") rt = fnLike.getReturnTypeNode()?.getText();
+    if (!rt && typeof fnLike.getReturnType === "function") {
+      try { rt = fnLike.getReturnType().getText(); } catch { rt = undefined; }
+    }
+    if (rt) out.returnType = rt;
+    const paramText = params.map((p) => `${p.name}: ${p.type}`).join(", ");
+    out.signature = `${name}(${paramText})${rt ? `: ${rt}` : ""}`;
+  } else {
+    // Non-function declarations: signature is the first line, trimmed.
+    const firstLine = node.getText().split("\n")[0]?.trim();
+    if (firstLine) out.signature = firstLine.length > 200 ? firstLine.slice(0, 200) + "…" : firstLine;
+  }
+
+  return out;
+}
+
 export function extractSymbols(sourceFile: SourceFile): Omit<ParsedSymbol, "file">[] {
   const found: Omit<ParsedSymbol, "file">[] = [];
+  collectDeclarations(sourceFile.getStatements(), [], found);
+  return found;
+}
 
-  const add = (name: string, kind: SymbolKind, at: Node, exported: boolean) =>
-    found.push({ name, kind, line: at.getStartLineNumber(), exported });
+/** Joins a parent chain into a deterministic qualified name: ["A","b"] -> "A.b". */
+function qualify(parents: string[], name: string): string {
+  return [...parents, name].join(".");
+}
 
-  for (const statement of sourceFile.getStatements()) {
+/** The body statements of a function-like node, when it has one. */
+function bodyStatements(node: Node): Node[] {
+  const fn = node as { getBody?: () => Node | undefined; getBodyText?: () => string };
+  if (typeof fn.getBody !== "function") return [];
+  const body = fn.getBody();
+  if (!body) return [];
+  const block = body as { getStatements?: () => Node[] };
+  return typeof block.getStatements === "function" ? block.getStatements() : [];
+}
+
+/**
+ * Walks declarations recursively. Top-level behavior is unchanged; nested
+ * scope only extracts function declarations (locals like `const` stay out of
+ * the symbol list, matching the top-level rule that a declaration is a
+ * definition a question can name, not every binding).
+ */
+function collectNestedFunctions(statements: Node[], parents: string[], found: Omit<ParsedSymbol, "file">[]): void {
+  for (const statement of statements) {
+    if (!Node.isFunctionDeclaration(statement)) continue;
+    const name = statement.getNameNode();
+    if (!name) continue;
+    // A nested function is a private local: it is never a module export.
+    found.push(enrichDeclaration(qualify(parents, name.getText()), "function", statement, false, false));
+    collectNestedFunctions(bodyStatements(statement), [...parents, name.getText()], found);
+  }
+}
+
+function collectDeclarations(statements: Node[], parents: string[], found: Omit<ParsedSymbol, "file">[]): void {
+  for (const statement of statements) {
     if (Node.isFunctionDeclaration(statement) || Node.isClassDeclaration(statement) || Node.isInterfaceDeclaration(statement) || Node.isTypeAliasDeclaration(statement) || Node.isEnumDeclaration(statement)) {
       const exported = statement.hasExportKeyword();
       const kind: SymbolKind = Node.isFunctionDeclaration(statement)
@@ -188,15 +326,23 @@ export function extractSymbols(sourceFile: SourceFile): Omit<ParsedSymbol, "file
               ? "type"
               : "enum";
       if (statement.hasDefaultKeyword()) {
-        add("default", kind, statement, true);
+        found.push(enrichDeclaration(qualify(parents, "default"), kind, statement, true, true));
         continue;
       }
       const name = statement.getNameNode();
-      if (name) add(name.getText(), kind, statement, exported);
+      if (name) {
+        const qualified = qualify(parents, name.getText());
+        found.push(enrichDeclaration(qualified, kind, statement, exported, false));
+        // Function declarations recurse into their bodies so nested functions
+        // join the parent chain. Classes carry their members below.
+        if (kind === "function") {
+          collectNestedFunctions(bodyStatements(statement), [...parents, name.getText()], found);
+        } else if (kind === "class") {
+          collectClassMembers(statement, parents, found);
+        }
+      }
     } else if (Node.isModuleDeclaration(statement) && Node.isIdentifier(statement.getNameNode())) {
-      // `namespace x {}` and its older spelling `module x {}`; the string-named
-      // `declare module "x"` form exports nothing from this file.
-      add(statement.getName(), "namespace", statement, statement.hasExportKeyword());
+      found.push(enrichDeclaration(qualify(parents, statement.getName()), "namespace", statement, statement.hasExportKeyword(), false));
     } else if (Node.isVariableStatement(statement)) {
       const exported = statement.hasExportKeyword();
       const kind: SymbolKind = statement.getDeclarationList().getFlags() & ts.NodeFlags.Const
@@ -206,18 +352,77 @@ export function extractSymbols(sourceFile: SourceFile): Omit<ParsedSymbol, "file
           : "var";
       for (const declaration of statement.getDeclarations()) {
         const name = declaration.getNameNode();
-        if (Node.isIdentifier(name)) add(name.getText(), kind, declaration, exported);
-        // `export const { a, b: c } = x` declares a and c.
-        else
+        if (Node.isIdentifier(name)) {
+          found.push(enrichDeclaration(qualify(parents, name.getText()), kind, declaration, exported, false));
+          // An object-literal initializer makes the binding a namespace-like
+          // object: its methods are declarations a question can name
+          // ("registry.register"), extracted under the same member rules.
+          const initializer = declaration.getInitializer();
+          if (initializer && Node.isObjectLiteralExpression(initializer)) {
+            collectObjectMembers(initializer, [...parents, name.getText()], found);
+          }
+        } else {
           for (const element of name.getDescendantsOfKind(SyntaxKind.BindingElement)) {
             const bound = element.getNameNode();
-            if (Node.isIdentifier(bound)) add(bound.getText(), kind, declaration, exported);
+            if (Node.isIdentifier(bound)) {
+              found.push(enrichDeclaration(qualify(parents, bound.getText()), kind, element, exported, false));
+            }
           }
+        }
       }
     }
   }
+}
 
-  return found;
+/**
+ * Class members: methods (including overloads and static methods, whatever
+ * their access modifiers) become "function" symbols named by the class, e.g.
+ * "UserRepo.save". Constructors and get/set accessors are not extracted: the
+ * constructor's name is not source vocabulary, and accessors are property
+ * views, not declarations a question names. Each member is visited once.
+ */
+function collectClassMembers(cls: Node, parents: string[], found: Omit<ParsedSymbol, "file">[]): void {
+  const members = (cls as { getMembers?: () => Node[] }).getMembers?.() ?? [];
+  const className = (cls as { getName?: () => string | undefined }).getName?.() ?? "";
+  for (const member of members) {
+    if (!Node.isMethodDeclaration(member)) continue;
+    const methodName = member.getNameNode();
+    if (!Node.isIdentifier(methodName)) continue;
+    const qualified = qualify([...parents, className], methodName.getText());
+    // ts-morph folds overload signatures into their implementation member;
+    // each signature is its own declaration at its own line, so they are
+    // extracted explicitly before it.
+    for (const overload of member.getOverloads?.() ?? []) {
+      found.push(enrichDeclaration(qualified, "function", overload, false, false));
+    }
+    found.push(enrichDeclaration(qualified, "function", member, false, false));
+    collectNestedFunctions(bodyStatements(member), [...parents, className, methodName.getText()], found);
+  }
+}
+
+/**
+ * Object-literal members on a top-level binding: shorthand methods
+ * ("register() {}"), function values ("lookup: function () {}") and arrow
+ * values ("count: () => 0") are all ways of writing a method on the object.
+ * Computed keys and get/set accessors are skipped.
+ */
+function collectObjectMembers(literal: Node, parents: string[], found: Omit<ParsedSymbol, "file">[]): void {
+  const properties = (literal as { getProperties?: () => Node[] }).getProperties?.() ?? [];
+  for (const property of properties) {
+    const nameNode = (property as { getNameNode?: () => Node | undefined }).getNameNode?.();
+    if (!nameNode || !Node.isIdentifier(nameNode)) continue;
+    const memberName = nameNode.getText();
+    if (Node.isMethodDeclaration(property)) {
+      found.push(enrichDeclaration(qualify(parents, memberName), "function", property, false, false));
+      collectNestedFunctions(bodyStatements(property), [...parents, memberName], found);
+    } else if (Node.isPropertyAssignment(property)) {
+      const initializer = property.getInitializer();
+      if (initializer && (Node.isFunctionExpression(initializer) || Node.isArrowFunction(initializer))) {
+        found.push(enrichDeclaration(qualify(parents, memberName), "function", property, false, false));
+        collectNestedFunctions(bodyStatements(initializer), [...parents, memberName], found);
+      }
+    }
+  }
 }
 
 // `module.exports = <value>` exports a and b. Anything else, including an
@@ -251,6 +456,43 @@ function isModuleExports(node: Node): boolean {
 function literalText(node: Node | undefined): string | null {
   if (node && (Node.isStringLiteral(node) || Node.isNoSubstitutionTemplateLiteral(node))) return node.getLiteralValue();
   return null;
+}
+
+export type RawCall = {
+  /** Callee expression text as written, e.g. "foo", "obj.method", "new Bar". */
+  callee: string;
+  line: number;
+  constructor: boolean;
+};
+
+/**
+ * Call sites in a file: every CallExpression and NewExpression, except the
+ * import()/require() calls already captured by extractImports. Nested calls
+ * are recorded individually. The enclosing caller symbol and the target file
+ * are resolved by the parser afterwards.
+ */
+export function extractCalls(sourceFile: SourceFile): RawCall[] {
+  const found: RawCall[] = [];
+  const seen = new Set<string>();
+  const add = (callee: string, line: number, constructor: boolean) => {
+    const key = `${callee}\\0${line}\\0${constructor}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    found.push({ callee, line, constructor });
+  };
+
+  for (const ne of sourceFile.getDescendantsOfKind(SyntaxKind.NewExpression)) {
+    add(ne.getExpression().getText(), ne.getStartLineNumber(), true);
+  }
+  for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+    const callee = call.getExpression();
+    if (callee.getKind() === SyntaxKind.ImportKeyword) continue;
+    if (Node.isIdentifier(callee) && callee.getText() === "require") continue;
+    add(callee.getText(), call.getStartLineNumber(), false);
+  }
+
+  found.sort((a, b) => a.line - b.line);
+  return found;
 }
 
 function isTypeOnlyClause(clause: ImportClause): boolean {

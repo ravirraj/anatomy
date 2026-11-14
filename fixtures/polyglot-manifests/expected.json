@@ -1,0 +1,724 @@
+{
+  "schemaVersion": 7,
+  "root": "<repo>",
+  "projects": [
+    {
+      "path": ".",
+      "adapter": "none"
+    }
+  ],
+  "files": [
+    {
+      "path": "src/cli.ts",
+      "module": "src",
+      "lines": 16,
+      "bytes": 339,
+      "hash": "a9d6f01fa974c8ca155c2463b5eec60ee97a707bc451aa282fee03b4e423ab5b",
+      "fanIn": 0,
+      "fanOut": 1,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "config",
+        "run"
+      ]
+    },
+    {
+      "path": "src/helpers.ts",
+      "module": "src",
+      "lines": 3,
+      "bytes": 56,
+      "hash": "755f63892413cb6ed42123cc0af7863dce6e9d1b4465f26ca75a84780d85e0a9",
+      "fanIn": 1,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "helper"
+      ]
+    },
+    {
+      "path": "src/index.ts",
+      "module": "src",
+      "lines": 6,
+      "bytes": 158,
+      "hash": "3616b5b392a63e620d75c2145a1a2bac64dd2c7058e5236ae88f1154cd8fc743",
+      "fanIn": 2,
+      "fanOut": 0,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "pad"
+      ]
+    },
+    {
+      "path": "src/public.ts",
+      "module": "src",
+      "lines": 2,
+      "bytes": 73,
+      "hash": "5b80b6992ae045ce78df04ca27b11a6916d51fdf04b11f1d90a323ad4e3900b3",
+      "fanIn": 0,
+      "fanOut": 2,
+      "reachedBy": null,
+      "role": null,
+      "exports": [
+        "pad",
+        "helper"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source": "src/cli.ts",
+      "target": "src/index.ts",
+      "kind": "call",
+      "typeOnly": false,
+      "specifier": "pad",
+      "line": 15
+    },
+    {
+      "source": "src/cli.ts",
+      "target": "src/index.ts",
+      "kind": "import",
+      "typeOnly": false,
+      "specifier": "./index.ts",
+      "line": 1
+    },
+    {
+      "source": "src/public.ts",
+      "target": "src/helpers.ts",
+      "kind": "re-export",
+      "typeOnly": false,
+      "specifier": "./helpers.ts",
+      "line": 2
+    },
+    {
+      "source": "src/public.ts",
+      "target": "src/index.ts",
+      "kind": "re-export",
+      "typeOnly": false,
+      "specifier": "./index.ts",
+      "line": 1
+    }
+  ],
+  "routes": [],
+  "symbols": [
+    {
+      "name": "databaseUrl",
+      "kind": "const",
+      "line": 3,
+      "endLine": 3,
+      "exported": false,
+      "exportKind": "none",
+      "signature": "databaseUrl = process.env.DATABASE_URL",
+      "file": "src/cli.ts"
+    },
+    {
+      "name": "apiKey",
+      "kind": "const",
+      "line": 4,
+      "endLine": 4,
+      "exported": false,
+      "exportKind": "none",
+      "signature": "apiKey = process.env[\"API_KEY\"]",
+      "file": "src/cli.ts"
+    },
+    {
+      "name": "region",
+      "kind": "const",
+      "line": 5,
+      "endLine": 5,
+      "exported": false,
+      "exportKind": "none",
+      "signature": "region = import.meta.env.VITE_REGION",
+      "file": "src/cli.ts"
+    },
+    {
+      "name": "config",
+      "kind": "const",
+      "line": 7,
+      "endLine": 12,
+      "exported": true,
+      "exportKind": "named",
+      "signature": "config = {",
+      "file": "src/cli.ts"
+    },
+    {
+      "name": "run",
+      "kind": "function",
+      "line": 14,
+      "endLine": 16,
+      "exported": true,
+      "exportKind": "named",
+      "parameters": [],
+      "returnType": "string",
+      "signature": "run(): string",
+      "file": "src/cli.ts"
+    },
+    {
+      "name": "helper",
+      "kind": "function",
+      "line": 1,
+      "endLine": 3,
+      "exported": true,
+      "exportKind": "named",
+      "parameters": [],
+      "returnType": "string",
+      "signature": "helper(): string",
+      "file": "src/helpers.ts"
+    },
+    {
+      "name": "pad",
+      "kind": "function",
+      "line": 4,
+      "endLine": 6,
+      "exported": true,
+      "exportKind": "named",
+      "parameters": [
+        {
+          "name": "value",
+          "type": "string"
+        }
+      ],
+      "returnType": "string",
+      "signature": "pad(value: string): string",
+      "file": "src/index.ts"
+    }
+  ],
+  "manifests": [
+    {
+      "path": "package.json",
+      "dir": ".",
+      "project": ".",
+      "ecosystem": "npm",
+      "name": "polyglot-manifests",
+      "workspaces": [],
+      "scripts": [
+        {
+          "name": "build",
+          "command": "tsc -p ."
+        },
+        {
+          "name": "test",
+          "command": "node --test"
+        }
+      ],
+      "problems": []
+    },
+    {
+      "path": "pnpm-workspace.yaml",
+      "dir": ".",
+      "project": ".",
+      "ecosystem": "pnpm-workspace",
+      "name": null,
+      "workspaces": [
+        "packages/*",
+        "!packages/legacy"
+      ],
+      "scripts": [],
+      "problems": []
+    },
+    {
+      "path": "core/Cargo.toml",
+      "dir": "core",
+      "project": ".",
+      "ecosystem": "cargo",
+      "name": "polyglot-core",
+      "workspaces": [],
+      "scripts": [],
+      "problems": []
+    },
+    {
+      "path": "service/go.mod",
+      "dir": "service",
+      "project": ".",
+      "ecosystem": "go",
+      "name": "example.com/polyglot/service",
+      "workspaces": [],
+      "scripts": [],
+      "problems": []
+    },
+    {
+      "path": "tools/pyproject.toml",
+      "dir": "tools",
+      "project": ".",
+      "ecosystem": "python-project",
+      "name": "polyglot-tools",
+      "workspaces": [],
+      "scripts": [
+        {
+          "name": "polyglot-tools",
+          "command": "polyglot_tools.cli:main"
+        }
+      ],
+      "problems": []
+    },
+    {
+      "path": "worker/requirements.txt",
+      "dir": "worker",
+      "project": ".",
+      "ecosystem": "python-requirements",
+      "name": null,
+      "workspaces": [],
+      "scripts": [],
+      "problems": []
+    }
+  ],
+  "dependencies": [
+    {
+      "name": "left-pad",
+      "version": "^1.3.0",
+      "kind": "runtime",
+      "manifest": "package.json",
+      "dir": ".",
+      "project": ".",
+      "importedBy": 1
+    },
+    {
+      "name": "shared-lib",
+      "version": "workspace:*",
+      "kind": "runtime",
+      "manifest": "package.json",
+      "dir": ".",
+      "project": ".",
+      "importedBy": 1
+    },
+    {
+      "name": "typescript",
+      "version": "^5.6.0",
+      "kind": "dev",
+      "manifest": "package.json",
+      "dir": ".",
+      "project": ".",
+      "importedBy": 0
+    },
+    {
+      "name": "fsevents",
+      "version": "^2.3.3",
+      "kind": "optional",
+      "manifest": "package.json",
+      "dir": ".",
+      "project": ".",
+      "importedBy": 0
+    },
+    {
+      "name": "react",
+      "version": ">=18",
+      "kind": "peer",
+      "manifest": "package.json",
+      "dir": ".",
+      "project": ".",
+      "importedBy": 0
+    },
+    {
+      "name": "serde",
+      "version": "1.0",
+      "kind": "runtime",
+      "manifest": "core/Cargo.toml",
+      "dir": "core",
+      "project": ".",
+      "importedBy": 0
+    },
+    {
+      "name": "tokio",
+      "version": "1.40",
+      "kind": "runtime",
+      "manifest": "core/Cargo.toml",
+      "dir": "core",
+      "project": ".",
+      "importedBy": 0
+    },
+    {
+      "name": "criterion",
+      "version": "0.5",
+      "kind": "dev",
+      "manifest": "core/Cargo.toml",
+      "dir": "core",
+      "project": ".",
+      "importedBy": 0
+    },
+    {
+      "name": "cc",
+      "version": "1.1",
+      "kind": "build",
+      "manifest": "core/Cargo.toml",
+      "dir": "core",
+      "project": ".",
+      "importedBy": 0
+    },
+    {
+      "name": "github.com/gin-gonic/gin",
+      "version": "v1.10.0",
+      "kind": "runtime",
+      "manifest": "service/go.mod",
+      "dir": "service",
+      "project": ".",
+      "importedBy": 0
+    },
+    {
+      "name": "golang.org/x/sync",
+      "version": "v0.8.0",
+      "kind": "indirect",
+      "manifest": "service/go.mod",
+      "dir": "service",
+      "project": ".",
+      "importedBy": 0
+    },
+    {
+      "name": "github.com/stretchr/testify",
+      "version": "v1.9.0",
+      "kind": "runtime",
+      "manifest": "service/go.mod",
+      "dir": "service",
+      "project": ".",
+      "importedBy": 0
+    },
+    {
+      "name": "click",
+      "version": ">=8.1",
+      "kind": "runtime",
+      "manifest": "tools/pyproject.toml",
+      "dir": "tools",
+      "project": ".",
+      "importedBy": 0
+    },
+    {
+      "name": "rich",
+      "version": null,
+      "kind": "runtime",
+      "manifest": "tools/pyproject.toml",
+      "dir": "tools",
+      "project": ".",
+      "importedBy": 0
+    },
+    {
+      "name": "pytest",
+      "version": "^8.0",
+      "kind": "dev",
+      "manifest": "tools/pyproject.toml",
+      "dir": "tools",
+      "project": ".",
+      "importedBy": 0
+    },
+    {
+      "name": "flask",
+      "version": "==3.0.3",
+      "kind": "runtime",
+      "manifest": "worker/requirements.txt",
+      "dir": "worker",
+      "project": ".",
+      "importedBy": 0
+    },
+    {
+      "name": "requests",
+      "version": ">=2.31,<3",
+      "kind": "runtime",
+      "manifest": "worker/requirements.txt",
+      "dir": "worker",
+      "project": ".",
+      "importedBy": 0
+    },
+    {
+      "name": "celery",
+      "version": "~=5.4",
+      "kind": "runtime",
+      "manifest": "worker/requirements.txt",
+      "dir": "worker",
+      "project": ".",
+      "importedBy": 0
+    }
+  ],
+  "configReferences": [
+    {
+      "file": ".env.example",
+      "variable": "API_KEY",
+      "line": 0,
+      "kind": "env-example"
+    },
+    {
+      "file": ".env.example",
+      "variable": "DATABASE_URL",
+      "line": 0,
+      "kind": "env-example"
+    },
+    {
+      "file": ".env.example",
+      "variable": "VITE_REGION",
+      "line": 0,
+      "kind": "env-example"
+    },
+    {
+      "file": "src/cli.ts",
+      "variable": "DATABASE_URL",
+      "line": 3,
+      "kind": "process.env"
+    },
+    {
+      "file": "src/cli.ts",
+      "variable": "API_KEY",
+      "line": 4,
+      "kind": "env-bracket"
+    },
+    {
+      "file": "src/cli.ts",
+      "variable": "VITE_REGION",
+      "line": 5,
+      "kind": "import.meta.env"
+    },
+    {
+      "file": "src/cli.ts",
+      "variable": "port",
+      "line": 8,
+      "kind": "config-object",
+      "detail": "config"
+    },
+    {
+      "file": "src/cli.ts",
+      "variable": "PORT",
+      "line": 8,
+      "kind": "process.env"
+    }
+  ],
+  "envDeclarations": [
+    {
+      "path": ".env.example",
+      "keys": [
+        "DATABASE_URL",
+        "API_KEY",
+        "VITE_REGION"
+      ]
+    }
+  ],
+  "entryPoints": [
+    {
+      "path": "core/src/bin/cli.rs",
+      "kind": "declared",
+      "source": "Cargo.toml [[bin]] path",
+      "manifest": "core/Cargo.toml",
+      "resolved": false,
+      "unresolvedReason": "not-indexed"
+    },
+    {
+      "path": "core/src/lib.rs",
+      "kind": "declared",
+      "source": "Cargo.toml [lib] path",
+      "manifest": "core/Cargo.toml",
+      "resolved": false,
+      "unresolvedReason": "not-indexed"
+    },
+    {
+      "path": "dist/cli.js",
+      "kind": "declared",
+      "source": "package.json bin",
+      "manifest": "package.json",
+      "detail": "polyglot",
+      "resolved": false,
+      "unresolvedReason": "not-found"
+    },
+    {
+      "path": "dist/helpers.js",
+      "kind": "declared",
+      "source": "package.json exports",
+      "manifest": "package.json",
+      "detail": "./helpers",
+      "resolved": false,
+      "unresolvedReason": "not-found"
+    },
+    {
+      "path": "dist/index.cjs",
+      "kind": "declared",
+      "source": "package.json exports",
+      "manifest": "package.json",
+      "detail": "..require",
+      "resolved": false,
+      "unresolvedReason": "not-found"
+    },
+    {
+      "path": "dist/index.js",
+      "kind": "declared",
+      "source": "package.json main",
+      "manifest": "package.json",
+      "resolved": false,
+      "unresolvedReason": "not-found"
+    },
+    {
+      "path": "dist/index.mjs",
+      "kind": "declared",
+      "source": "package.json exports",
+      "manifest": "package.json",
+      "detail": "..import",
+      "resolved": false,
+      "unresolvedReason": "not-found"
+    },
+    {
+      "path": "tools/polyglot_tools/cli.py",
+      "kind": "declared",
+      "source": "pyproject.toml [project.scripts]",
+      "manifest": "tools/pyproject.toml",
+      "detail": "polyglot-tools",
+      "resolved": false,
+      "unresolvedReason": "not-found"
+    }
+  ],
+  "coverage": {
+    "files": {
+      "found": 4,
+      "parsed": 4,
+      "skipped": 0,
+      "skippedFiles": [],
+      "excludedDirectories": []
+    },
+    "imports": {
+      "total": {
+        "seen": 5,
+        "internal": 3,
+        "external": 2,
+        "excluded": 0,
+        "unresolved": 0
+      },
+      "byKind": {
+        "import": {
+          "seen": 3,
+          "internal": 1,
+          "external": 2,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "re-export": {
+          "seen": 2,
+          "internal": 2,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "dynamic-import": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "require": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        },
+        "call": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
+        }
+      },
+      "external": {
+        "package": 2,
+        "builtin": 0,
+        "outside-root": 0
+      },
+      "excluded": {},
+      "unresolvedByReason": {},
+      "unresolved": []
+    },
+    "routes": {
+      "omitted": [],
+      "withheld": []
+    },
+    "calls": {
+      "total": 4,
+      "resolved": 1,
+      "unresolved": 3,
+      "unresolvedCalls": [
+        {
+          "from": "src/cli.ts",
+          "callee": "Number",
+          "line": 8,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "src/cli.ts",
+          "callee": "String",
+          "line": 15,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "src/index.ts",
+          "callee": "leftPad",
+          "line": 5,
+          "reason": "unresolved-call"
+        }
+      ]
+    }
+  },
+  "configs": [],
+  "nonCodeCandidates": [
+    {
+      "path": "package.json",
+      "absolutePath": "C:\\Users\\thorfinn\\projects\\cartograph\\fixtures\\polyglot-manifests\\repo\\package.json",
+      "module": ".",
+      "content": "{\n  \"name\": \"polyglot-manifests\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"main\": \"./dist/index.js\",\n  \"bin\": {\n    \"polyglot\": \"./dist/cli.js\"\n  },\n  \"exports\": {\n    \".\": {\n      \"import\": \"./dist/index.mjs\",\n      \"require\": \"./dist/index.cjs\"\n    },\n    \"./helpers\": \"./dist/helpers.js\"\n  },\n  \"scripts\": {\n    \"build\": \"tsc -p .\",\n    \"test\": \"node --test\"\n  },\n  \"dependencies\": {\n    \"left-pad\": \"^1.3.0\",\n    \"shared-lib\": \"workspace:*\"\n  },\n  \"devDependencies\": {\n    \"typescript\": \"^5.6.0\"\n  },\n  \"optionalDependencies\": {\n    \"fsevents\": \"^2.3.3\"\n  },\n  \"peerDependencies\": {\n    \"react\": \">=18\"\n  }\n}\n",
+      "bytes": 616,
+      "lines": 33,
+      "hash": "ee388b371600f4505a43d58953c3848597112b2a4955f4e25fa672faf039c96e",
+      "project": ".",
+      "category": "primary_manifest"
+    },
+    {
+      "path": "pnpm-workspace.yaml",
+      "absolutePath": "C:\\Users\\thorfinn\\projects\\cartograph\\fixtures\\polyglot-manifests\\repo\\pnpm-workspace.yaml",
+      "module": ".",
+      "content": "packages:\n  - \"packages/*\"\n  - \"!packages/legacy\"\n",
+      "bytes": 50,
+      "lines": 3,
+      "hash": "1a5d13962afd461980e7e6acd5057053d4c2b1b27d75535df7bf17933ff6c846",
+      "project": ".",
+      "category": "primary_manifest"
+    },
+    {
+      "path": "core/Cargo.toml",
+      "absolutePath": "C:\\Users\\thorfinn\\projects\\cartograph\\fixtures\\polyglot-manifests\\repo\\core\\Cargo.toml",
+      "module": "core",
+      "content": "[package]\nname = \"polyglot-core\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nserde = { version = \"1.0\", features = [\"derive\"] }\ntokio = \"1.40\"\n\n[dev-dependencies]\ncriterion = \"0.5\"\n\n[build-dependencies]\ncc = \"1.1\"\n\n[lib]\npath = \"src/lib.rs\"\n\n[[bin]]\nname = \"polyglot-cli\"\npath = \"src/bin/cli.rs\"\n",
+      "bytes": 303,
+      "lines": 21,
+      "hash": "31e7abb917d52f2a706ea074dfc7e1d1803965a87f048efe85ef4015a4c18238",
+      "project": ".",
+      "category": "primary_manifest"
+    },
+    {
+      "path": "service/go.mod",
+      "absolutePath": "C:\\Users\\thorfinn\\projects\\cartograph\\fixtures\\polyglot-manifests\\repo\\service\\go.mod",
+      "module": "service",
+      "content": "module example.com/polyglot/service\n\ngo 1.22\n\nrequire (\n\tgithub.com/gin-gonic/gin v1.10.0\n\tgolang.org/x/sync v0.8.0 // indirect\n)\n\nrequire github.com/stretchr/testify v1.9.0\n",
+      "bytes": 174,
+      "lines": 10,
+      "hash": "bc517b120aa033a17aa2203b75d2cbb63c33a0799abf4feee2383635142a1078",
+      "project": ".",
+      "category": "primary_manifest"
+    },
+    {
+      "path": "tools/pyproject.toml",
+      "absolutePath": "C:\\Users\\thorfinn\\projects\\cartograph\\fixtures\\polyglot-manifests\\repo\\tools\\pyproject.toml",
+      "module": "tools",
+      "content": "[project]\nname = \"polyglot-tools\"\nversion = \"0.2.0\"\ndependencies = [\n  \"click>=8.1\",\n  \"rich\",\n]\n\n[project.scripts]\npolyglot-tools = \"polyglot_tools.cli:main\"\n\n[tool.poetry.group.dev.dependencies]\npytest = \"^8.0\"\n",
+      "bytes": 213,
+      "lines": 13,
+      "hash": "00bbc69bf5910e435296ec85a0fac31e18b240e8bf4b14756fdd3c0cf86f9f87",
+      "project": ".",
+      "category": "primary_manifest"
+    },
+    {
+      "path": "worker/requirements.txt",
+      "absolutePath": "C:\\Users\\thorfinn\\projects\\cartograph\\fixtures\\polyglot-manifests\\repo\\worker\\requirements.txt",
+      "module": "worker",
+      "content": "# Runtime dependencies for the worker\nflask==3.0.3\nrequests>=2.31,<3\ncelery[redis]~=5.4\n\n# A local editable install names no version\n-e .\n\n# An option line names no package\n--index-url https://pypi.org/simple\n",
+      "bytes": 209,
+      "lines": 10,
+      "hash": "30310fbca880c9b1be373a5ce5439c2693bbb121fde96a1a8f57cc8540bcf2bc",
+      "project": ".",
+      "category": "primary_manifest"
+    }
+  ]
+}

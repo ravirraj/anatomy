@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 5,
+  "schemaVersion": 7,
   "root": "<repo>",
   "projects": [
     {
@@ -108,6 +108,14 @@
     {
       "source": "src/main.ts",
       "target": "src/index.ts",
+      "kind": "call",
+      "typeOnly": false,
+      "specifier": "three",
+      "line": 5
+    },
+    {
+      "source": "src/main.ts",
+      "target": "src/index.ts",
       "kind": "import",
       "typeOnly": false,
       "specifier": "./index",
@@ -120,31 +128,70 @@
       "name": "area",
       "kind": "function",
       "line": 1,
+      "endLine": 3,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [
+        {
+          "name": "radius",
+          "type": "number"
+        }
+      ],
+      "returnType": "number",
+      "signature": "area(radius: number): number",
       "file": "src/circle.ts"
     },
     {
       "name": "report",
       "kind": "function",
       "line": 4,
+      "endLine": 6,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [],
+      "returnType": "number",
+      "signature": "report(): number",
       "file": "src/main.ts"
     },
     {
       "name": "SQUARE",
       "kind": "const",
       "line": 1,
+      "endLine": 1,
       "exported": true,
+      "exportKind": "named",
+      "signature": "SQUARE = \"square\"",
       "file": "src/square.ts"
     },
     {
       "name": "default",
       "kind": "function",
       "line": 1,
+      "endLine": 3,
       "exported": true,
+      "exportKind": "default",
+      "parameters": [],
+      "returnType": "number",
+      "signature": "default(): number",
       "file": "src/triangle.ts"
     }
   ],
+  "manifests": [
+    {
+      "path": "package.json",
+      "dir": ".",
+      "project": ".",
+      "ecosystem": "npm",
+      "name": "barrel-index",
+      "workspaces": [],
+      "scripts": [],
+      "problems": []
+    }
+  ],
+  "dependencies": [],
+  "configReferences": [],
+  "envDeclarations": [],
+  "entryPoints": [],
   "coverage": {
     "files": {
       "found": 5,
@@ -189,6 +236,13 @@
           "external": 0,
           "excluded": 0,
           "unresolved": 0
+        },
+        "call": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
         }
       },
       "external": {
@@ -203,7 +257,33 @@
     "routes": {
       "omitted": [],
       "withheld": []
+    },
+    "calls": {
+      "total": 2,
+      "resolved": 1,
+      "unresolved": 1,
+      "unresolvedCalls": [
+        {
+          "from": "src/main.ts",
+          "callee": "area",
+          "line": 5,
+          "reason": "unresolved-call"
+        }
+      ]
     }
   },
-  "configs": []
+  "configs": [],
+  "nonCodeCandidates": [
+    {
+      "path": "package.json",
+      "absolutePath": "C:\\Users\\thorfinn\\projects\\cartograph\\fixtures\\barrel-index\\repo\\package.json",
+      "module": ".",
+      "content": "{\n  \"name\": \"barrel-index\",\n  \"version\": \"1.0.0\",\n  \"private\": true\n}\n",
+      "bytes": 70,
+      "lines": 5,
+      "hash": "125027696e4ee63735021d5240de959571fd17bc9f90714c1bf3b9e021afa369",
+      "project": ".",
+      "category": "primary_manifest"
+    }
+  ]
 }

@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 5,
+  "schemaVersion": 7,
   "root": "<repo>",
   "projects": [
     {
@@ -103,38 +103,122 @@
       "name": "default",
       "kind": "function",
       "line": 1,
+      "endLine": 8,
       "exported": true,
+      "exportKind": "default",
+      "parameters": [
+        {
+          "name": "{ title, children }",
+          "type": "{ title: string; children: unknown }"
+        }
+      ],
+      "returnType": "any",
+      "signature": "default({ title, children }: { title: string; children: unknown }): any",
       "file": "components/frame.tsx"
     },
     {
       "name": "default",
       "kind": "function",
       "line": 3,
+      "endLine": 5,
       "exported": true,
+      "exportKind": "default",
+      "parameters": [
+        {
+          "name": "{ Component, pageProps }",
+          "type": "AppProps"
+        }
+      ],
+      "returnType": "any",
+      "signature": "default({ Component, pageProps }: AppProps): any",
       "file": "pages/_app.tsx"
     },
     {
       "name": "default",
       "kind": "function",
       "line": 3,
+      "endLine": 5,
       "exported": true,
+      "exportKind": "default",
+      "parameters": [
+        {
+          "name": "_req",
+          "type": "unknown"
+        },
+        {
+          "name": "res",
+          "type": "{ json(body: unknown): void }"
+        }
+      ],
+      "returnType": "void",
+      "signature": "default(_req: unknown, res: { json(body: unknown): void }): void",
       "file": "pages/api/status.ts"
     },
     {
       "name": "default",
       "kind": "function",
       "line": 3,
+      "endLine": 5,
       "exported": true,
+      "exportKind": "default",
+      "parameters": [],
+      "returnType": "any",
+      "signature": "default(): any",
       "file": "pages/index.tsx"
     },
     {
       "name": "default",
       "kind": "function",
       "line": 3,
+      "endLine": 5,
       "exported": true,
+      "exportKind": "default",
+      "parameters": [
+        {
+          "name": "{ id }",
+          "type": "{ id: string }"
+        }
+      ],
+      "returnType": "any",
+      "signature": "default({ id }: { id: string }): any",
       "file": "pages/posts/[id].tsx"
     }
   ],
+  "manifests": [
+    {
+      "path": "package.json",
+      "dir": ".",
+      "project": ".",
+      "ecosystem": "npm",
+      "name": "nextjs-pages-router",
+      "workspaces": [],
+      "scripts": [],
+      "problems": []
+    }
+  ],
+  "dependencies": [
+    {
+      "name": "next",
+      "version": "16.0.0",
+      "kind": "runtime",
+      "manifest": "package.json",
+      "dir": ".",
+      "project": ".",
+      "importedBy": 1
+    },
+    {
+      "name": "react",
+      "version": "19.0.0",
+      "kind": "runtime",
+      "manifest": "package.json",
+      "dir": ".",
+      "project": ".",
+      "importedBy": 0
+    }
+  ],
+  "configReferences": [],
+  "envDeclarations": [],
+  "entryPoints": [],
   "coverage": {
     "files": {
       "found": 5,
@@ -179,6 +263,13 @@
           "external": 0,
           "excluded": 0,
           "unresolved": 0
+        },
+        "call": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
         }
       },
       "external": {
@@ -199,7 +290,33 @@
         }
       ],
       "withheld": []
+    },
+    "calls": {
+      "total": 1,
+      "resolved": 0,
+      "unresolved": 1,
+      "unresolvedCalls": [
+        {
+          "from": "pages/api/status.ts",
+          "callee": "res.json",
+          "line": 4,
+          "reason": "unresolved-call"
+        }
+      ]
     }
   },
-  "configs": []
+  "configs": [],
+  "nonCodeCandidates": [
+    {
+      "path": "package.json",
+      "absolutePath": "C:\\Users\\thorfinn\\projects\\cartograph\\fixtures\\nextjs-pages-router\\repo\\package.json",
+      "module": ".",
+      "content": "{\n  \"name\": \"nextjs-pages-router\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"dependencies\": {\n    \"next\": \"16.0.0\",\n    \"react\": \"19.0.0\"\n  }\n}\n",
+      "bytes": 146,
+      "lines": 9,
+      "hash": "c865b0beac4fae7a4ada38b1bf8e7b591d45c0fa3b403355abdae673a412f46c",
+      "project": ".",
+      "category": "primary_manifest"
+    }
+  ]
 }

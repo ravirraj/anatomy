@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 5,
+  "schemaVersion": 7,
   "root": "<repo>",
   "projects": [
     {
@@ -55,6 +55,14 @@
     {
       "source": "src/app.ts",
       "target": "src/util/format.ts",
+      "kind": "call",
+      "typeOnly": false,
+      "specifier": "formatPrice",
+      "line": 4
+    },
+    {
+      "source": "src/app.ts",
+      "target": "src/util/format.ts",
       "kind": "import",
       "typeOnly": false,
       "specifier": "@/util/format",
@@ -67,24 +75,65 @@
       "name": "banner",
       "kind": "function",
       "line": 3,
+      "endLine": 5,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [
+        {
+          "name": "cents",
+          "type": "number"
+        }
+      ],
+      "returnType": "string",
+      "signature": "banner(cents: number): string",
       "file": "src/app.ts"
     },
     {
       "name": "use",
       "kind": "function",
       "line": 4,
+      "endLine": 6,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [],
+      "returnType": "string",
+      "signature": "use(): string",
       "file": "src/broken.ts"
     },
     {
       "name": "formatPrice",
       "kind": "function",
       "line": 1,
+      "endLine": 3,
       "exported": true,
+      "exportKind": "named",
+      "parameters": [
+        {
+          "name": "cents",
+          "type": "number"
+        }
+      ],
+      "returnType": "string",
+      "signature": "formatPrice(cents: number): string",
       "file": "src/util/format.ts"
     }
   ],
+  "manifests": [
+    {
+      "path": "package.json",
+      "dir": ".",
+      "project": ".",
+      "ecosystem": "npm",
+      "name": "path-aliases",
+      "workspaces": [],
+      "scripts": [],
+      "problems": []
+    }
+  ],
+  "dependencies": [],
+  "configReferences": [],
+  "envDeclarations": [],
+  "entryPoints": [],
   "coverage": {
     "files": {
       "found": 3,
@@ -129,6 +178,13 @@
           "external": 0,
           "excluded": 0,
           "unresolved": 0
+        },
+        "call": {
+          "seen": 0,
+          "internal": 0,
+          "external": 0,
+          "excluded": 0,
+          "unresolved": 0
         }
       },
       "external": {
@@ -154,12 +210,44 @@
     "routes": {
       "omitted": [],
       "withheld": []
+    },
+    "calls": {
+      "total": 3,
+      "resolved": 1,
+      "unresolved": 2,
+      "unresolvedCalls": [
+        {
+          "from": "src/broken.ts",
+          "callee": "gone",
+          "line": 5,
+          "reason": "unresolved-call"
+        },
+        {
+          "from": "src/util/format.ts",
+          "callee": "(cents / 100).toFixed",
+          "line": 2,
+          "reason": "unresolved-call"
+        }
+      ]
     }
   },
   "configs": [
     {
       "path": "tsconfig.json",
       "errors": []
+    }
+  ],
+  "nonCodeCandidates": [
+    {
+      "path": "package.json",
+      "absolutePath": "C:\\Users\\thorfinn\\projects\\cartograph\\fixtures\\path-aliases\\repo\\package.json",
+      "module": ".",
+      "content": "{\n  \"name\": \"path-aliases\",\n  \"version\": \"1.0.0\",\n  \"private\": true\n}\n",
+      "bytes": 70,
+      "lines": 5,
+      "hash": "f153aa3110df181f681e320c0ba3106d6f8975eeee3f9d1927607623740f76fd",
+      "project": ".",
+      "category": "primary_manifest"
     }
   ]
 }
