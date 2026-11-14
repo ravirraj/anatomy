@@ -25,19 +25,20 @@ The approved ordering (November 2026):
 Long-term target: one shared ingestion infrastructure, multiple
 language-specific parser adapters, framework-specific adapters, one canonical
 repository model, one shared relationship graph, one shared retrieval and
-Q&A engine. Tree-sitter is a *candidate* technology to evaluate during the
-architecture research for Phase 5 — it has **not** been selected.
+Q&A engine. Tree-sitter remains a *candidate* technology for future
+language adapters — it has **not** been selected (pending decision P9 in
+[DECISIONS.md](DECISIONS.md)).
 
 ### The phases
 
-| # | Phase | Status (2026-11-12) | Depends on |
+| # | Phase | Status (2026-11-14) | Depends on |
 |---|---|---|---|
 | 1 | **Retrieval & answer reliability** (JavaScript/TypeScript) | **In progress** on branch `ravi` | — |
 | 2 | **Answer integrity & safety hardening** | Planned | Phase 1 |
 | 3 | **Retrieval quality & performance measurement** | Planned | Phase 1 |
 | 4 | **Source-content & search completion** (symbol and full-text search) | **Complete** (2026-11-12, branch `ravi`) | Phase 1 |
-| 5 | **Language-neutral intermediate representation** | **Next planned** | Phase 1 |
-| 6 | **Multi-language parser adapters** (Python, Go, Java, Rust) | Planned | Phase 5 |
+| 5 | **Language-neutral intermediate representation** | **Complete** (2026-11-14, branch `ravi`) | Phase 1 |
+| 6 | **Multi-language parser adapters** (Python, Go, Java, Rust) | **Next planned** | Phase 5 |
 | 7 | **Framework adapters** (Django, FastAPI, Gin, Spring) | Planned | Phase 6, per language |
 | 8 | **Product completion & public release** (demo deployment, licence, repository evolution) | Planned | Phases 1–4 |
 
@@ -166,23 +167,73 @@ content was not part of the delivered batch scope.
 Acceptance at the project's own bar: "no feature appears in the README that
 the fixtures do not demonstrate."
 
-### Phase 5 — Language-neutral intermediate representation (next planned, do-first)
+### Phase 5 — Language-neutral intermediate representation (complete 2026-11-14)
 
-The prerequisite for every language below ([TODO.md](../TODO.md) §4.1): one
-canonical repository model — files, modules, symbols, imports, exports,
+The prerequisite for every language below ([TODO.md](../TODO.md) §4.1):
+one canonical repository model — files, modules, symbols, imports, exports,
 unresolved references — that the graph engine and the retrieval/AI layer
-consume without knowing which language produced it. The existing TypeScript
-parser must produce it with unchanged behaviour; the graph engine's results
-must be identical. Architecture research during this phase evaluates parsing
-technologies (including tree-sitter, as a candidate only) against the
-existing ts-morph pipeline. Effort estimate: XL.
+consume without knowing which language produced it. Delivered in audited,
+test-first batches on branch `ravi` (commits `59e320b`…`b66350d` plus one
+verified uncommitted change set; evidence and the verification battery in
+[PROJECT_STATE.md](PROJECT_STATE.md) §3 Phase 5):
 
-### Phase 6 — Multi-language parser adapters (planned)
+- **5.1 — Canonical IR v1 contract** (`IR_VERSION` 1, `lib/ir/`): the
+  language-neutral repository contract with a round-trip projection against
+  the parser's `ParseResult` (schema v7).
+- **5.2 — Eight-language registry** (`lib/ir/languages.ts`): JavaScript,
+  TypeScript, Python, Go, Rust, Java, C, C++ — with extraction coverage
+  stated honestly: **only JS/TS has an extraction adapter today**. The
+  registry recognises the other languages; no parser produces IR for them
+  yet.
+- **5.3 — FrameworkView foundation** (`FRAMEWORK_VIEW_VERSION` 1,
+  `lib/parser/adapters/view.ts`): framework detection, role detection and
+  route recovery (Express, NestJS, and Next.js in the uncommitted change
+  set) decoupled from ts-morph structures, with the production adapter
+  registry pinned by the harness (`scripts/test-adapter-view.ts`,
+  Section 12 invariant).
+- **5.4 — Persistence-seam audit**: closed with **no implementation and no
+  schema changes** (decision D12).
+- **5.5 — Retrieval & graph integration audit**: closed with **no
+  implementation changes** (decision D13).
+
+Architectural conclusions (recorded in [DECISIONS.md](DECISIONS.md)
+D12–D13): the canonical IR is an **in-process normalization contract** —
+the existing database tables remain the persistence source of truth
+(`ParseResult` schema v7 is the current persistence input; `toIr()` is not
+on the production ingestion path); **no separate retrieval, graph or Q&A
+engine is needed per language** — the existing engines are already
+language-neutral in scoring, expansion, serving, coverage and citations;
+language-specific semantics belong in adapters and IR extensions, never
+flattened into misleading common edges; and no speculative persistence
+abstraction or database migration was introduced. No new parsing
+technology was adopted in this phase; tree-sitter remains an unselected
+candidate (pending decision P9).
+
+### Phase 6 — Multi-language parser adapters (next planned)
 
 One parser adapter per language, each producing the Phase 5 representation
 with its own resolver reasons, symbol extraction, graph integration and
 fixture corpus ([TODO.md](../TODO.md) §4.2): **Python, Go, Java, Rust**, in
 that order of demand. Nothing is promised before its fixtures demonstrate it.
+Phase 6 has not started.
+
+Prerequisites verified by the Phase 5 audits (5.4/5.5; decisions D12–D13;
+full detail in [PROJECT_STATE.md](PROJECT_STATE.md) §4):
+
+1. **Registry-aware file admission** — `lib/parser/walk.ts`
+   (`CODE_EXTENSIONS` / `isCodeFile`).
+2. **Registry-aware parsed-file reconstruction** — `lib/analysis/load.ts`.
+3. **Registry-aware retrieval Stage 1 admission** — `lib/ai/retrieval.ts`.
+
+Plus one design checkpoint before the first adapter: resolve the
+adapter-to-persistence seam (pending decision P8) — `ParseResult` schema v7
+stays the persistence input, `toIr()` is not added to the ingestion path
+without an explicit decision, and no second persistence path is introduced.
+Schema changes stay conditional on actual adapter requirements (the
+`symbols.kind` and `manifests.ecosystem` constraints are the known
+candidates). First-adapter recommendation: **Python**, followed by
+end-to-end retrieval and QA evaluation — one adapter proving the complete
+pipeline, not several languages in parallel.
 
 ### Phase 7 — Framework adapters (planned)
 
@@ -273,10 +324,11 @@ the rest live in the delivery programme above.
 ## Longer-term direction
 
 - **More languages.** The parser is built on one grammar. Making it
-  multi-language means a language-neutral intermediate representation first, so
-  the graph engine, the adapters and the AI layer never need to know which
-  language a file is in. Python, Go, Java and Rust are the candidates, in that
-  order of how much they are wanted.
+  multi-language now means language adapters over the delivered Phase 5
+  intermediate representation and registry ([DECISIONS.md](DECISIONS.md)
+  D12–D13), so the graph engine, the adapters and the AI layer never need to
+  know which language a file is in. Python, Go, Java and Rust are the
+  candidates, in that order of how much they are wanted.
 - **More frameworks.** Django, FastAPI, Gin and Spring Boot, as their
   languages arrive.
 - **Repository evolution.** Compare two commits, see the dependency edges that
@@ -284,8 +336,6 @@ the rest live in the delivery programme above.
   shape of a codebase is getting worse.
 - **Call graphs.** The import graph is not the call graph. Recovering function
   calls exactly — or not at all — is its own project.
-- **A language-neutral intermediate representation**, which is the
-  prerequisite for all of the above.
 
 ---
 

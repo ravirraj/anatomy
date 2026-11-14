@@ -21,7 +21,12 @@ pruning once per successful analysis completion). Updated 2026-11-09
 (F5 closure): D10 added — the `contextText` bare-path rescue removed from
 citation verification. Updated 2026-11-09 (F8 closure): D11 added — the
 explain tasks' legacy Set tier verifies whole-file paths only and rejects
-line-bound citations.
+line-bound citations. Updated 2026-11-14 (Phase 5 closure): D12 (canonical
+IR as in-process normalization contract; existing tables are the persistence
+source of truth) and D13 (one shared retrieval/graph/QA engine; registry
+admission is the Phase 6 prerequisite) added from the 5.4/5.5 audits;
+pending P8 (adapter-to-persistence seam) and P9 (parsing technology for
+non-JS/TS adapters) opened.
 
 ---
 
@@ -250,6 +255,68 @@ coverage-loop drills once it is served (Phase 1D, V10)
   poisoned explain-file and explain-folder hits refused with the detail and
   no healing, whole-path cached control serving unchanged).
 
+### D12. The canonical IR is an in-process normalization contract; existing database tables are the persistence source of truth (Phase 5, 5.4 audit)
+
+- **Code (2026-11-14):** `lib/ir/` (`IR_VERSION` 1 — `types.ts`, the
+  round-trip contract in `contract.ts`, projection in `convert.ts`,
+  registry in `languages.ts`). The IR is consumed in-process; it is **not**
+  a second storage format. The production ingestion path persists the
+  parser's `ParseResult` (schema v7) through `storeResult`
+  (`lib/pipeline/store.ts`); `toIr()` is currently called nowhere in
+  production.
+- **Decision (from the 5.4 read-only audit, adopted at Phase 5 closure):**
+  no persistence-interface abstraction (Option C — rejected as indirection
+  with no demonstrated need), and no IR→storage projection layer now
+  (Option B — deferred to the first Phase 6 adapter batch, where a real
+  consumer justifies it). Language-native semantics belong in
+  `IrSymbol.extensions` and additive `DECLARATION_KINDS`/`RELATIONSHIP_KINDS`
+  entries, never in new tables or new engines.
+- **Why:** the audit traced the actual persistence path and found the
+  existing tables + `storeResult` already carry everything retrieval,
+  packaging, citations and the map consume. Introducing a second persistence
+  path before a second language exists would be speculative structure —
+  the same failure mode the project records against elsewhere.
+- **Consequences for Phase 6:** schema changes are conditional on actual
+  adapter requirements (the two traced candidates: the `symbols.kind` CHECK
+  in `20261025000000_symbols.sql:12` and the conditional
+  `manifests.ecosystem` CHECK in `20261103000000_repo_metadata.sql:29-31`).
+  A Python adapter mapping onto the existing kind vocabulary needs **no**
+  migration. The seam question itself is pending (P8).
+
+### D13. One shared retrieval, graph and Q&A engine for all languages; registry-aware admission is the Phase 6 prerequisite (Phase 5, 5.5 audit)
+
+- **Code (2026-11-14, audited):** `lib/ai/retrieval.ts`,
+  `lib/ai/retrieval-loop.ts`, `lib/ai/coverage.ts`, `lib/ai/packaging.ts`,
+  `lib/ai/citations.ts`, `lib/ai/concepts/`, `lib/graph/*`.
+- **Decision (from the 5.5 read-only audit, adopted at Phase 5 closure):**
+  the existing engines stay the only engines. Symbol matching scores on
+  names, identifier subtokens and dotted qualification — never on the
+  nine-value TS `kind` vocabulary (display only), so unknown declaration
+  kinds participate without misclassification. Graph expansion is driven by
+  the stored `edges` table and is edge-kind-agnostic beyond call/import
+  scoring. Coverage, packaging vocabulary (cargo/golang/python/pip/poetry
+  already present), citation extensions (py/go/rs/java/c/cpp already in
+  `CODE_EXTENSIONS`) and budget estimation are language-neutral.
+  `lib/graph/*` is the browser map's in-memory projection over
+  `ParsedFile`/`Edge` — not a traversal engine — so there is exactly one
+  graph engine. No per-language retrieval engine, second graph, or
+  per-language prompt is built; language-specific semantics live in
+  adapters, and relationships that cannot be resolved honestly stay
+  unresolved rather than flattened into misleading common edges.
+- **Why:** the audit traced the full pipeline stage by stage and found the
+  only JS/TS coupling is (a) three hardcoded extension gates and (b) a
+  JS-only *derived-hint* tier (Stage 3.5 / `RESOLVE_EXTENSIONS`) that
+  degrades gracefully to nothing for other languages. Fixing (a) with one
+  registry-aware predicate unlocks every language at once; (b) is honest by
+  construction.
+- **The three admission gates (verified Phase 6 prerequisites, unchanged by
+  the audit):** `lib/parser/walk.ts` (`CODE_EXTENSIONS` / `isCodeFile`),
+  `lib/analysis/load.ts:98` (parsed-file reconstruction feeding
+  `validateParseResult`), and `lib/ai/retrieval.ts` Stage 1 (line 967).
+  Until they are registry-aware, only manifests of other languages are
+  stored — and manifests-only is exactly what the golden dataset's
+  capability matrix (QA-09/QA-15/QA-16) measures today.
+
 ## Pending (unresolved — do not decide unilaterally)
 
 | # | Decision | Where it is discussed |
@@ -261,6 +328,8 @@ coverage-loop drills once it is served (Phase 1D, V10)
 | P5 | **Phase 1D scope and follow-on answer-quality questions** — Phase 1D is implemented and verified 2026-11-06 (batches B, E, C, A, D, G, F), committed and pushed (`e78ee56` at `origin/ravi`; approval for that commit/push was recorded at closure). Open follow-ups: whether to schedule a fresh full answer-quality run (the scorer's fact gaps were fixed after the first baseline run), and a QA-07 retry to replace its final state (the original run's FAIL was pure provider 429 quota exhaustion). | [PROJECT_STATE.md](PROJECT_STATE.md), [phase-1d-qa-audit.md](phase-1d-qa-audit.md) |
 | P6 | **Where the pipeline runs** for large repositories. | [architecture.md](architecture.md) §10.3 |
 | P7 | **Prompt-injection defence design** for retrieved repository content. | [ROADMAP.md](ROADMAP.md) Phase 2 |
+| P8 | **Adapter-to-persistence seam** — resolve before the first non-JS/TS language adapter: how adapter output reaches `storeResult` (`ParseResult` schema v7 stays the persistence input; `toIr()` is not on the ingestion path today; no second persistence path). Phase 6 must not start implementation before this checkpoint. | [PROJECT_STATE.md](PROJECT_STATE.md) §4, [DECISIONS.md](DECISIONS.md) D12 |
+| P9 | **Parsing technology for non-JS/TS adapters** — Phase 5 adopted no new technology; ts-morph covers JS/TS only. Tree-sitter remains a candidate, not a selection; the decision belongs to Phase 6 scoping. | [PROJECT_STATE.md](PROJECT_STATE.md), [ROADMAP.md](ROADMAP.md) Phase 6 |
 
 ## Historical (context for earlier work)
 
@@ -274,6 +343,7 @@ coverage-loop drills once it is served (Phase 1D, V10)
 - **Entry-point fallback scoring demoted** (30 vs the old 85) so bootstrap
   files cannot outrank real concept matches — recorded in
   [TODO.md](../TODO.md) §3.1.
-- **Tree-sitter is a candidate, not a selection** — evaluate during Phase 5
-  architecture research; the current parser is ts-morph-based and no
-  technology decision has been made for other languages.
+- **Tree-sitter is a candidate, not a selection** — Phase 5 completed
+  without adopting a new parsing technology (the JS/TS parser remains
+  ts-morph-based); the technology decision for other languages belongs to
+  Phase 6 scoping (pending decision P9).

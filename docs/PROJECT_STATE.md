@@ -9,7 +9,7 @@ after every approved subphase (see the maintenance rules in
 If this document and the repository disagree, the repository is right — fix
 this document and record what differed.
 
-**Last updated: 2026-11-12** (verification of every factual claim in this
+**Last updated: 2026-11-14** (verification of every factual claim in this
 file is listed alongside the claim).
 
 ---
@@ -18,17 +18,32 @@ file is listed alongside the claim).
 
 The product's shipped capability set matches [features.md](features.md).
 Development is on the delivery programme ([ROADMAP.md](ROADMAP.md)).
-**Phase 4 — Source-content & search completion is complete** (2026-11-12;
-five audited, test-first batches committed on `ravi`, see §3 Phase 4).
-Phase 1 (JS/TS retrieval & answer reliability, 1A–1D), Phase 2 (answer
-integrity & safety hardening, B1–B4 + F5/F8 + the F7 cache-retention series)
-and the Phase 3 measurement work (3A machine-readable baseline + comparator,
-3B retrieval effectiveness measurements) are implemented, verified and
-committed; the approved 2026-11-09/10 work sits at `origin/ravi` =
-`d152ea5`, with six local commits ahead of it (Phase 4 batches 1–4, Batch 5
-and the Phase 4 closeout docs commit). **Phase 5 — Language-neutral
-intermediate representation is the next planned phase; it has not been
-started and awaits explicit scope approval.**
+**Phase 5 — Language-neutral intermediate representation is complete**
+(2026-11-14; delivered batches and both closing audits recorded in §3
+Phase 5, decisions D12–D13 in [DECISIONS.md](DECISIONS.md)). Phases 1
+(JS/TS retrieval & answer reliability, 1A–1D), 2 (answer integrity &
+safety hardening), 3 (3A baseline + comparator, 3B retrieval measurements)
+and 4 (source-content & search completion) are implemented, verified and
+committed. **Phase 6 — Multi-language parser adapters is the next planned
+phase; it has not been started and awaits explicit scope approval**
+(its verified prerequisites and the required adapter-to-persistence design
+checkpoint are in §4).
+
+**Phase 5 (2026-11-12…14) delivered the language-neutral foundation in
+batches on `ravi`**: the canonical IR v1 contract (`59e320b`, `lib/ir/`,
+`IR_VERSION` 1, round-trip-projection-tested against the parser's
+`ParseResult` schema v7), the eight-language registry with honest
+extraction coverage (`2a7e244`, `lib/ir/languages.ts` — only JS/TS has an
+extraction adapter today), the FrameworkView contract (`1aa9308`,
+`FRAMEWORK_VIEW_VERSION` 1), role detection migrated to the view
+(`f7e7ea8`), Express (`b339713`) and NestJS (`b66350d`) route migration,
+and the verified uncommitted change set implementing the view-fed routes
+contract and the Next.js migration (Batch 3.3c.1+3.3c.2+3.3d.1, §3). The
+phase closed with two read-only audits — 5.4 (persistence seam) and 5.5
+(retrieval & graph integration) — both recommending **closure without
+implementation**, adopted as decisions D12 and D13. No Python, Go, Rust,
+Java or C/C++ source parsing exists; the registry recognises these
+languages but only JS/TS has a supported extraction adapter.
 
 **Phase 4 (2026-11-10…12) delivered search completion in five batches**:
 qualified-name search (`230c99a`), method and nested-function indexing
@@ -70,18 +85,18 @@ comparison policy + update procedure also documented in
 
 ## 2. Verified Git state
 
-Verified 2026-11-09 during the F5 implementation, via `git log --oneline`,
-`git branch --show-current`, `git status --porcelain`, `git stash push/pop`
-(old-implementation demonstration), `git ls-remote origin ravi`:
+Verified 2026-11-14 during the Phase 5 closeout, via `git log --oneline`,
+`git branch --show-current`, `git status --porcelain`,
+`git rev-list --left-right --count origin/ravi...HEAD`:
 
 | Fact | Value |
 |---|---|
 | Branch | `ravi` |
-| HEAD | the Phase 4 closeout docs commit (contains this file; *docs: close Phase 4 search completion*), preceded by `508dd03` — *feat(search): integrate entry-point and packaging discovery* (Phase 4 Batch 5, 2026-11-12; 5 files), `0a61d77` — *feat(parser): index Express routes* (Batch 4), `a0c4466` — *feat(eval): add search strategy diagnostics* (Batch 3), `c44cdf2` — *feat(parser): index methods and nested functions* (Batch 2), `230c99a` — *feat(search): support qualified-name retrieval* (Batch 1) |
-| Commits | this docs commit · `508dd03` Batch 5 (entry-point + packaging discovery) · `0a61d77` Batch 4 · `a0c4466` Batch 3 · `c44cdf2` Batch 2 · `230c99a` Batch 1 · `d152ea5` Phase 3B measurements · `b3e469f` Phase 3A baseline + comparator · `2c86868` docs (Phase 3A record) · `56898dc` F5+F8 security hardening · `3e6c7ff` F7 retention · `9f4f942` Phase 2 consolidation · `e78ee56` docs/eval follow-up · `c51f018` feat(qa): Phase 1D · `7262316` fix(retrieval): Phase 1C · `c1ac975` Phases 1A+1B (preserved, untouched) |
+| HEAD | `b66350d` — *refactor(adapters): migrate NestJS routes to framework view* (Phase 5 Batch 3.3c), preceded by `b339713` — *migrate Express routes to framework view* (3.3b), `f7e7ea8` — *migrate role detection to framework view* (3.3a), `1aa9308` — *feat(adapters): introduce framework view contract* (Batch 3.1), `2a7e244` — *feat(ir): add language registry and extraction coverage* (Batch 2), `59e320b` — *feat(ir): introduce canonical repository IR contract* (Batch 1) |
+| Commits | the six Phase 5 batch commits above · `651debb` Phase 4 closeout docs · `508dd03` Phase 4 Batch 5 · `0a61d77` Batch 4 · `a0c4466` Batch 3 · `c44cdf2` Batch 2 · `230c99a` Batch 1 · `d152ea5` Phase 3B measurements · `b3e469f` Phase 3A baseline + comparator · `2c86868` docs (Phase 3A record) · `56898dc` F5+F8 security hardening · `3e6c7ff` F7 retention · `9f4f942` Phase 2 consolidation · `e78ee56` docs/eval follow-up · `c51f018` feat(qa): Phase 1D · `7262316` fix(retrieval): Phase 1C · `c1ac975` Phases 1A+1B (preserved, untouched) |
 | Remote | `https://github.com/ravirraj/anatomy.git` (`origin`) |
-| Pushed | Through `d152ea5` (Phase 3B) — verified via `git ls-remote origin ravi` = `d152ea5450a4bb3e1d75d961a327dc067157cfb5`. The six Phase 4 + closeout commits (Batch 1–5 and this docs commit) are **local only; not pushed** (no push approved in the Phase 4 closeout scope). |
-| Working tree | **Clean.** The Batch 5 change set (five files, 531 insertions / 37 deletions) was committed as `508dd03` after the full gate battery passed; no stray files, no probe scripts remain. |
+| Pushed | Through `651debb` (Phase 4 closeout docs) — verified via `git rev-parse origin/ravi` = `651debb47a284e7e436618c16236e18536ab5a30`. The six Phase 5 batch commits are **local only; not pushed** (no push approved in the Phase 5 scope). |
+| Working tree | **Eight modified files, nothing staged** — the verified uncommitted Phase 5 change set (Batch 3.3c.1+3.3c.2+3.3d.1): `lib/parser/adapters/{types,view,nextjs,docusaurus,react,fallback}.ts`, `lib/parser/index.ts`, `scripts/test-adapter-view.ts` (1301 insertions / 63 deletions). Treated as user-owned; content and verification recorded in §3 Phase 5. |
 | Previous commits | `f05af36` (CLI flow/budget), `3fa177c` (cli-execution intent), `913e9d0`, `d1098bc`, `159dede`, `df85638` |
 
 Commit-integrity note: before partitioning, the full intended state
@@ -901,22 +916,111 @@ golden queries by design).
   re-export-chain analysis. Not pulled into Phase 5; any implementation
   needs a migration decision first.
 
+### Phase 5 — Language-neutral intermediate representation (2026-11-12…14, complete)
+
+Executed as audited, test-first batches on branch `ravi`, each gated by the
+full verification battery, with the frozen golden-QA baseline byte-identical
+throughout. The six committed batches sit locally (not pushed); the final
+routes-contract change set is verified but uncommitted (user-owned):
+
+| Batch | Commit | Content |
+|---|---|---|
+| 1 (5.1) | `59e320b` | **Canonical IR v1 contract** — `lib/ir/` (`types.ts` `IR_VERSION = 1`, `contract.ts` round-trip projection against the parser's `ParseResult` schema v7, `convert.ts`, `languages.ts`); harness `scripts/test-ir.ts` |
+| 2 (5.2) | `2a7e244` | **Eight-language registry and extraction coverage** — JavaScript, TypeScript, Python, Go, Rust, Java, C, C++ (`lib/ir/languages.ts`), with coverage stated honestly per language |
+| 3.1 (5.3) | `1aa9308` | **FrameworkView contract** — `lib/parser/adapters/view.ts` + `types.ts` (`FRAMEWORK_VIEW_VERSION = 1`): framework detection decoupled from ts-morph structures |
+| 3.3a (5.3) | `f7e7ea8` | **Role detection migrated to the framework view** |
+| 3.3b (5.3) | `b339713` | **Express routes migrated to the framework view** |
+| 3.3c (5.3) | `b66350d` | **NestJS routes migrated to the framework view** |
+| 3.3c.1+3.3c.2+3.3d.1 (5.3) | *uncommitted* | **View-fed routes contract + Next.js migration** — `routesFromView(view, unparsed)` is the sole production route interface; `FrameworkAdapter.routes` is optional and oracle-only; `applyAdapters` falls back to `NO_ROUTES`; `AdapterFile` construction removed from `lib/parser/index.ts` (annotations use `SourceFile`); docusaurus/react/fallback dropped `routes` boilerplate; harness Section 12 pins the production registry (`nextjs, nestjs, express, docusaurus, react, fallback`) with an 11-check invariant. Eight files, 1301 insertions / 63 deletions. |
+
+**Verification battery (after the last implementation change; all green):**
+adapter-view harness 496 checks / 0 failures; full `pnpm test` exit 0 with
+all 14 fixtures byte-identical; `pnpm typecheck` exit 0; `pnpm lint`
+0 errors / 56 warnings (exact baseline); `pnpm test:qa-eval` **15 PASS /
+1 WARN (QA-05) / 0 FAIL** identical to the frozen baseline; `pnpm
+test:qa-diff` **NO REGRESSIONS** (dataset SHA `62f98110d4d3…` unchanged);
+`pnpm test:qa-retrieval` 64/64; `pnpm test:budget` 95/0 edge checks with
+corpus 442 ≤ 900. Frozen invariants: `FRAMEWORK_VIEW_VERSION` 1,
+`IR_VERSION` 1, parser `SCHEMA_VERSION` 7.
+
+**Audit 5.4 — persistence seam (read-only, closed with no implementation):**
+traced the actual persistence path and found `ParseResult` (schema v7) is
+the real persistence input — `toIr` (`lib/ir/convert.ts`) is called nowhere
+in production — and `storeResult` (`lib/pipeline/store.ts`) persists via
+chunked inserts plus `insert_*` RPCs that resolve by path. Two schema
+blockers traced exactly (`symbols.kind` CHECK with nine TS kinds;
+conditional `manifests.ecosystem` CHECK missing maven/gradle) and parked as
+conditional on real adapter requirements. Option C (a persistence interface)
+was rejected as indirection; Option B (IR→storage projection) is deferred to
+the first Phase 6 adapter batch. Adopted as decision D12.
+
+**Audit 5.5 — retrieval & graph integration (read-only, closed with no
+implementation):** audited the full retrieval pipeline end to end and found
+it already language-neutral where it matters — symbol matching scores on
+name/subtokens/dotted-qualification and never on the nine-value `kind`
+vocabulary (display only); graph expansion is edge-table-driven and
+language-agnostic; coverage, packaging vocabulary, citations
+(`CODE_EXTENSIONS` already includes py/go/rs/java/c/cpp) and budget
+estimation are language-neutral; `lib/graph/*` is the browser map's
+in-memory projection, not a second graph engine. Exactly three admission
+gates hardcode JS/TS extensions (`lib/parser/walk.ts`,
+`lib/analysis/load.ts:98`, `lib/ai/retrieval.ts` Stage 1) and become the
+Phase 6 prerequisites. Adopted as decision D13.
+
+**Phase 5 architectural conclusions (D12–D13):** the canonical IR is an
+in-process normalization contract; the existing database tables remain the
+persistence source of truth; no separate retrieval, graph or Q&A engine is
+needed per language; language-specific semantics belong in adapters and IR
+extensions; FrameworkView decouples framework detection from ts-morph
+structures; no speculative persistence abstraction or database migration
+was introduced. **Not implemented in this phase:** Python, Go, Rust, Java
+or C/C++ source parsing — the registry recognises these languages, but only
+JS/TS has a supported extraction adapter.
+
 ## 4. Exact next approved task
 
-**Phase 4 is formally closed (2026-11-12).** The five batch commits
-(`230c99a`, `c44cdf2`, `a0c4466`, `0a61d77`, `508dd03`) and the Phase 4
-closeout docs commit sit locally on `ravi` — **six commits ahead of
-`origin/ravi` (= `d152ea5`) and not pushed**; the working tree is clean and
-the full gate battery passed after the last change (§3 Phase 4).
+**Phase 5 is formally closed (2026-11-14).** The six batch commits
+(`59e320b`, `2a7e244`, `1aa9308`, `f7e7ea8`, `b339713`, `b66350d`) sit
+locally on `ravi` — six commits ahead of `origin/ravi` (= `651debb`) and
+**not pushed** — and the verified uncommitted change set (Batch
+3.3c.1+3.3c.2+3.3d.1, eight files) remains in the working tree, all
+user-owned. The full gate battery passed after the last implementation
+change (§3 Phase 5); audits 5.4 and 5.5 closed with no implementation
+(decisions D12–D13).
 
 Awaiting explicit user approval for, in order:
 
-1. **Pushing the six Phase 4/closeout commits to `origin/ravi`** — not
-   executed in the closeout scope; no push or deployment occurred.
-2. **Phase 5 — Language-neutral intermediate representation** scoping (per
-   [ROADMAP.md](ROADMAP.md) it is the next planned phase; nothing of it has
-   been started, and `isPublicApi` does **not** migrate into it without an
-   explicit decision).
+1. **Committing the eight-file uncommitted change set** (if approved as
+   its own commit) and **pushing the Phase 5 commits to `origin/ravi`** —
+   neither executed; no commit or push occurred in the closeout scope.
+2. **Phase 6 — Multi-language parser adapters scoping**, which must start
+   from the verified prerequisites and the required design checkpoint:
+
+   **Verified blockers (each must become registry-aware before the first
+   non-JS/TS adapter persists parsed files):**
+
+   1. Registry-aware file admission in `lib/parser/walk.ts`
+      (`CODE_EXTENSIONS`, `isCodeFile`).
+   2. Registry-aware parsed-file reconstruction in `lib/analysis/load.ts`
+      (the parsed-file filter feeds `validateParseResult` — dropped files
+      with referencing edges would hard-fail there).
+   3. Registry-aware retrieval Stage 1 admission in `lib/ai/retrieval.ts`.
+
+   **Required design checkpoint (pending decision P8):** resolve the
+   adapter-to-persistence seam before implementing the first language
+   adapter. `ParseResult` schema v7 remains the current persistence input
+   (`lib/pipeline/store.ts` `storeResult`); `toIr()` (`lib/ir/convert.ts`)
+   is currently not part of the production ingestion path; do not introduce
+   a second persistence path. Future schema changes stay conditional on
+   actual adapter requirements (known candidates: the `symbols.kind` CHECK
+   in `20261025000000_symbols.sql:12` and the `manifests.ecosystem` CHECK in
+   `20261103000000_repo_metadata.sql:29-31` — neither is required for a
+   Python adapter that maps onto the existing kind vocabulary).
+
+   **First-adapter recommendation: Python**, followed by end-to-end
+   retrieval and QA evaluation (extending `fixtures/golden-qa.json`'s
+   capabilityMatrix with source-level cases), proving the complete pipeline
+   with one adapter rather than implementing six languages in parallel.
 
 Still pending from earlier phases, **not approved and not started** (each
 needs its own approval):
@@ -936,7 +1040,9 @@ needs its own approval):
 
 | Item | Type | Note |
 |---|---|---|
-| Phase 4 — search completion | **Closed 2026-11-12** | Five batches committed (`230c99a`…`508dd03`) + closeout docs commit; frozen golden baseline byte-identical throughout; NO REGRESSIONS. Six local commits ahead of `origin/ravi`, not pushed (§4 item 1). Known limitations recorded in §3 Phase 4 (zero unanchored discovery cases in the golden dataset; Express conservative withholding; uppercase-only method detection; `isPublicApi` deferred). |
+| Phase 5 — language-neutral IR | **Closed 2026-11-14** | Batches 5.1–5.3 committed (`59e320b`…`b66350d`) plus the verified uncommitted 8-file routes-contract set; full gate battery green, frozen baselines byte-identical; audits 5.4 and 5.5 closed with no implementation (decisions D12–D13). Six local commits ahead of `origin/ravi`, not pushed (§4 item 1). |
+| Phase 6 — multi-language parser adapters | **Next planned; not started** | Verified prerequisites: registry-aware admission in `lib/parser/walk.ts`, `lib/analysis/load.ts:98`, and `lib/ai/retrieval.ts` Stage 1 (§4). Required design checkpoint: adapter-to-persistence seam (pending decision P8) — `ParseResult` schema v7 stays the persistence input, `toIr()` is not on the ingestion path, no second persistence path. Schema changes conditional on actual adapter requirements (`symbols.kind`, `manifests.ecosystem` CHECKs are the known candidates). First adapter: Python, then end-to-end retrieval + QA evaluation. |
+| Phase 4 — search completion | **Closed 2026-11-12** | Five batches committed (`230c99a`…`508dd03`) + closeout docs commit; frozen golden baseline byte-identical throughout; NO REGRESSIONS. Known limitations recorded in §3 Phase 4 (zero unanchored discovery cases in the golden dataset; Express conservative withholding; uppercase-only method detection; `isPublicApi` deferred). |
 | `isPublicApi` — public-API surface | **Deferred** (decision needed) | The parser type field (`lib/parser/types.ts:121`) has no database column in any migration, so it is dead at the persistence boundary; no public-API persistence exists; reliable derivation would need entry-point + re-export-chain analysis. Deliberately **not** pulled into Phase 5 scope; any implementation requires a `symbols` migration decision first. |
 | Phase 3A — baseline versioning & regression detection | Resolved — committed as `b3e469f` and pushed | The 2026-11-10 uncommitted change set was committed and, with the Phase 3B measurements (`d152ea5`), pushed to `origin/ravi`; `pnpm test:qa-diff` is live in the `pnpm test` chain. |
 | Phase 3 audit (2026-11-09) | Resolved | Read-only report delivered; top gap (machine-readable baseline + regression detection) closed by Phase 3A. Remaining plan items (P2 budget/loop metrics, P3 rank metric, P5 dataset governance, O1–O4) were recorded in the 2026-11-09 report and remain not started. |
