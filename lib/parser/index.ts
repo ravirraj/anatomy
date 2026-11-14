@@ -1,6 +1,6 @@
 import { statSync } from "node:fs";
 import path from "node:path";
-import { Project, ts } from "ts-morph";
+import { Project, ts, type SourceFile } from "ts-morph";
 import { extractCalls, extractExports, extractImportBindings, extractImports, extractSymbols } from "./extract.ts";
 import { dedupeEdges, fanCounts } from "./graph.ts";
 import { createResolver } from "./resolve.ts";
@@ -20,7 +20,7 @@ import {
   type StatusCounts,
 } from "./types.ts";
 import type { Role } from "../roles.ts";
-import type { AdapterFile } from "./adapters/types.ts";
+import { NO_ROUTES } from "./adapters/types.ts";
 import { buildFrameworkView, type ViewSourceEntry } from "./adapters/view.ts";
 import { walkRepository, withinProject, type WalkResult } from "./walk.ts";
 
@@ -354,7 +354,7 @@ export function parseSelection({ root, walk }: Selection): ParseResult {
  * workspace link and a Node builtin are all excluded by construction.
  */
 function bareSpecifiersByFile(
-  parsed: readonly { candidate: { path: string; absolutePath: string }; sourceFile: AdapterFile["source"] }[],
+  parsed: readonly { candidate: { path: string; absolutePath: string }; sourceFile: SourceFile }[],
   resolver: ReturnType<typeof createResolver>,
 ): Map<string, Set<string>> {
   const out = new Map<string, Set<string>>();
@@ -416,13 +416,13 @@ function countDependencyImports(
 }
 
 // Each project's adapter is asked about its own files, by project-relative
-// path, and what it answers is mapped back to repository paths. Roles are read
-// off the project's FrameworkView, built once per project and handed to
-// roleOf; routes still receive the AdapterFile syntax trees, which route
-// detection reads until it migrates to the view.
+// path, and what it answers is mapped back to repository paths. Roles and
+// routes are both read off the project's FrameworkView, built once per
+// project and handed to roleOf and routesFromView alike; an adapter with no
+// route logic contributes none (Batch 3.3d.1).
 function applyAdapters(
   walk: WalkResult,
-  parsed: readonly { candidate: { path: string; project: string; absolutePath: string }; sourceFile: AdapterFile["source"] }[],
+  parsed: readonly { candidate: { path: string; project: string; absolutePath: string }; sourceFile: SourceFile }[],
   skipped: readonly SkippedFile[],
   resolver: ReturnType<typeof createResolver>,
 ) {
@@ -433,11 +433,9 @@ function applyAdapters(
 
   for (const [project, adapter] of walk.adapters) {
     const toRepo = (p: string) => (project === "." ? p : `${project}/${p}`);
-    const files: AdapterFile[] = [];
     const entries: ViewSourceEntry[] = [];
     for (const { candidate, sourceFile } of parsed) {
       if (candidate.project !== project) continue;
-      files.push({ path: withinProject(project, candidate.path), source: sourceFile });
       // `parsed` is in the walker's own order (walk.candidates), so the rank
       // this project's files reach here IS the original walk order — recorded
       // on the view entry, whose files array is sorted by path.
@@ -463,13 +461,12 @@ function applyAdapters(
       .filter((f) => f.reason !== "declaration-file" && walk.projectOf.get(f.path) === project)
       .map((f) => withinProject(project, f.path));
 
-    // Adapters migrate to the view one at a time: when an adapter answers over
-    // the view it reads the same instance roleOf read, so one build per
-    // project serves both; the rest still read the source trees until their
-    // migration batches land (NestJS 3.3b, Next.js 3.3c).
-    const report = adapter.routesFromView
-      ? adapter.routesFromView(view, unparsed)
-      : adapter.routes({ files, unparsed });
+    // Production routes read the view only (Batch 3.3d.1): every adapter with
+    // route logic answers over routesFromView on the same instance roleOf
+    // read, and an adapter with none contributes none. The legacy routes()
+    // spellings are compatibility oracles — the route migration tests call
+    // them directly; the orchestration never does.
+    const report = adapter.routesFromView?.(view, unparsed) ?? NO_ROUTES;
     if (report.withheld !== null) {
       withheld.push({ project, reason: report.withheld });
       continue;

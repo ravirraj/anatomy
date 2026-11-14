@@ -18,9 +18,15 @@ export type ProjectInfo = {
   dependencies: ReadonlySet<string>;
 };
 
-/** A file that parsed cleanly, with its syntax tree. */
+/**
+ * A file that parsed cleanly, with its syntax tree. Compatibility-oracle
+ * surface only (Batch 3.3d.1): the legacy routes() readers take these, and
+ * the route migration tests hand them over directly. The production
+ * orchestration builds and consumes no AdapterFile.
+ */
 export type AdapterFile = { path: string; source: SourceFile };
 
+/** The same shape, oracle-facing: only a legacy routes() reader takes it. */
 export type ProjectFiles = {
   files: readonly AdapterFile[];
   /** Code files in the project that were skipped, so their syntax is unknown. */
@@ -67,8 +73,16 @@ export interface FrameworkAdapter {
    * applies; the file stays unclassified rather than getting the nearest fit.
    */
   roleOf(file: ViewFile): Role | null;
-  /** Routes whose method and full pattern are both written in the syntax. */
-  routes(project: ProjectFiles): RouteReport;
+  /**
+   * The pre-view route spelling, kept ONLY as the compatibility oracle the
+   * route migration tests deep-equal against routesFromView (Batches
+   * 3.3a–3.3c). Never invoked in production: the orchestration reads
+   * routesFromView, or nothing at all for an adapter with no route logic
+   * (Batch 3.3d.1). An adapter with route logic MUST implement
+   * routesFromView; this member is optional so the no-route adapters carry
+   * neither method.
+   */
+  routes?(project: ProjectFiles): RouteReport;
   /**
    * The same question answered over the project's FrameworkView (Batch 3.3a):
    * adapters migrate from routes() one at a time, and the parser prefers this
@@ -85,8 +99,10 @@ export interface FrameworkAdapter {
 // the syntactic facts the framework adapters read, handed over without the
 // language parser's own types. The JS/TS builder lives in view.ts. Role
 // detection consumes the view (Batch 3.2): roleOf answers over ViewFile.
-// Route detection does not yet: routes still reads AdapterFile, whose
-// SourceFile keeps ts-morph in the route consumers until it migrates.
+// Route detection does too (Batch 3.3d.1): routesFromView is the production
+// route interface, and the legacy routes() spelling with the AdapterFile
+// types it reads is compatibility-oracle surface the orchestration never
+// touches.
 //
 // What the view deliberately does NOT carry: source text, expression values
 // (nothing is ever evaluated), raw AST nodes, CommonJS `module.exports`
@@ -117,6 +133,28 @@ export type ViewValue =
 
 /** One statically named property of an object literal. Spreads and computed keys are skipped, not guessed. */
 export type ViewProperty = { name: string; value: ViewValue; line: number };
+
+/**
+ * One property assignment anywhere in the file — every `PropertyAssignment`
+ * and `ShorthandPropertyAssignment` in document order, however deeply nested
+ * (inside call arguments, function returns, arrays): the surface Next.js's
+ * legacy config scan reads, which is deliberately file-wide ("a property
+ * anywhere in the file could be the one Next.js reads"). Same name
+ * normalization and value semantics as `ViewProperty`; computed keys and
+ * spreads are skipped just the same. The `shorthand` marker keeps the
+ * spelling itself a fact — `{ basePath }` and `{ basePath: basePath }` carry
+ * the same value but are different spellings, and Next.js's legacy scan
+ * separates them into two passes with different outcomes — so a consumer
+ * reproducing that order filters on the marker, which preserves relative
+ * order either way.
+ */
+export type ViewPropertyAssignment = {
+  name: string;
+  value: ViewValue;
+  line: number;
+  /** True only for the shorthand spelling (`{ basePath }`); an explicit `{ basePath: basePath }` is not shorthand. */
+  shorthand?: boolean;
+};
 
 /** An argument in a call or a decorator. Same grammar as property values. */
 export type ViewArgument = ViewValue;
@@ -170,13 +208,16 @@ export type ViewImport = {
  * An export a route handler can hang its method on, or a route table can
  * forget about. Declaration form covers exported functions and variable
  * bindings (including destructured elements); alias covers `export { x as y }`
- * and `export * as ns`; star is a bare `export *`, which hides every name.
- * Default exports and CommonJS whole-module exports are excluded: the adapter
- * that must skip the first and never reads the second gains nothing from them.
+ * and `export * as ns` — the latter marked `namespace`, since its name is a
+ * whole module object, not a member some consumer exported, so a reader that
+ * resolves exported names by alias must never read it as one; star is a bare
+ * `export *`, which hides every name. Default exports and CommonJS
+ * whole-module exports are excluded: the adapter that must skip the first and
+ * never reads the second gains nothing from them.
  */
 export type ViewExport =
   | { form: "declaration"; name: string; kind: "function" | "variable"; line: number }
-  | { form: "alias"; name: string; line: number }
+  | { form: "alias"; name: string; line: number; namespace?: boolean }
   | { form: "star"; line: number };
 
 /**
@@ -289,6 +330,14 @@ export type ViewFile = {
    * object literals separately.
    */
   objectProperties: readonly ViewProperty[];
+  /**
+   * Every property assignment in the file, however deeply nested or scoped —
+   * the file-wide surface the legacy Next.js config scan reads. A separate
+   * stream from `objectProperties` on purpose: the two answer different
+   * questions (the config-object shape vs the file-wide scan), and the
+   * config-object surface keeps its exact existing meaning.
+   */
+  propertyAssignments: readonly ViewPropertyAssignment[];
 };
 
 /** A code file in the project whose syntax is unknown, with the reason it was skipped. */

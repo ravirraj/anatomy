@@ -1,6 +1,6 @@
 import type { Role } from "../../roles.ts";
 import { toolConventions, toolRole } from "./conventions.ts";
-import { NO_ROUTES, type FrameworkAdapter, type ViewFile } from "./types.ts";
+import type { FrameworkAdapter, ViewFile } from "./types.ts";
 
 // React has two conventions a file can be read by. A hook's name starts with
 // "use" — React's own rule, which its lint enforces. A component renders JSX,
@@ -23,5 +23,4 @@ export const reactAdapter: FrameworkAdapter = {
   reachedBy: toolConventions,
   // Tests render JSX too; the runner's pattern says what they are first.
   roleOf: (file) => toolRole(file.path) ?? reactRole(file),
-  routes: () => NO_ROUTES,
 };

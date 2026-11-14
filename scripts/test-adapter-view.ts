@@ -34,6 +34,8 @@ import { createResolver } from "../lib/parser/resolve.ts";
 import { buildFrameworkView, type ViewSourceEntry } from "../lib/parser/adapters/view.ts";
 import {
   FRAMEWORK_VIEW_VERSION,
+  NO_ROUTES,
+  type FrameworkAdapter,
   type FrameworkView,
   type RouteReport,
   type ViewArgument,
@@ -51,11 +53,14 @@ const pass = (m: string) => results.push(`ok    ${m}`);
 const fail = (m: string) => results.push(`FAIL  ${m}`);
 
 // Deterministic element budget: every element the view carries for the corpus.
-// Measured 2026-11-12 over all 14 fixtures: 427 elements (86 view files and
+// Measured 2026-11-12 over all 14 fixtures: 442 elements (86 view files and
 // skipped rows plus their imports, bindings, exports, declarations, decorators
-// and arguments, calls, config properties and directives). The budget keeps
-// ~2x headroom and catches accidental blow-up (duplicated content, quadratic
-// copying) without any wall-clock precision claim.
+// and arguments, calls, config properties, file-wide property assignments and
+// directives). 3.3c.1 added the file-wide property-assignment stream (15
+// assignments corpus-wide, 9 of which duplicate objectProperties content by
+// design — the legacy Next.js config scan is uniformly file-wide). The budget
+// keeps ~2x headroom and catches accidental blow-up (duplicated content,
+// quadratic copying) without any wall-clock precision claim.
 const CORPUS_ELEMENT_BUDGET = 900;
 const CORPUS_WALL_CLOCK_BUDGET_MS = 60_000;
 
@@ -197,6 +202,7 @@ function countElements(view: FrameworkView): number {
     }
     for (const call of file.calls) count += 1 + countArguments(call.arguments);
     count += countProperties(file.objectProperties);
+    count += countProperties(file.propertyAssignments);
     count += file.directives.length;
   }
   return count;
@@ -719,13 +725,41 @@ export const GETVAR = 1;
     deepEqual(view.files[0]?.exports, [
       { form: "alias", name: "GET", line: 1 },
       { form: "star", line: 2 },
-      { form: "alias", name: "ns", line: 3 },
+      { form: "alias", name: "ns", line: 3, namespace: true },
       { form: "declaration", name: "A", kind: "variable", line: 5 },
       { form: "declaration", name: "C", kind: "variable", line: 5 },
       { form: "declaration", name: "POST", kind: "function", line: 6 },
       { form: "declaration", name: "GETVAR", kind: "variable", line: 7 },
     ] satisfies ViewFile["exports"], "$"),
     "export-forms.ts: alias/star/namespace/destructured forms carried; the default export excluded",
+  );
+}
+
+// The namespace re-export spelling is marked, so a consumer resolving
+// exported names by alias never reads `export * as GET` as a GET handler —
+// the fact the legacy Next.js export scan observed by skipping namespace
+// exports entirely.
+{
+  const file = synthFile(
+    "namespace-exports.ts",
+    `const handler = null;
+const plain = 1;
+export * as GET from "./module";
+export * as ns from "./other";
+export { handler as GET };
+export * from "./bare";
+export { plain };
+`,
+  );
+  expect(
+    deepEqual(buildSynthetic([file]).files[0]?.exports, [
+      { form: "alias", name: "GET", line: 3, namespace: true },
+      { form: "alias", name: "ns", line: 4, namespace: true },
+      { form: "alias", name: "GET", line: 5 },
+      { form: "star", line: 6 },
+      { form: "alias", name: "plain", line: 7 },
+    ] satisfies ViewFile["exports"], "$"),
+    "namespace-exports.ts: only the `export * as ns` spelling carries the namespace marker; ordinary aliases and bare stars unchanged",
   );
 }
 
@@ -908,6 +942,51 @@ module.exports = nextConfig;
   );
 }
 
+// The file-wide property-assignment stream: every explicit and shorthand
+// assignment in document order, wherever it sits — top-level literals, call
+// arguments, function returns, array elements — with the shorthand spelling
+// marked and computed keys skipped. The distinction between
+// `{ basePath: basePath }` (explicit, unmarked) and `{ basePath }` (shorthand,
+// marked) is the fact Next.js's two config withhold reasons hang on.
+{
+  const file = synthFile(
+    "property-stream.ts",
+    `const direct = { basePath: "/root", "q-key": "v", ["computed"]: 1, ...rest, nested: { deep: "y" } };
+module.exports = withPlugins({ basePath: "/wrapped", short });
+function make() { return { basePath: "/returned" }; }
+const arr = [{ basePath: "/in-array" }, { sh2 }];
+const explicitVsShorthand = { basePath: basePath, sh3 };
+`,
+  );
+  const view = buildSynthetic([file]);
+  expect(
+    deepEqual(view.files[0]?.propertyAssignments, [
+      { name: "basePath", value: { kind: "string", value: "/root" }, line: 1 },
+      { name: "q-key", value: { kind: "string", value: "v" }, line: 1 },
+      { name: "nested", value: { kind: "object", properties: [{ name: "deep", value: { kind: "string", value: "y" }, line: 1 }] }, line: 1 },
+      { name: "deep", value: { kind: "string", value: "y" }, line: 1 },
+      { name: "basePath", value: { kind: "string", value: "/wrapped" }, line: 2 },
+      { name: "short", value: { kind: "identifier", name: "short" }, line: 2, shorthand: true },
+      { name: "basePath", value: { kind: "string", value: "/returned" }, line: 3 },
+      { name: "basePath", value: { kind: "string", value: "/in-array" }, line: 4 },
+      { name: "sh2", value: { kind: "identifier", name: "sh2" }, line: 4, shorthand: true },
+      { name: "basePath", value: { kind: "identifier", name: "basePath" }, line: 5 },
+      { name: "sh3", value: { kind: "identifier", name: "sh3" }, line: 5, shorthand: true },
+    ] satisfies ViewFile["propertyAssignments"], "$"),
+    "property-stream.ts: every assignment file-wide in document order — top-level, call-wrapped, returned, in-array — shorthand marked, quoted keys normalized, computed keys skipped",
+  );
+  expect(
+    deepEqual(view.files[0]?.objectProperties, [
+      { name: "basePath", value: { kind: "string", value: "/root" }, line: 1 },
+      { name: "q-key", value: { kind: "string", value: "v" }, line: 1 },
+      { name: "nested", value: { kind: "object", properties: [{ name: "deep", value: { kind: "string", value: "y" }, line: 1 }] }, line: 1 },
+      { name: "basePath", value: { kind: "identifier", name: "basePath" }, line: 5 },
+      { name: "sh3", value: { kind: "identifier", name: "sh3" }, line: 5 },
+    ] satisfies ViewProperty[], "$"),
+    "property-stream.ts: objectProperties keeps its exact existing meaning — only top-level config literals, shorthand unmarked",
+  );
+}
+
 // Decorator argument shapes the NestJS adapter resolves.
 {
   const file = synthFile(
@@ -1078,6 +1157,7 @@ const roleFile = (path: string, overrides: Partial<ViewFile> = {}): ViewFile => 
   declarations: [],
   calls: [],
   objectProperties: [],
+  propertyAssignments: [],
   ...overrides,
 });
 
@@ -1157,7 +1237,7 @@ const expressReportDiff = (
   unparsed: readonly string[] = [],
 ): { legacy: RouteReport; view: RouteReport } => {
   const ordered = [...entries].sort((a, b) => a.path.localeCompare(b.path));
-  const legacy = expressAdapter.routes({ files: ordered.map((entry) => ({ path: entry.path, source: entry.source })), unparsed });
+  const legacy = expressAdapter.routes!({ files: ordered.map((entry) => ({ path: entry.path, source: entry.source })), unparsed });
   const view = expressAdapter.routesFromView!(buildSynthetic(ordered, [], "."), unparsed);
   expect(
     deepEqual(legacy, view, "$"),
@@ -1190,7 +1270,7 @@ const lineIn = (content: string, needle: string): number =>
       .map((f) => f.path);
     if (!view) fail("express-routes: project view missing");
     else {
-      const legacy = expressAdapter.routes({ files, unparsed });
+      const legacy = expressAdapter.routes!({ files, unparsed });
       const viewReport = expressAdapter.routesFromView!(view, unparsed);
       expect(
         deepEqual(legacy, viewReport, "$"),
@@ -1442,12 +1522,12 @@ function handler(_q, s) { s.json({}); }
   const ordinary = synthFile("syn-def-ok.js", ordinaryContent);
 
   // The legacy behavior, pinned directly on the legacy reader.
-  const namedOnly = expressAdapter.routes({ files: [{ path: namedDefault.path, source: namedDefault.source }], unparsed: [] });
+  const namedOnly = expressAdapter.routes!({ files: [{ path: namedDefault.path, source: namedDefault.source }], unparsed: [] });
   expect(
     deepEqual(namedOnly, { routes: [], omitted: [], withheld: null }, "$"),
     "D1 legacy pin: import { default as e } from \"express\" declares no app — an entirely empty report",
   );
-  const ordinaryOnly = expressAdapter.routes({ files: [{ path: ordinary.path, source: ordinary.source }], unparsed: [] });
+  const ordinaryOnly = expressAdapter.routes!({ files: [{ path: ordinary.path, source: ordinary.source }], unparsed: [] });
   expect(
     deepEqual(routeKeys(ordinaryOnly), [`GET /ok syn-def-ok.js@${lineIn(ordinaryContent, `app.get("/ok"`)}`], "$"),
     "D1 legacy pin: an ordinary default import still declares the app",
@@ -1523,19 +1603,22 @@ function handler5(_q, s) { s.json({}); }
   expect(deepEqual(view.omitted, [], "$"), "withholding: no omission is emitted under the gate");
 }
 
-// Same FrameworkView instance for roles and routes: not externally observable
-// (applyAdapters passes the one `view` it built to roleOf and routesFromView
-// alike, and a second build would be content-equal anyway), so the pin is
-// structural — the orchestration must call routesFromView with that same view
-// variable and keep the legacy fallback for the unmigrated adapters.
+// Same FrameworkView instance for roles and routes, and the legacy readers
+// out of production: not externally observable (applyAdapters passes the one
+// `view` it built to roleOf and routesFromView alike, and a second build
+// would be content-equal anyway), so the pin is structural — the
+// orchestration must call routesFromView with that same view variable, fall
+// back to NO_ROUTES when an adapter has no route logic, and never invoke the
+// legacy routes() spellings or build an AdapterFile.
 {
   const orchestration = readFileSync(path.resolve("lib/parser/index.ts"), "utf8").replace(/\r\n/g, "\n");
-  const prefersView = orchestration.includes("adapter.routesFromView\n      ? adapter.routesFromView(view, unparsed)");
-  const keepsLegacy = orchestration.includes("adapter.routes({ files, unparsed })");
-  if (prefersView && keepsLegacy) {
-    pass("orchestration: routesFromView is called with the same view variable roleOf read; the legacy fallback stays");
+  const prefersView = orchestration.includes("adapter.routesFromView?.(view, unparsed) ?? NO_ROUTES");
+  const noAdapterFiles = !orchestration.includes("AdapterFile");
+  const noLegacyRoutes = !/adapter\.routes\(/.test(orchestration);
+  if (prefersView && noAdapterFiles && noLegacyRoutes) {
+    pass("orchestration: routesFromView is called with the same view variable roleOf read; no legacy routes path, no AdapterFile");
   } else {
-    fail(`orchestration: routesFromView/legacy fallback pin broken (prefersView=${prefersView}, keepsLegacy=${keepsLegacy})`);
+    fail(`orchestration: view-only pin broken (prefersView=${prefersView}, noAdapterFiles=${noAdapterFiles}, noLegacyRoutes=${noLegacyRoutes})`);
   }
 }
 
@@ -1790,12 +1873,12 @@ class {
     // FIRST offender; iterating path-sorted would name the other. The
     // walkOrder metadata is what lets a view consumer name the same file.
     const sources = new Map(entries.map((entry) => [entry.path, entry.source]));
-    const legacyWalk = nestjsAdapter.routes({ files: byWalkOrder.map((file) => ({ path: file.path, source: sources.get(file.path)! })), unparsed: [] });
+    const legacyWalk = nestjsAdapter.routes!({ files: byWalkOrder.map((file) => ({ path: file.path, source: sources.get(file.path)! })), unparsed: [] });
     expect(
       deepEqual(legacyWalk.withheld, "src/index.js enables versioning, which can add a version to any path", "$"),
       "N3: legacy, iterating in walk order, names the first walk-ordered offender — recoverable from the metadata",
     );
-    const legacySorted = nestjsAdapter.routes({ files: view.files.map((file) => ({ path: file.path, source: sources.get(file.path)! })), unparsed: [] });
+    const legacySorted = nestjsAdapter.routes!({ files: view.files.map((file) => ({ path: file.path, source: sources.get(file.path)! })), unparsed: [] });
     expect(
       deepEqual(legacySorted.withheld, "src.js enables versioning, which can add a version to any path", "$"),
       "N3: path-sorted iteration would name the other file — the divergence the metadata exists to repair",
@@ -1841,7 +1924,7 @@ class {
     );
     const byWalkOrder = [...view.files].sort((a, b) => (a.walkOrder ?? 0) - (b.walkOrder ?? 0));
     const sources = new Map(entries.map((entry) => [entry.path, entry.source]));
-    const legacy = nestjsAdapter.routes({ files: byWalkOrder.map((file) => ({ path: file.path, source: sources.get(file.path)! })), unparsed: [] });
+    const legacy = nestjsAdapter.routes!({ files: byWalkOrder.map((file) => ({ path: file.path, source: sources.get(file.path)! })), unparsed: [] });
     expect(
       deepEqual(legacy.withheld, "src/index.ts uses RouterModule, which prefixes whole modules", "$"),
       "N3: the first RouterModule importer in walk order is the one legacy names, and the metadata recovers it",
@@ -1882,7 +1965,7 @@ const nestjsReportDiff = (
   unparsed: readonly string[] = [],
 ): { legacy: RouteReport; view: RouteReport } => {
   const ordered = [...entries].sort((a, b) => a.path.localeCompare(b.path));
-  const legacy = nestjsAdapter.routes({ files: ordered.map((entry) => ({ path: entry.path, source: entry.source })), unparsed });
+  const legacy = nestjsAdapter.routes!({ files: ordered.map((entry) => ({ path: entry.path, source: entry.source })), unparsed });
   const view = nestjsAdapter.routesFromView!(buildSynthetic(ordered, [], "."), unparsed);
   expect(
     deepEqual(legacy, view, "$"),
@@ -1906,7 +1989,7 @@ const nestjsReportDiff = (
       .map((f) => withinProject(project, f.path));
     if (!view) fail("two-framework-monorepo: packages/api view missing");
     else {
-      const legacy = nestjsAdapter.routes({ files, unparsed });
+      const legacy = nestjsAdapter.routes!({ files, unparsed });
       const viewReport = nestjsAdapter.routesFromView!(view, unparsed);
       expect(
         deepEqual(legacy, viewReport, "$"),
@@ -2394,7 +2477,7 @@ class ComputedMethods {
       walkOrder: rank,
     }));
     const orderedView = buildFrameworkView({ project: ".", files: withOrder, skipped: [], resolveSpecifier: stubResolve });
-    const legacyWalk = nestjsAdapter.routes({ files: withOrder.map((entry) => ({ path: entry.path, source: entry.source })), unparsed: [] });
+    const legacyWalk = nestjsAdapter.routes!({ files: withOrder.map((entry) => ({ path: entry.path, source: entry.source })), unparsed: [] });
     const viewWalk = nestjsAdapter.routesFromView!(orderedView, []);
     expect(
       deepEqual(legacyWalk, viewWalk, "$"),
@@ -2411,7 +2494,7 @@ class ComputedMethods {
       source: syntheticProject.createSourceFile(candidate.absolutePath, candidate.content, { overwrite: true }),
     }));
     const pathView = buildFrameworkView({ project: ".", files: withoutOrder, skipped: [], resolveSpecifier: stubResolve });
-    const legacyPath = nestjsAdapter.routes({
+    const legacyPath = nestjsAdapter.routes!({
       files: [...withoutOrder].sort((a, b) => a.path.localeCompare(b.path)).map((entry) => ({ path: entry.path, source: entry.source })),
       unparsed: [],
     });
@@ -2443,7 +2526,7 @@ class ComputedMethods {
       walkOrder: rank,
     }));
     const view = buildFrameworkView({ project: ".", files: withOrder, skipped: [], resolveSpecifier: stubResolve });
-    const legacy = nestjsAdapter.routes({ files: withOrder.map((entry) => ({ path: entry.path, source: entry.source })), unparsed: [] });
+    const legacy = nestjsAdapter.routes!({ files: withOrder.map((entry) => ({ path: entry.path, source: entry.source })), unparsed: [] });
     const viewReport = nestjsAdapter.routesFromView!(view, []);
     expect(
       deepEqual(legacy, viewReport, "$"),
@@ -2456,6 +2539,954 @@ class ComputedMethods {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+// ---- Section 11: Next.js routes over the view (Batch 3.3c.2) ----
+
+console.log("=== 11. Next.js route migration: view-fed routesFromView equals the legacy report ===");
+
+// The acceptance is strict, as in Sections 8 and 10: the complete RouteReport
+// must be what it was when nextRoutes read the source trees — every route,
+// omission, withheld gate, line number and record order included. The legacy
+// reader (still in nextjs.ts until the cleanup batch) is the behavioral
+// specification; the view reader sees the same parsed sources, so a deep-equal
+// of the two complete reports over the real fixtures and over every synthetic
+// shape proves the migration changed nothing — including its quirks (the
+// file-wide config scan, the shorthand pass overriding an earlier explicit
+// literal, `export * as ns` naming no method, computed keys and spreads).
+
+// One comparison point: the same entries feed both readers (sorted by path,
+// the order view.files carries when no walk order is attached), `unparsed`
+// goes to both untouched, and the complete reports must be deeply equal.
+const nextjsReportDiff = (
+  what: string,
+  entries: readonly ViewSourceEntry[],
+  unparsed: readonly string[] = [],
+): { legacy: RouteReport; view: RouteReport } => {
+  const ordered = [...entries].sort((a, b) => a.path.localeCompare(b.path));
+  const legacy = nextjsAdapter.routes!({ files: ordered.map((entry) => ({ path: entry.path, source: entry.source })), unparsed });
+  const view = nextjsAdapter.routesFromView!(buildSynthetic(ordered, [], "."), unparsed);
+  expect(
+    deepEqual(legacy, view, "$"),
+    `${what}: the view-based RouteReport equals the legacy report (routes, omitted, withheld, order)`,
+  );
+  return { legacy, view };
+};
+
+// Codepoint sort for the frozen-fold comparisons: the parser's own fold sorts
+// with locale collation, whose treatment of punctuation is not worth
+// replicating here — both sides of each comparison go through the same
+// comparator, so the pin is on content, not on collation.
+const byRoute = (a: { pattern: string; method: string; file: string }, b: { pattern: string; method: string; file: string }) =>
+  a.pattern < b.pattern ? -1 : a.pattern > b.pattern ? 1 : a.method < b.method ? -1 : a.method > b.method ? 1 : a.file < b.file ? -1 : a.file > b.file ? 1 : 0;
+const byOmitted = (a: { path: string; line: number }, b: { path: string; line: number }) => (a.path < b.path ? -1 : a.path > b.path ? 1 : a.line - b.line);
+
+// A. The real fixtures: complete-report equivalence plus the frozen baselines.
+{
+  const entry = corpus.get("nextjs-app-router");
+  if (!entry) fail("nextjs-app-router: corpus entry missing");
+  else {
+    const view = entry.views.get(".");
+    const files = entry.replay.parsed
+      .filter((parsed) => parsed.project === ".")
+      .map((parsed) => ({ path: parsed.path, source: parsed.source }));
+    const unparsed = entry.replay.skipped
+      .filter((f) => entry.walk.projectOf.get(f.path) === "." && f.reason !== "declaration-file")
+      .map((f) => f.path);
+    if (!view) fail("nextjs-app-router: project view missing");
+    else {
+      const legacy = nextjsAdapter.routes!({ files, unparsed });
+      const viewReport = nextjsAdapter.routesFromView!(view, unparsed);
+      expect(
+        deepEqual(legacy, viewReport, "$"),
+        "nextjs-app-router: the view-based RouteReport deep-equals the legacy report over the real fixture",
+      );
+
+      const frozen = JSON.parse(readBaseline(path.join(FIXTURES, "nextjs-app-router", "expected.json"))) as ParseResult;
+      expect(deepEqual(viewReport.withheld, null, "$"), "nextjs-app-router: the report is not withheld, as frozen");
+      expect(
+        deepEqual(frozen.coverage.routes.withheld, [], "$"),
+        "nextjs-app-router: no project is withheld in the frozen expected.json",
+      );
+      // The frozen file lists routes in its own order; the parser's fold sorts,
+      // so both sides go through the same comparator before comparing.
+      const unique = new Map(
+        viewReport.routes.map((r) => [`${r.method} ${r.pattern} ${r.path}`, { file: r.path, method: r.method, pattern: r.pattern, line: r.line }]),
+      );
+      const folded = [...unique.values()].sort(byRoute);
+      expect(
+        deepEqual(folded, [...frozen.routes].sort(byRoute), "$"),
+        "nextjs-app-router: the report's routes, deduped and sorted, equal the frozen expected.json",
+      );
+      expect(
+        deepEqual(
+          [...viewReport.omitted].sort(byOmitted).map((o) => ({ file: o.path, line: o.line, reason: o.reason })),
+          frozen.coverage.routes.omitted,
+          "$",
+        ),
+        "nextjs-app-router: the omitted records (file, line, reason) equal the frozen expected.json",
+      );
+    }
+  }
+}
+{
+  const entry = corpus.get("nextjs-pages-router");
+  if (!entry) fail("nextjs-pages-router: corpus entry missing");
+  else {
+    const view = entry.views.get(".");
+    const files = entry.replay.parsed
+      .filter((parsed) => parsed.project === ".")
+      .map((parsed) => ({ path: parsed.path, source: parsed.source }));
+    const unparsed = entry.replay.skipped
+      .filter((f) => entry.walk.projectOf.get(f.path) === "." && f.reason !== "declaration-file")
+      .map((f) => f.path);
+    if (!view) fail("nextjs-pages-router: project view missing");
+    else {
+      const legacy = nextjsAdapter.routes!({ files, unparsed });
+      const viewReport = nextjsAdapter.routesFromView!(view, unparsed);
+      expect(
+        deepEqual(legacy, viewReport, "$"),
+        "nextjs-pages-router: the view-based RouteReport deep-equals the legacy report over the real fixture",
+      );
+
+      const frozen = JSON.parse(readBaseline(path.join(FIXTURES, "nextjs-pages-router", "expected.json"))) as ParseResult;
+      expect(deepEqual(viewReport.withheld, null, "$"), "nextjs-pages-router: the report is not withheld, as frozen");
+      expect(
+        deepEqual(frozen.coverage.routes.withheld, [], "$"),
+        "nextjs-pages-router: no project is withheld in the frozen expected.json",
+      );
+      expect(
+        deepEqual(
+          [...viewReport.omitted]
+            .sort(byOmitted)
+            .map((o) => ({ file: o.path, line: o.line, reason: o.reason })),
+          frozen.coverage.routes.omitted,
+          "$",
+        ),
+        "nextjs-pages-router: the omitted records equal the frozen expected.json",
+      );
+      const unique = new Map(
+        viewReport.routes.map((r) => [`${r.method} ${r.pattern} ${r.path}`, { file: r.path, method: r.method, pattern: r.pattern, line: r.line }]),
+      );
+      expect(
+        deepEqual([...unique.values()].sort(byRoute), [...frozen.routes].sort(byRoute), "$"),
+        "nextjs-pages-router: the report's routes equal the frozen expected.json (none — pages/api is omitted, not routed)",
+      );
+    }
+  }
+}
+{
+  const entry = corpus.get("two-framework-monorepo");
+  if (!entry) fail("two-framework-monorepo: corpus entry missing");
+  else {
+    const project = "packages/web";
+    const view = entry.views.get(project);
+    const files = entry.replay.parsed
+      .filter((parsed) => parsed.project === project)
+      .map((parsed) => ({ path: withinProject(project, parsed.path), source: parsed.source }));
+    const unparsed = entry.replay.skipped
+      .filter((f) => entry.walk.projectOf.get(f.path) === project && f.reason !== "declaration-file")
+      .map((f) => withinProject(project, f.path));
+    if (!view) fail("two-framework-monorepo: packages/web view missing");
+    else {
+      const legacy = nextjsAdapter.routes!({ files, unparsed });
+      const viewReport = nextjsAdapter.routesFromView!(view, unparsed);
+      expect(
+        deepEqual(legacy, viewReport, "$"),
+        "nextjs monorepo: the view-based RouteReport deep-equals the legacy report over packages/web",
+      );
+      expect(deepEqual(viewReport.withheld, null, "$"), "nextjs monorepo: the web report is not withheld");
+      const frozen = JSON.parse(readBaseline(path.join(FIXTURES, "two-framework-monorepo", "expected.json"))) as ParseResult;
+      expect(
+        deepEqual(frozen.routes.filter((r) => r.file.startsWith(`${project}/`)), [], "$"),
+        "nextjs monorepo: packages/web contributes no routes to the frozen expected.json, as the report shows",
+      );
+      expect(
+        deepEqual(frozen.coverage.routes.omitted.filter((o) => o.file.startsWith(`${project}/`)), [], "$"),
+        "nextjs monorepo: packages/web contributes no omissions to the frozen expected.json, as the report shows",
+      );
+    }
+  }
+}
+
+// B. App Router path shapes. Only route.* files are api endpoints; the pattern
+// is the folder path under app/ (src/ stripped, groups and slots left out,
+// trailing slash dropped, root normalized to "/").
+{
+  const content = `export async function GET() {}\n`;
+  const { legacy } = nextjsReportDiff("app root route", [synthFile("app/route.ts", content)]);
+  expect(
+    deepEqual(routeKeys(legacy), [`GET / app/route.ts@${lineOf(content, "GET")}`], "$"),
+    "app root route: the empty segment list normalizes to \"/\"",
+  );
+  expect(deepEqual(legacy.withheld, null, "$"), "app root route: nothing withholds");
+}
+{
+  const content = `export function POST() {}\n`;
+  const { legacy } = nextjsReportDiff("src/app route", [synthFile("src/app/route.ts", content)]);
+  expect(
+    deepEqual(routeKeys(legacy), [`POST / src/app/route.ts@${lineOf(content, "POST")}`], "$"),
+    "src/app route: src/ is stripped for the pattern but the record keeps the full path",
+  );
+}
+{
+  const content = `export function GET() {}\n`;
+  const { legacy } = nextjsReportDiff("route group", [synthFile("app/(marketing)/route.ts", content)]);
+  expect(
+    deepEqual(routeKeys(legacy), [`GET / app/(marketing)/route.ts@${lineOf(content, "GET")}`], "$"),
+    "route group: (marketing) is left out of the URL by definition",
+  );
+}
+{
+  const content = `export function PUT() {}\n`;
+  const { legacy } = nextjsReportDiff("parallel slot", [synthFile("app/@modal/route.ts", content)]);
+  expect(
+    deepEqual(routeKeys(legacy), [`PUT / app/@modal/route.ts@${lineOf(content, "PUT")}`], "$"),
+    "parallel slot: @modal is left out of the URL by definition",
+  );
+}
+{
+  const content = `export function GET() {}\nexport async function PUT() {}\n`;
+  const { legacy } = nextjsReportDiff("dynamic segment", [synthFile("app/users/[id]/route.ts", content)]);
+  expect(
+    deepEqual(
+      routeKeys(legacy),
+      [
+        `GET /users/[id] app/users/[id]/route.ts@${lineOf(content, "GET")}`,
+        `PUT /users/[id] app/users/[id]/route.ts@${lineOf(content, "PUT")}`,
+      ],
+      "$",
+    ),
+    "dynamic segment: [id] stays in the pattern, both methods carry their own lines",
+  );
+}
+{
+  const content = `export function DELETE() {}\n`;
+  const { legacy } = nextjsReportDiff("catch-all", [synthFile("app/docs/[...slug]/route.ts", content)]);
+  expect(
+    deepEqual(routeKeys(legacy), [`DELETE /docs/[...slug] app/docs/[...slug]/route.ts@${lineOf(content, "DELETE")}`], "$"),
+    "catch-all: [...slug] stays in the pattern verbatim",
+  );
+}
+{
+  const content = `export function PATCH() {}\n`;
+  const { legacy } = nextjsReportDiff("optional catch-all", [synthFile("app/archive/[[...slug]]/route.ts", content)]);
+  expect(
+    deepEqual(routeKeys(legacy), [`PATCH /archive/[[...slug]] app/archive/[[...slug]]/route.ts@${lineOf(content, "PATCH")}`], "$"),
+    "optional catch-all: [[...slug]] stays in the pattern verbatim",
+  );
+}
+{
+  const content = `export function GET() {}\n`;
+  const { legacy } = nextjsReportDiff("private folder", [synthFile("app/_internal/route.ts", content)]);
+  expect(
+    deepEqual([routeKeys(legacy), omittedKeys(legacy), legacy.withheld], [[], [], null] satisfies [string[], string[], string | null], "$"),
+    "private folder: a route.* file under an underscore folder is not a route file at all — no route, no omission",
+  );
+}
+{
+  // The three intercepting spellings, each omitted naming the whole segment.
+  const cases: [string, string][] = [
+    ["app/(.)photo/route.ts", "(.)photo"],
+    ["app/(..)photo/route.ts", "(..)photo"],
+    ["app/(...)deep/route.ts", "(...)deep"],
+  ];
+  for (const [filePath, segment] of cases) {
+    const content = `export function GET() {}\n`;
+    const { legacy } = nextjsReportDiff(`intercepting ${segment}`, [synthFile(filePath, content)]);
+    expect(
+      deepEqual(
+        [routeKeys(legacy), omittedKeys(legacy)],
+        [[], [`${filePath}@1: ${segment} is an intercepting segment, which matches by navigation, not by path`]] satisfies [string[], string[]],
+        "$",
+      ),
+      `intercepting ${segment}: no route, the exact omission reason, no other record`,
+    );
+  }
+}
+{
+  const content = `export function GET() {}\n`;
+  const { legacy } = nextjsReportDiff("URL-encoded folder", [synthFile("app/caf%C3%A9/route.ts", content)]);
+  expect(
+    deepEqual(
+      [routeKeys(legacy), omittedKeys(legacy)],
+      [[], ["app/caf%C3%A9/route.ts@1: a folder name is URL-encoded"]] satisfies [string[], string[]],
+      "$",
+    ),
+    "URL-encoded folder: a percent segment omits with the exact reason",
+  );
+}
+{
+  // Page, layout and metadata conventions are reached by path, not by method:
+  // none of them is an api endpoint, so none of them records anything.
+  const page = synthFile("app/page.tsx", `export default function Page() {}\n`);
+  const layout = synthFile("app/layout.tsx", `export default function Layout({ children }: { children: React.ReactNode }) {\n  return children;\n}\n`);
+  const loading = synthFile("app/loading.tsx", `export default function Loading() {}\n`);
+  const sitemap = synthFile("app/sitemap.ts", `export default function sitemap() { return []; }\n`);
+  const icon = synthFile("app/icon.ts", `export default function icon() {}\n`);
+  const { legacy } = nextjsReportDiff("non-route conventions", [page, layout, loading, sitemap, icon]);
+  expect(
+    deepEqual([routeKeys(legacy), omittedKeys(legacy), legacy.withheld], [[], [], null] satisfies [string[], string[], string | null], "$"),
+    "non-route conventions: pages, layouts and metadata files produce no routes and no omissions",
+  );
+}
+
+// C. Pages Router. Every file under pages/api/ is an api endpoint whose method
+// is chosen at runtime; pages/api.ts itself is an ordinary page; the special
+// top-level pages are layouts and boundaries.
+{
+  const nested = synthFile("pages/api/nested/users.ts", `export default function handler() { return Response.json({}); }\n`);
+  const flat = synthFile("pages/api/users.ts", `export default function handler() { return Response.json({}); }\n`);
+  const { legacy } = nextjsReportDiff("pages/api handlers", [nested, flat]);
+  expect(
+    deepEqual(
+      [routeKeys(legacy), omittedKeys(legacy)],
+      [
+        [],
+        [
+          `pages/api/nested/users.ts@1: a pages/api handler chooses its method at runtime`,
+          `pages/api/users.ts@1: a pages/api handler chooses its method at runtime`,
+        ],
+      ] satisfies [string[], string[]],
+      "$",
+    ),
+    "pages/api handlers: runtime-method omission at line 1, nested before flat in file order",
+  );
+}
+{
+  const content = `export default function Page() {}\n`;
+  const { legacy } = nextjsReportDiff("pages/api.ts is a page", [synthFile("pages/api.ts", content)]);
+  expect(
+    deepEqual([routeKeys(legacy), omittedKeys(legacy), legacy.withheld], [[], [], null] satisfies [string[], string[], string | null], "$"),
+    "pages/api.ts: \"pages/api/\" does not match the file itself — an ordinary page records nothing",
+  );
+}
+{
+  const specials = [
+    synthFile("pages/_app.tsx", `export default function App({ Component, pageProps }: { Component: () => null; pageProps: object }) {\n  return Component(pageProps);\n}\n`),
+    synthFile("pages/_document.tsx", `export default function Document() {}\n`),
+    synthFile("pages/_error.tsx", `export default function ErrorPage() {}\n`),
+    synthFile("pages/404.ts", `export default function NotFound() {}\n`),
+    synthFile("pages/500.ts", `export default function ServerError() {}\n`),
+    synthFile("pages/index.tsx", `export default function Home() {}\n`),
+  ];
+  const { legacy } = nextjsReportDiff("special pages", specials);
+  expect(
+    deepEqual([routeKeys(legacy), omittedKeys(legacy), legacy.withheld], [[], [], null] satisfies [string[], string[], string | null], "$"),
+    "special pages: _app, _document, _error, 404, 500 and index are not api endpoints",
+  );
+}
+
+// D. HTTP export forms. The method comes only from an exported name in the
+// HTTP_METHODS set — never from a filename, a function's callers or runtime.
+{
+  const content = `export async function GET() {}
+export function HEAD() {}
+export function POST() {}
+export async function PUT() {}
+export function DELETE() {}
+export function PATCH() {}
+export function OPTIONS() {}
+`;
+  const { legacy } = nextjsReportDiff("all seven methods", [synthFile("app/api/handlers/route.ts", content)]);
+  expect(
+    deepEqual(
+      routeKeys(legacy),
+      ["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"].map(
+        (method) => `${method} /api/handlers app/api/handlers/route.ts@${lineOf(content, `function ${method}`)}`,
+      ),
+      "$",
+    ),
+    "all seven methods: function declarations (async included) map in statement order with their own lines",
+  );
+}
+{
+  const content = `export const GET = () => {};
+export let POST = handler;
+export var PUT = handler;
+`;
+  const { legacy } = nextjsReportDiff("const/let/var handlers", [synthFile("app/api/handlers/route.ts", content)]);
+  expect(
+    deepEqual(
+      routeKeys(legacy),
+      [
+        `GET /api/handlers app/api/handlers/route.ts@${lineOf(content, "const GET")}`,
+        `POST /api/handlers app/api/handlers/route.ts@${lineOf(content, "let POST")}`,
+        `PUT /api/handlers app/api/handlers/route.ts@${lineOf(content, "var PUT")}`,
+      ],
+      "$",
+    ),
+    "const/let/var handlers: exported variable bindings of every kind carry their declaration lines",
+  );
+}
+{
+  const content = `export const {
+  handler: GET,
+  POST,
+  "aliased": PATCH,
+} = handlers;
+`;
+  const { legacy } = nextjsReportDiff("destructured handlers", [synthFile("app/api/handlers/route.ts", content)]);
+  expect(
+    deepEqual(
+      routeKeys(legacy),
+      [
+        `GET /api/handlers app/api/handlers/route.ts@${lineOf(content, "handler: GET")}`,
+        `POST /api/handlers app/api/handlers/route.ts@${lineOf(content, "POST,")}`,
+        `PATCH /api/handlers app/api/handlers/route.ts@${lineOf(content, "\"aliased\": PATCH")}`,
+      ],
+      "$",
+    ),
+    "destructured handlers: renamed and string-keyed elements carry their local names and element lines",
+  );
+}
+{
+  const content = `export const GET = () => {};
+export const {
+  handler: POST,
+} = handlers;
+const read = null;
+export { read as DELETE };
+export { OPTIONS } from "./m";
+export { HEAD as PUT } from "./m2";
+`;
+  const { legacy } = nextjsReportDiff("aliases and re-exports", [synthFile("app/api/handlers/route.ts", content)]);
+  expect(
+    deepEqual(
+      routeKeys(legacy),
+      [
+        `GET /api/handlers app/api/handlers/route.ts@${lineOf(content, "const GET")}`,
+        `POST /api/handlers app/api/handlers/route.ts@${lineOf(content, "handler: POST")}`,
+        `DELETE /api/handlers app/api/handlers/route.ts@${lineOf(content, "read as DELETE")}`,
+        `OPTIONS /api/handlers app/api/handlers/route.ts@${lineOf(content, "OPTIONS } from")}`,
+        `PUT /api/handlers app/api/handlers/route.ts@${lineOf(content, "HEAD as PUT")}`,
+      ],
+      "$",
+    ),
+    "aliases and re-exports: local, aliased and re-exported names all map at their specifier lines",
+  );
+}
+{
+  const content = `export function GET() {}
+export const GET = () => {};
+`;
+  const { legacy } = nextjsReportDiff("duplicate methods", [synthFile("app/api/handlers/route.ts", content)]);
+  expect(
+    deepEqual(
+      [routeKeys(legacy), omittedKeys(legacy)],
+      [[`GET /api/handlers app/api/handlers/route.ts@1`], []] satisfies [string[], string[]],
+      "$",
+    ),
+    "duplicate methods: the first export wins, the later one is ignored, nothing is omitted",
+  );
+}
+{
+  const content = `export default function GET() {}
+export function user() {}
+export const GETVAR = () => {};
+export type GET = 1;
+`;
+  const { legacy } = nextjsReportDiff("default and non-method exports", [synthFile("app/api/handlers/route.ts", content)]);
+  expect(
+    deepEqual(
+      [routeKeys(legacy), omittedKeys(legacy)],
+      [[], [`app/api/handlers/route.ts@1: no exported HTTP method was found`]] satisfies [string[], string[]],
+      "$",
+    ),
+    "default and non-method exports: a default GET, a non-method function, a non-method const and a type alias name no method",
+  );
+}
+{
+  const content = `export * as GET from "./m";\n`;
+  const { legacy } = nextjsReportDiff("namespace re-export", [synthFile("app/api/handlers/route.ts", content)]);
+  expect(
+    deepEqual(
+      [routeKeys(legacy), omittedKeys(legacy)],
+      [[], [`app/api/handlers/route.ts@1: no exported HTTP method was found`]] satisfies [string[], string[]],
+      "$",
+    ),
+    "namespace re-export: `export * as GET` names a module object, not a method — the namespace-marker exclusion",
+  );
+}
+{
+  const content = `export * from "./m";\n`;
+  const { legacy } = nextjsReportDiff("bare star", [synthFile("app/api/handlers/route.ts", content)]);
+  expect(
+    deepEqual(
+      [routeKeys(legacy), omittedKeys(legacy)],
+      [[], [`app/api/handlers/route.ts@1: export * hides which methods come from the other module`]] satisfies [string[], string[]],
+      "$",
+    ),
+    "bare star: the star line is the omission line",
+  );
+}
+{
+  const content = `export * from "./a";
+export * from "./b";
+`;
+  const { legacy } = nextjsReportDiff("two bare stars", [synthFile("app/api/handlers/route.ts", content)]);
+  expect(
+    deepEqual(
+      [routeKeys(legacy), omittedKeys(legacy)],
+      [[], [`app/api/handlers/route.ts@1: export * hides which methods come from the other module`]] satisfies [string[], string[]],
+      "$",
+    ),
+    "two bare stars: only the first star's line is recorded",
+  );
+}
+{
+  const content = `export function GET() {}
+export * from "./a";
+`;
+  const { legacy } = nextjsReportDiff("star with a method", [synthFile("app/api/handlers/route.ts", content)]);
+  expect(
+    deepEqual(
+      [routeKeys(legacy), omittedKeys(legacy)],
+      [
+        [`GET /api/handlers app/api/handlers/route.ts@${lineOf(content, "GET")}`],
+        [`app/api/handlers/route.ts@${lineOf(content, "export *")}: export * hides which methods come from the other module`],
+      ] satisfies [string[], string[]],
+      "$",
+    ),
+    "star with a method: the named route and the star omission coexist in one report",
+  );
+}
+
+// E. Config behavior. Only a root next.config.* file is a config; the scan is
+// file-wide (wrapped calls, returns, nested objects, arrays), explicit
+// assignments first and shorthands second, with the shorthand pass overriding.
+{
+  const content = `export function GET() {}\n`;
+  const { legacy } = nextjsReportDiff("no config", [synthFile("app/route.ts", content)]);
+  expect(
+    deepEqual(routeKeys(legacy), [`GET / app/route.ts@${lineOf(content, "GET")}`], "$"),
+    "no config: without a next.config the pattern is the plain folder path",
+  );
+}
+{
+  const config = synthFile("next.config.mjs", `export default { basePath: "/base" };\n`);
+  const route = synthFile("app/users/route.ts", `export function GET() {}\n`);
+  const { legacy } = nextjsReportDiff("literal basePath", [config, route]);
+  expect(
+    deepEqual(routeKeys(legacy), [`GET /base/users app/users/route.ts@${lineOf(route.source.getFullText(), "GET")}`], "$"),
+    "literal basePath: a string-literal basePath composes into every pattern",
+  );
+}
+{
+  const config = synthFile("next.config.cjs", `module.exports = { basePath: "/cjs" };\n`);
+  const route = synthFile("app/route.ts", `export function GET() {}\n`);
+  const { legacy } = nextjsReportDiff("module.exports config", [config, route]);
+  expect(
+    deepEqual(routeKeys(legacy), [`GET /cjs app/route.ts@${lineOf(route.source.getFullText(), "GET")}`], "$"),
+    "module.exports config: the file-wide scan reads the assignment's object too",
+  );
+}
+{
+  const config = synthFile("next.config.js", `module.exports = withPlugins({ basePath: "/wrapped" });\n`);
+  const route = synthFile("app/route.ts", `export function GET() {}\n`);
+  const { legacy } = nextjsReportDiff("wrapped config call", [config, route]);
+  expect(
+    deepEqual(routeKeys(legacy), [`GET /wrapped app/route.ts@${lineOf(route.source.getFullText(), "GET")}`], "$"),
+    "wrapped config call: an object inside a call argument is still the config (return-position R1 shape)",
+  );
+}
+{
+  const config = synthFile("next.config.ts", `function make() {\n  return { basePath: "/returned" };\n}\nmake();\n`);
+  const route = synthFile("app/route.ts", `export function GET() {}\n`);
+  const { legacy } = nextjsReportDiff("function-return config", [config, route]);
+  expect(
+    deepEqual(routeKeys(legacy), [`GET /returned app/route.ts@${lineOf(route.source.getFullText(), "GET")}`], "$"),
+    "function-return config: a basePath built by a function is read from anywhere in the file (return-position R1 shape)",
+  );
+}
+{
+  const config = synthFile(
+    "next.config.ts",
+    `export default {\n  nested: { basePath: "/deep" },\n  list: [{ basePath: "/deep" }],\n};\n`,
+  );
+  const route = synthFile("app/route.ts", `export function GET() {}\n`);
+  const { legacy } = nextjsReportDiff("nested and array config", [config, route]);
+  expect(
+    deepEqual(routeKeys(legacy), [`GET /deep app/route.ts@${lineOf(route.source.getFullText(), "GET")}`], "$"),
+    "nested and array config: a basePath inside a nested object or an array element is read, equal values accepted",
+  );
+}
+{
+  const config = synthFile("next.config.ts", `export default { basePath: basePath };\n`);
+  const route = synthFile("app/route.ts", `export function GET() {}\n`);
+  const { legacy } = nextjsReportDiff("computed basePath", [config, route]);
+  expect(
+    deepEqual(
+      [routeKeys(legacy), omittedKeys(legacy), legacy.withheld],
+      [[], [], "next.config.ts sets basePath to a computed value"] satisfies [string[], string[], string | null],
+      "$",
+    ),
+    "computed basePath: an identifier value withholds the whole report, valid routes and all",
+  );
+}
+{
+  const config = synthFile("next.config.js", `const basePath = "/x";\nexport default { basePath };\n`);
+  const { legacy } = nextjsReportDiff("shorthand basePath", [config]);
+  expect(
+    deepEqual(legacy.withheld, "next.config.js sets basePath from a variable", "$"),
+    "shorthand basePath: the shorthand pass's own withhold reason",
+  );
+}
+{
+  // The shorthand pass runs after every explicit assignment, so a shorthand
+  // found later in the file overrides an earlier literal — wherever the two
+  // sit in the document.
+  const config = synthFile("next.config.js", `export default { basePath: "/x" };\nconst extra = { basePath };\n`);
+  const { legacy } = nextjsReportDiff("shorthand after explicit", [config]);
+  expect(
+    deepEqual(legacy.withheld, "next.config.js sets basePath from a variable", "$"),
+    "shorthand after explicit: the second pass overrides the first pass's literal (R3 shape)",
+  );
+}
+{
+  const config = synthFile("next.config.mjs", `export default { pageExtensions: ["mdx"] };\n`);
+  const { legacy } = nextjsReportDiff("pageExtensions explicit", [config]);
+  expect(
+    deepEqual(legacy.withheld, "next.config.mjs sets pageExtensions, so which files are route handlers is uncertain", "$"),
+    "pageExtensions explicit: the exact withhold reason, checked before basePath on every property",
+  );
+}
+{
+  const config = synthFile("next.config.mjs", `const pageExtensions = [];\nexport default { pageExtensions };\n`);
+  const { legacy } = nextjsReportDiff("pageExtensions shorthand", [config]);
+  expect(
+    deepEqual(legacy.withheld, "next.config.mjs sets pageExtensions, so which files are route handlers is uncertain", "$"),
+    "pageExtensions shorthand: the same reason from the second pass",
+  );
+}
+{
+  const config = synthFile("next.config.js", `export default { basePath: "/x", alt: { basePath: "/x" } };\n`);
+  const route = synthFile("app/route.ts", `export function GET() {}\n`);
+  const { legacy } = nextjsReportDiff("duplicate identical basePath", [config, route]);
+  expect(
+    deepEqual(routeKeys(legacy), [`GET /x app/route.ts@${lineOf(route.source.getFullText(), "GET")}`], "$"),
+    "duplicate identical basePath: the same value twice is accepted",
+  );
+}
+{
+  const config = synthFile("next.config.js", `export default { basePath: "/a" };\nmodule.exports = { basePath: "/b" };\n`);
+  const { legacy } = nextjsReportDiff("conflicting basePath in one file", [config]);
+  expect(
+    deepEqual(legacy.withheld, "next.config.js sets basePath more than once", "$"),
+    "conflicting basePath in one file: the file-scoped conflict reason",
+  );
+}
+{
+  const configA = synthFile("next.config.js", `export default { basePath: "/shared" };\n`);
+  const configB = synthFile("next.config.mjs", `export default { basePath: "/shared" };\n`);
+  const route = synthFile("app/route.ts", `export function GET() {}\n`);
+  const { legacy } = nextjsReportDiff("two configs, same value", [configA, configB, route]);
+  expect(
+    deepEqual(routeKeys(legacy), [`GET /shared app/route.ts@${lineOf(route.source.getFullText(), "GET")}`], "$"),
+    "two configs, same value: configs are read in file order and agree, so routes flow",
+  );
+}
+{
+  const configA = synthFile("next.config.js", `export default { basePath: "/one" };\n`);
+  const configB = synthFile("next.config.mjs", `export default { basePath: "/two" };\n`);
+  const { legacy } = nextjsReportDiff("two configs, conflicting", [configA, configB]);
+  expect(
+    deepEqual(legacy.withheld, "more than one next.config sets basePath", "$"),
+    "two configs, conflicting: the cross-config reason names no file",
+  );
+}
+{
+  const route = synthFile("app/route.ts", `export function GET() {}\n`);
+  const config = synthFile("next.config.mjs", `export default { basePath: "/base" };\n`);
+  const { legacy } = nextjsReportDiff("unparsed config", [route, config], ["next.config.js"]);
+  expect(
+    deepEqual(
+      [routeKeys(legacy), omittedKeys(legacy), legacy.withheld],
+      [[], [], "next.config.js couldn't be parsed, so basePath is unknown"] satisfies [string[], string[], string | null],
+      "$",
+    ),
+    "unparsed config: the unparsed check precedes everything, even a parsed config and valid routes",
+  );
+}
+{
+  const route = synthFile("app/route.ts", `export function GET() {}\n`);
+  const { legacy } = nextjsReportDiff("unparsed config order", [route], ["next.config.mjs", "next.config.js"]);
+  expect(
+    deepEqual(legacy.withheld, "next.config.mjs couldn't be parsed, so basePath is unknown", "$"),
+    "unparsed config order: the first CONFIG-matching entry in unparsed order is named",
+  );
+}
+{
+  const config = synthFile("next.config.js", `export default { "basePath": "/quoted" };\n`);
+  const route = synthFile("app/route.ts", `export function GET() {}\n`);
+  const { legacy } = nextjsReportDiff("quoted config key", [config, route]);
+  expect(
+    deepEqual(routeKeys(legacy), [`GET /quoted app/route.ts@${lineOf(route.source.getFullText(), "GET")}`], "$"),
+    "quoted config key: quote normalization matches the legacy scan's",
+  );
+}
+{
+  const config = synthFile("next.config.js", `export default { [basePath]: "/x" };\n`);
+  const route = synthFile("app/route.ts", `export function GET() {}\n`);
+  const { legacy } = nextjsReportDiff("computed config key", [config, route]);
+  expect(
+    deepEqual([routeKeys(legacy), legacy.withheld], [[`GET / app/route.ts@${lineOf(route.source.getFullText(), "GET")}`], null] satisfies [string[], string | null], "$"),
+    "computed config key: a computed property name is not a basePath and is skipped, as in the legacy scan",
+  );
+}
+
+// F. Ordering and regex edges: which filenames are configs at all, mixed
+// reports, and walker-order record order (repaired by the view's walkOrder).
+{
+  for (const ext of ["js", "mjs", "cjs"]) {
+    const name = `next.config.${ext}`;
+    const { legacy } = nextjsReportDiff(`config extension ${ext}`, [synthFile(name, `export default { basePath: basePath };\n`)]);
+    expect(
+      deepEqual(legacy.withheld, `${name} sets basePath to a computed value`, "$"),
+      `config extension ${ext}: the root-anchored regex accepts it and the withhold names it`,
+    );
+  }
+}
+{
+  const config = synthFile("src/next.config.js", `export default { basePath: basePath };\n`);
+  const route = synthFile("app/route.ts", `export function GET() {}\n`);
+  const { legacy } = nextjsReportDiff("nested config path", [config, route]);
+  expect(
+    deepEqual([routeKeys(legacy), legacy.withheld], [[`GET / app/route.ts@${lineOf(route.source.getFullText(), "GET")}`], null] satisfies [string[], string | null], "$"),
+    "nested config path: src/next.config.js is not a config — the root-anchored regex ignores it",
+  );
+}
+{
+  const config = synthFile("next.configx.js", `export default { basePath: basePath };\n`);
+  const route = synthFile("app/route.ts", `export function GET() {}\n`);
+  const { legacy } = nextjsReportDiff("config lookalike", [config, route]);
+  expect(
+    deepEqual([routeKeys(legacy), legacy.withheld], [[`GET / app/route.ts@${lineOf(route.source.getFullText(), "GET")}`], null] satisfies [string[], string | null], "$"),
+    "config lookalike: next.configx.js fails the regex, so its computed basePath never withholds",
+  );
+}
+{
+  const route = synthFile("app/api/users/route.ts", `export function GET() {}\n`);
+  const pages = synthFile("pages/api/status.ts", `export default function handler() { return Response.json({}); }\n`);
+  const { legacy } = nextjsReportDiff("mixed app and pages", [route, pages]);
+  expect(
+    deepEqual(
+      [routeKeys(legacy), omittedKeys(legacy)],
+      [
+        [`GET /api/users app/api/users/route.ts@${lineOf(route.source.getFullText(), "GET")}`],
+        [`pages/api/status.ts@1: a pages/api handler chooses its method at runtime`],
+      ] satisfies [string[], string[]],
+      "$",
+    ),
+    "mixed app and pages: routes and pages/api omissions coexist in one report, in file order",
+  );
+}
+
+// Walk order. With the metadata attached, the view reader iterates in the
+// walker's original order — the order the legacy reader received — so the
+// reports are equal AND the records appear in the walker's order. Without the
+// metadata, both readers see the path-sorted order and are still equal, in the
+// other order. Next.js has no walker-order-sensitive named withhold (one
+// config file per project, and the cross-config conflict names no file), so
+// the order property is pinned through the route and omission records.
+{
+  const dir = mkdtempSync(path.join(tmpdir(), "next-routes-walk-"));
+  try {
+    mkdirSync(path.join(dir, "app", "route"), { recursive: true });
+    writeFileSync(path.join(dir, "app", "route", "route.ts"), `export async function GET() {}\n`, "utf8");
+    writeFileSync(path.join(dir, "app", "route.ts"), `export function POST() {}\n`, "utf8");
+    const selection = selectFiles(dir);
+
+    // The walker descends the directory named "route" before it reaches the
+    // sibling file route.ts — the reverse of path-sorted order.
+    expect(
+      deepEqual(
+        selection.walk.candidates.map((candidate) => candidate.path),
+        ["app/route/route.ts", "app/route.ts"] satisfies string[],
+        "$",
+      ),
+      "walk order: the walker's own candidate order, verified for this layout",
+    );
+
+    const withOrder = selection.walk.candidates.map((candidate, rank) => ({
+      path: candidate.path,
+      absolutePath: candidate.absolutePath,
+      source: syntheticProject.createSourceFile(candidate.absolutePath, candidate.content, { overwrite: true }),
+      walkOrder: rank,
+    }));
+    const orderedView = buildFrameworkView({ project: ".", files: withOrder, skipped: [], resolveSpecifier: stubResolve });
+    const legacyWalk = nextjsAdapter.routes!({ files: withOrder.map((entry) => ({ path: entry.path, source: entry.source })), unparsed: [] });
+    const viewWalk = nextjsAdapter.routesFromView!(orderedView, []);
+    expect(
+      deepEqual(legacyWalk, viewWalk, "$"),
+      "walk order, metadata attached: the complete reports are equal over the walker's original order",
+    );
+    expect(
+      deepEqual(
+        routeKeys(viewWalk),
+        [`GET /route app/route/route.ts@1`, `POST / app/route.ts@1`] satisfies string[],
+        "$",
+      ),
+      "walk order, metadata attached: the route records follow the walker's order, not the path-sorted one",
+    );
+    expect(deepEqual(viewWalk.withheld, null, "$"), "walk order, metadata attached: nothing withholds");
+
+    const withoutOrder = selection.walk.candidates.map((candidate) => ({
+      path: candidate.path,
+      absolutePath: candidate.absolutePath,
+      source: syntheticProject.createSourceFile(candidate.absolutePath, candidate.content, { overwrite: true }),
+    }));
+    const pathView = buildFrameworkView({ project: ".", files: withoutOrder, skipped: [], resolveSpecifier: stubResolve });
+    const legacyPath = nextjsAdapter.routes!({
+      files: [...withoutOrder].sort((a, b) => a.path.localeCompare(b.path)).map((entry) => ({ path: entry.path, source: entry.source })),
+      unparsed: [],
+    });
+    const viewPath = nextjsAdapter.routesFromView!(pathView, []);
+    expect(
+      deepEqual(legacyPath, viewPath, "$"),
+      "walk order, metadata absent: the fallback to view.files order keeps the reports equal",
+    );
+    expect(
+      deepEqual(
+        routeKeys(viewPath),
+        [`POST / app/route.ts@1`, `GET /route app/route/route.ts@1`] satisfies string[],
+        "$",
+      ),
+      "walk order, metadata absent: the path-sorted order both readers then see — the documented divergence the metadata repairs",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+{
+  const dir = mkdtempSync(path.join(tmpdir(), "next-routes-walk-omitted-"));
+  try {
+    mkdirSync(path.join(dir, "app", "route", "(.)x"), { recursive: true });
+    writeFileSync(path.join(dir, "app", "route", "(.)x", "route.ts"), `export function GET() {}\n`, "utf8");
+    writeFileSync(path.join(dir, "app", "route.ts"), `export function handle() {}\n`, "utf8");
+    const selection = selectFiles(dir);
+
+    expect(
+      deepEqual(
+        selection.walk.candidates.map((candidate) => candidate.path),
+        ["app/route/(.)x/route.ts", "app/route.ts"] satisfies string[],
+        "$",
+      ),
+      "walk order, omissions: the walker's own candidate order, verified for this layout",
+    );
+
+    const withOrder = selection.walk.candidates.map((candidate, rank) => ({
+      path: candidate.path,
+      absolutePath: candidate.absolutePath,
+      source: syntheticProject.createSourceFile(candidate.absolutePath, candidate.content, { overwrite: true }),
+      walkOrder: rank,
+    }));
+    const orderedView = buildFrameworkView({ project: ".", files: withOrder, skipped: [], resolveSpecifier: stubResolve });
+    const legacyWalk = nextjsAdapter.routes!({ files: withOrder.map((entry) => ({ path: entry.path, source: entry.source })), unparsed: [] });
+    const viewWalk = nextjsAdapter.routesFromView!(orderedView, []);
+    expect(
+      deepEqual(legacyWalk, viewWalk, "$"),
+      "walk order, omissions: the complete reports are equal over the walker's original order",
+    );
+    expect(
+      deepEqual(
+        [routeKeys(viewWalk), omittedKeys(viewWalk)],
+        [
+          [],
+          [
+            `app/route/(.)x/route.ts@1: (.)x is an intercepting segment, which matches by navigation, not by path`,
+            `app/route.ts@1: no exported HTTP method was found`,
+          ],
+        ] satisfies [string[], string[]],
+        "$",
+      ),
+      "walk order, omissions: the omission records follow the walker's order, not the path-sorted one",
+    );
+
+    const withoutOrder = selection.walk.candidates.map((candidate) => ({
+      path: candidate.path,
+      absolutePath: candidate.absolutePath,
+      source: syntheticProject.createSourceFile(candidate.absolutePath, candidate.content, { overwrite: true }),
+    }));
+    const pathView = buildFrameworkView({ project: ".", files: withoutOrder, skipped: [], resolveSpecifier: stubResolve });
+    const legacyPath = nextjsAdapter.routes!({
+      files: [...withoutOrder].sort((a, b) => a.path.localeCompare(b.path)).map((entry) => ({ path: entry.path, source: entry.source })),
+      unparsed: [],
+    });
+    const viewPath = nextjsAdapter.routesFromView!(pathView, []);
+    expect(
+      deepEqual(legacyPath, viewPath, "$"),
+      "walk order, omissions: the fallback to view.files order keeps the reports equal",
+    );
+    expect(
+      deepEqual(
+        [routeKeys(viewPath), omittedKeys(viewPath)],
+        [
+          [],
+          [
+            `app/route.ts@1: no exported HTTP method was found`,
+            `app/route/(.)x/route.ts@1: (.)x is an intercepting segment, which matches by navigation, not by path`,
+          ],
+        ] satisfies [string[], string[]],
+        "$",
+      ),
+      "walk order, omissions: the path-sorted order both readers then see",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// ---- Section 12: production route-adapter invariant (Batch 3.3d.1) ----
+
+console.log("=== 12. Production route invariant: view-fed adapters only, legacy readers as oracles ===");
+
+// Every adapter with route logic implements routesFromView — the production
+// route interface — and keeps its legacy routes() spelling as a directly
+// callable compatibility oracle. Every adapter without route logic carries
+// neither method: the orchestration contributes NO_ROUTES for it. The
+// registry is pinned too, so an adapter added to production without a route
+// shape fails here instead of silently bypassing the invariant.
+{
+  const adapters: { name: string; adapter: FrameworkAdapter }[] = [
+    { name: "Next.js", adapter: nextjsAdapter },
+    { name: "NestJS", adapter: nestjsAdapter },
+    { name: "Express", adapter: expressAdapter },
+    { name: "Docusaurus", adapter: docusaurusAdapter },
+    { name: "React", adapter: reactAdapter },
+    { name: "fallback", adapter: fallbackAdapter },
+  ];
+  for (const { name, adapter } of adapters) {
+    if (adapter.routesFromView) {
+      expect(
+        deepEqual(typeof adapter.routesFromView, "function", "$"),
+        `${name}: the production route interface is routesFromView`,
+      );
+      expect(
+        deepEqual(typeof adapter.routes, "function", "$"),
+        `${name}: the legacy oracle stays directly callable for the compatibility tests`,
+      );
+    } else {
+      expect(
+        deepEqual(adapter.routes, undefined, "$"),
+        `${name}: no route logic — the adapter carries neither route method`,
+      );
+    }
+  }
+
+  const registry = readFileSync(path.resolve("lib/parser/adapters/index.ts"), "utf8").replace(/\r\n/g, "\n");
+  const listed = [...registry.matchAll(/^  (\w+)Adapter,$/gm)].map((match) => match[1]!);
+  expect(
+    deepEqual(listed, ["nextjs", "nestjs", "express", "docusaurus", "react", "fallback"] satisfies string[], "$"),
+    "invariant: the production registry lists exactly these six adapters, each covered above",
+  );
+
+  // The no-route adapters' former boilerplate is gone; the shared NO_ROUTES
+  // constant is still exported, for the orchestration's fallback.
+  expect(
+    deepEqual(NO_ROUTES, { routes: [], omitted: [], withheld: null } satisfies RouteReport, "$"),
+    "invariant: the shared NO_ROUTES constant remains the orchestration's no-route fallback",
+  );
 }
 
 // ---- Summary ----

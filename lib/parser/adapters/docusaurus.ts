@@ -1,7 +1,7 @@
 import type { Role } from "../../roles.ts";
 import { toolConventions, toolRole } from "./conventions.ts";
 import { reactRole } from "./react.ts";
-import { NO_ROUTES, type FrameworkAdapter } from "./types.ts";
+import type { FrameworkAdapter } from "./types.ts";
 
 // Docusaurus routes every file under src/pages, and swaps in any component
 // under src/theme for the theme's own of the same name. It's React underneath,
@@ -22,6 +22,4 @@ export const docusaurusAdapter: FrameworkAdapter = {
   excludeDirectory: () => null,
   reachedBy: (path) => docusaurusConvention(path)?.reachedBy ?? toolConventions(path),
   roleOf: (file) => docusaurusConvention(file.path)?.role ?? toolRole(file.path) ?? reactRole(file),
-  // A page answers whatever the static host serves; no method is written anywhere.
-  routes: () => NO_ROUTES,
 };

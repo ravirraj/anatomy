@@ -35,6 +35,7 @@ import {
   type ViewImport,
   type ViewImportBinding,
   type ViewProperty,
+  type ViewPropertyAssignment,
   type ViewResolution,
   type ViewSkippedFile,
   type ViewValue,
@@ -98,6 +99,7 @@ function viewFile(project: string, entry: ViewSourceEntry, resolve: FrameworkVie
     declarations: collectDeclarations(source),
     calls: collectCalls(source),
     objectProperties: collectObjectProperties(source),
+    propertyAssignments: collectPropertyAssignments(source),
     ...(entry.walkOrder !== undefined && { walkOrder: entry.walkOrder }),
   };
 }
@@ -217,7 +219,7 @@ function collectExports(source: SourceFile): ViewExport[] {
       // `export * as ns from "./m"` names the namespace; a bare `export *`
       // hides every name behind it.
       const namespace = statement.getNamespaceExport();
-      if (namespace) found.push({ form: "alias", name: namespace.getName(), line });
+      if (namespace) found.push({ form: "alias", name: namespace.getName(), line, namespace: true });
       else if (statement.isNamespaceExport()) found.push({ form: "star", line });
       // `export { handler as GET }`, with or without a module specifier.
       for (const specifier of statement.getNamedExports()) {
@@ -457,6 +459,37 @@ function collectObjectProperties(source: SourceFile): ViewProperty[] {
         const right = expression.getRight();
         if (Node.isObjectLiteralExpression(right)) push(right);
       }
+    }
+  }
+  return found;
+}
+
+/**
+ * Every property assignment in the file, however deeply nested or scoped —
+ * inside call arguments, function returns, arrays — in document order, with
+ * the shorthand spelling marked. This is the file-wide surface Next.js's
+ * legacy config scan reads; the two-pass order its scan uses (every explicit
+ * assignment first, then every shorthand) is recoverable by filtering on
+ * `shorthand`, which preserves relative order either way. Same value and
+ * name-normalization semantics as `objectProperties`; computed keys and
+ * spreads are skipped just the same.
+ */
+function collectPropertyAssignments(source: SourceFile): ViewPropertyAssignment[] {
+  const found: ViewPropertyAssignment[] = [];
+  for (const node of source.getDescendants()) {
+    if (Node.isPropertyAssignment(node)) {
+      const nameNode = node.getNameNode();
+      if (Node.isComputedPropertyName(nameNode)) continue; // a computed key is not a static name
+      found.push({
+        name: nameNode.getText().replace(/^["']|["']$/g, ""),
+        value: viewValue(node.getInitializer(), 0),
+        line: node.getStartLineNumber(),
+      });
+    } else if (Node.isShorthandPropertyAssignment(node)) {
+      // `{ basePath }` binds the name it is written as — the same value an
+      // identifier would carry — but the spelling itself is the fact the
+      // legacy shorthand scan reads, so it is marked.
+      found.push({ name: node.getName(), value: { kind: "identifier", name: node.getName() }, line: node.getStartLineNumber(), shorthand: true });
     }
   }
   return found;

@@ -2,7 +2,7 @@ import { Node, SyntaxKind, type SourceFile } from "ts-morph";
 import type { Role } from "../../roles.ts";
 import { toolConventions, toolRole } from "./conventions.ts";
 import { reactRole } from "./react.ts";
-import type { FrameworkAdapter, ProjectFiles, RouteReport } from "./types.ts";
+import type { FrameworkAdapter, FrameworkView, ProjectFiles, RouteReport, ViewExport, ViewFile } from "./types.ts";
 
 // Next.js reaches files by where they sit: app/ and pages/ routing, and a few
 // files at the project root. Either may live under src/.
@@ -70,6 +70,10 @@ export const nextjsAdapter: FrameworkAdapter = {
     );
   },
   routes: nextRoutes,
+  // Batch 3.3c.2: the parser prefers this when present. Same algorithm as
+  // nextRoutes below — which stays until the cleanup batch as the comparison
+  // oracle — reading only the FrameworkView the orchestration already built.
+  routesFromView: nextRoutesFromView,
 };
 
 function withoutSrc(path: string): string {
@@ -154,6 +158,133 @@ function nextRoutes({ files, unparsed }: ProjectFiles): RouteReport {
     }
   }
   return report;
+}
+
+// ---------------------------------------------------------------------------
+// The view-based reader (Batch 3.3c.2). Pass-for-pass with nextRoutes above —
+// same withhold order and reason strings, same config two-pass scan, same
+// convention and segment rules, same export recognition — reading only what
+// the view carries. The path conventions are the same pure functions the
+// legacy reader and roleOf share; the config scan reads the view's file-wide
+// property stream in its two passes; the export scan reads the view's export
+// facts, with the namespace marker excluding `export * as ns` spellings
+// exactly as the legacy statement scan skipped them.
+// ---------------------------------------------------------------------------
+
+function nextRoutesFromView(view: FrameworkView, unparsed: readonly string[]): RouteReport {
+  const report: RouteReport = { routes: [], omitted: [], withheld: null };
+
+  // File-level scans iterate in the walker's original order when the view
+  // carries it for every file — the order the legacy reader received — so
+  // record order and first-offender selection match. Without it, the
+  // path-sorted files are all there is. The two orders are never mixed.
+  const files = view.files.every((file) => file.walkOrder !== undefined)
+    ? [...view.files].sort((a, b) => (a.walkOrder ?? 0) - (b.walkOrder ?? 0))
+    : view.files;
+
+  // basePath prefixes every route, so the config has to be read before any
+  // pattern is known.
+  const configs = files.filter((file) => CONFIG.test(file.path));
+  const unreadConfig = unparsed.find((p) => CONFIG.test(p));
+  if (unreadConfig) return { ...report, withheld: `${unreadConfig} couldn't be parsed, so basePath is unknown` };
+  let basePath = "";
+  for (const config of configs) {
+    const read = readConfigFromView(config);
+    if ("withheld" in read) return { ...report, withheld: `${config.path} ${read.withheld}` };
+    if (read.basePath !== null) {
+      if (basePath !== "" && basePath !== read.basePath) return { ...report, withheld: "more than one next.config sets basePath" };
+      basePath = read.basePath;
+    }
+  }
+
+  for (const file of files) {
+    const p = withoutSrc(file.path);
+    if (nextConvention(file.path)?.role !== "api-endpoint") continue;
+
+    if (p.startsWith("pages/api/")) {
+      report.omitted.push({ path: file.path, line: 1, reason: "a pages/api handler chooses its method at runtime" });
+      continue;
+    }
+
+    const segments = appSegments(p);
+    const intercepting = segments.find((s) => s.startsWith("(.")); 
+    if (intercepting) {
+      report.omitted.push({ path: file.path, line: 1, reason: `${intercepting} is an intercepting segment, which matches by navigation, not by path` });
+      continue;
+    }
+    if (segments.some((s) => s.includes("%"))) {
+      report.omitted.push({ path: file.path, line: 1, reason: "a folder name is URL-encoded" });
+      continue;
+    }
+    // Route groups and parallel-route slots are left out of the URL by definition.
+    const kept = segments.filter((s) => !/^\(.*\)$/.test(s) && !s.startsWith("@"));
+    const pattern = `${basePath}/${kept.join("/")}`.replace(/\/$/, "") || "/";
+
+    const { methods, starExport } = exportedMethodsFromView(file.exports);
+    for (const { method, line } of methods) report.routes.push({ path: file.path, method, pattern, line });
+    if (starExport !== null) {
+      report.omitted.push({ path: file.path, line: starExport, reason: "export * hides which methods come from the other module" });
+    } else if (methods.length === 0) {
+      report.omitted.push({ path: file.path, line: 1, reason: "no exported HTTP method was found" });
+    }
+  }
+  return report;
+}
+
+/**
+ * The same config scan over the view's file-wide property stream. The legacy
+ * scan is two passes — every explicit assignment in document order, then
+ * every shorthand in document order — and a shorthand found in the second
+ * pass overrides whatever the first pass read, wherever the two sit in the
+ * file. Filtering the one stream on the `shorthand` marker reproduces both
+ * passes in order, so each pass's first offender is the legacy scan's.
+ */
+function readConfigFromView(file: ViewFile): ConfigRead {
+  let basePath: string | null = null;
+  for (const property of file.propertyAssignments) {
+    if (property.shorthand) continue; // pass 2 reads these
+    if (property.name === "pageExtensions") return { withheld: "sets pageExtensions, so which files are route handlers is uncertain" };
+    if (property.name !== "basePath") continue;
+    // `kind: "string"` is exactly the legacy accept set: a string literal or
+    // a no-substitution template. Anything else is a computed value.
+    if (property.value.kind !== "string") return { withheld: "sets basePath to a computed value" };
+    if (basePath !== null && basePath !== property.value.value) return { withheld: "sets basePath more than once" };
+    basePath = property.value.value;
+  }
+  for (const property of file.propertyAssignments) {
+    if (!property.shorthand) continue;
+    if (property.name === "basePath") return { withheld: "sets basePath from a variable" };
+    if (property.name === "pageExtensions") return { withheld: "sets pageExtensions, so which files are route handlers is uncertain" };
+  }
+  return { basePath };
+}
+
+/**
+ * The same export scan over the view's export facts: first match wins per
+ * method name in statement order, every form carrying the line the legacy
+ * scan read (the specifier's for an alias, the binding element's for a
+ * destructured one). A bare `export *` hides the names behind it; the
+ * namespace re-export spelling (`export * as ns`) names a whole module
+ * object, not a method, and is excluded through its marker exactly as the
+ * legacy statement scan skipped it.
+ */
+function exportedMethodsFromView(exports: readonly ViewExport[]): { methods: { method: string; line: number }[]; starExport: number | null } {
+  const methods = new Map<string, number>();
+  const add = (name: string, line: number) => {
+    if (HTTP_METHODS.has(name) && !methods.has(name)) methods.set(name, line);
+  };
+  let starExport: number | null = null;
+
+  for (const entry of exports) {
+    if (entry.form === "declaration") {
+      add(entry.name, entry.line);
+    } else if (entry.form === "alias") {
+      if (!entry.namespace) add(entry.name, entry.line);
+    } else {
+      starExport ??= entry.line;
+    }
+  }
+  return { methods: [...methods].map(([method, line]) => ({ method, line })), starExport };
 }
 
 type ConfigRead = { basePath: string | null } | { withheld: string };
